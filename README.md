@@ -49,6 +49,14 @@ cd knobcontext
 RUST_LOG=info cargo run --bin knobcontext
 ```
 
+Para abrir a janela de configurações diretamente na inicialização (mantendo o `grab()` ativo para testar ações ao vivo):
+
+```bash
+cargo run --bin knobcontext -- --settings
+```
+
+Você também pode abrir a janela de configurações a qualquer momento pressionando **`Key1 + Key2`** simultaneamente no dispositivo.
+
 Para encerrar e restaurar imediatamente os atalhos originais do dispositivo (`ungrab`), pressione `Ctrl+C`.
 
 ## Exemplo de configuração (`~/.config/knobcontext/config.toml`)
