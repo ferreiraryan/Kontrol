@@ -1,0 +1,9 @@
+[package]
+name = "knobcontext"
+version = "0.1.0"
+edition = "2021"
+description = "Global HID knob mapper and context overlay"
+
+[dependencies]
+evdev = "0.12"
+hidapi = "2.6"
