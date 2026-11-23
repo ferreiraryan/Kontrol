@@ -183,7 +183,7 @@ fn run() -> Result<(), KnobError> {
     let active_idx = config.active_profile_index();
     let profile_names: Vec<String> = config.profiles.iter().map(|p| p.name.clone()).collect();
 
-    let executor = EnigoExecutor::new()?;
+    let executor = EnigoExecutor::new(config.device.scroll_step)?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
     let overlay = OverlayWindow::new(profile_names, active_idx)?;
     let controller =

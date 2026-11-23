@@ -201,16 +201,26 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
     }
 }
 
+/// Calcula o deslocamento contínuo (pixels no Wayland `wlr_virtual_pointer::axis`)
+/// multiplicando a quantidade de cliques pelo fator `scroll_step`.
+pub fn compute_scroll_delta(delta: i32, scroll_step: i32) -> i32 {
+    delta.saturating_mul(scroll_step.max(1))
+}
+
 /// Executor real baseado na crate `enigo` (backend Wayland).
 pub struct EnigoExecutor {
     enigo: Enigo,
+    scroll_step: i32,
 }
 
 impl EnigoExecutor {
-    pub fn new() -> Result<Self, KnobError> {
+    pub fn new(scroll_step: i32) -> Result<Self, KnobError> {
         let enigo = Enigo::new(&Settings::default())
             .map_err(|err| KnobError::InputSimulationInit(err.to_string()))?;
-        Ok(Self { enigo })
+        Ok(Self {
+            enigo,
+            scroll_step: scroll_step.max(1),
+        })
     }
 }
 
@@ -229,8 +239,9 @@ impl ActionExecutor for EnigoExecutor {
                 } else {
                     Axis::Vertical
                 };
+                let scaled = compute_scroll_delta(*delta, self.scroll_step);
                 self.enigo
-                    .scroll(*delta, axis)
+                    .scroll(scaled, axis)
                     .map_err(|err| KnobError::InputSimulation(err.to_string()))
             }
             ActionConfig::Shortcut { keys } => self.execute_shortcut(keys),
@@ -530,6 +541,20 @@ mod tests {
             DispatchOutcome::ProfileSwitched("firefox".to_string())
         );
         assert_eq!(dispatcher.active_profile_name(), "firefox");
+    }
+
+    #[test]
+    fn scroll_delta_is_multiplied_by_scroll_step() {
+        let action = ActionConfig::parse_from_str("Scroll:up:3").expect("Scroll:up:3 válido");
+        match action {
+            ActionConfig::Scroll { delta, horizontal } => {
+                assert!(!horizontal);
+                assert_eq!(delta, -3);
+                assert_eq!(super::compute_scroll_delta(delta, 20), -60);
+                assert_eq!(super::compute_scroll_delta(delta, 25), -75);
+            }
+            other => panic!("esperava Scroll, recebeu {other:?}"),
+        }
     }
 
     #[test]

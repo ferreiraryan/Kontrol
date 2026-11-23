@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_KBD_PATH: &str = "/dev/input/by-id/usb-1189_8890-event-kbd";
 pub const DEFAULT_MEDIA_PATH: &str = "/dev/input/by-id/usb-1189_8890-if02-event-kbd";
 pub const DEFAULT_COMBO_WINDOW_MS: u64 = 200;
+pub const DEFAULT_SCROLL_STEP: i32 = 20;
 pub const GLOBAL_PROFILE_NAME: &str = "global";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,8 @@ pub struct DeviceConfig {
     pub kbd_path: PathBuf,
     pub media_path: PathBuf,
     pub combo_window_ms: u64,
+    /// Fator multiplicador (em pixels contínuos no Wayland) aplicado por unidade de `Scroll`.
+    pub scroll_step: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +313,7 @@ impl Default for DeviceConfig {
             kbd_path: PathBuf::from(DEFAULT_KBD_PATH),
             media_path: PathBuf::from(DEFAULT_MEDIA_PATH),
             combo_window_ms: DEFAULT_COMBO_WINDOW_MS,
+            scroll_step: DEFAULT_SCROLL_STEP,
         }
     }
 }
@@ -460,6 +464,12 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), KnobError> {
+        if !(1..=200).contains(&self.device.scroll_step) {
+            return Err(KnobError::ConfigValidation(format!(
+                "device.scroll_step deve estar entre 1 e 200 (recebido: {})",
+                self.device.scroll_step
+            )));
+        }
         if self.profiles.is_empty() {
             return Err(KnobError::ConfigValidation(
                 "ao menos um perfil deve ser definido em `profiles`".to_string(),
