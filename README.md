@@ -61,8 +61,23 @@ Para encerrar e restaurar imediatamente os atalhos originais do dispositivo (`un
 
 ## Exemplo de configuração (`~/.config/knobcontext/config.toml`)
 
+O arquivo usa strings legíveis para cada ação (compatível também com o formato legado de tabelas `{ type = "..." }`):
+
+- **Atalho de teclado**: `"Ctrl+Tab"`, `"Super+E"`, `"Alt+F4"`
+- **Controle de mídia**: `"VolumeUp"`, `"VolumeDown"`, `"Mute"`, `"PlayPause"`, `"Prev"`, `"Next"`
+- **Abrir aplicativo**: `"Launch:firefox.desktop"` (executado diretamente sem shell)
+- **Abrir URL / arquivo**: `"Open:https://example.com"`, `"Open:file:///home/user/doc.pdf"`
+- **Scroll**: `"Scroll:up:3"`, `"Scroll:down:1"`, `"Scroll:left:2"`, `"Scroll:right:2"` (quantidade 1–10)
+- **Macro**: `"Macro:Ctrl+C,Wait(100),Ctrl+V"`
+- **Executar comando**: `"Exec:playerctl play-pause"`
+- **Nenhuma ação**: `"None"`
+
+> **Aviso de segurança (`Exec:`)**: ações com o prefixo `Exec:` são executadas via `sh -c` para suportar pipes e redirecionamentos. Isso concede execução arbitrária de comandos com as permissões do seu usuário — use com cuidado e apenas com comandos confiáveis.
+
+> **Captura de tecla `Super` no Wayland**: a captura ao vivo na janela de configurações suporta `Ctrl`, `Alt`, `Shift` e `Super`, mas alguns atalhos com `Super` podem ser interceptados pelo compositor (ex.: atalhos globais do Hyprland) antes de chegar à janela. Nesses casos, utilize o campo de texto manual logo abaixo da área de captura para digitar a combinação diretamente (ex.: `Super+E`).
+
 ```toml
-active_profile = "Volume"
+active_profile = "global"
 
 [device]
 kbd_path = "/dev/input/by-id/usb-1189_8890-event-kbd"
@@ -70,20 +85,21 @@ media_path = "/dev/input/by-id/usb-1189_8890-if02-event-kbd"
 combo_window_ms = 200
 
 [[profiles]]
-name = "Volume"
-knob_cw = { type = "volume_up" }
-knob_ccw = { type = "volume_down" }
-knob_press = { type = "volume_mute" }
-key1 = { type = "media_prev" }
-key2 = { type = "media_next" }
-key3 = { type = "media_play_pause" }
+name = "global"
+knob_cw = "VolumeUp"
+knob_ccw = "VolumeDown"
+knob_press = "Mute"
+key1 = "Prev"
+key2 = "Next"
+key3 = "PlayPause"
 
 [[profiles]]
-name = "Pincel"
-knob_cw = { type = "shortcut", keys = ["]"] }
-knob_ccw = { type = "shortcut", keys = ["["] }
-knob_press = { type = "none" }
-key1 = { type = "shortcut", keys = ["ctrl", "z"] }
-key2 = { type = "shortcut", keys = ["ctrl", "shift", "z"] }
-key3 = { type = "shortcut", keys = ["b"] }
+name = "firefox"
+window_class = "firefox"
+knob_cw = "Ctrl+Tab"
+knob_ccw = "Ctrl+Shift+Tab"
+knob_press = "None"
+key1 = "Launch:firefox.desktop"
+key2 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
+key3 = "Scroll:down:3"
 ```

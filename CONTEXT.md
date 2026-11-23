@@ -19,26 +19,20 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-Fase 3 (perfis contextuais via Hyprland `socket2` + janela de configurações Slint) implementada, testada e validada no Hyprland Wayland. Pronto para teste interativo do usuário e preparação da Fase 4 (ações ricas + empacotamento).
+Fase 4C (construtor visual de ações em popover + tipos de ação ricos) implementada, testada e validada no Hyprland Wayland. Pronto para teste interativo do usuário e preparação da Fase 5 (empacotamento e distribuição).
 
 ## Concluído
-- **Fase 0**:
-  - Criação de `AGENTS.md` e `CONTEXT.md`.
-  - Criação do pacote Rust `knobcontext/` e binários `probe` (`evdev`) e `hid_probe` (`hidapi`).
-  - Mapeamento real das 4 interfaces USB e eventos `EV_KEY` do dispositivo `1189:8890`.
-- **Fase 1 (núcleo sem UI)**:
-  - `src/error.rs`: enum `KnobError` centralizado com `thiserror`.
-  - `src/config.rs`: configuração TOML (`serde` + `toml`) carregada de `~/.config/knobcontext/config.toml`, com perfis padrão (`global`, `firefox`, `gimp`), `window_class`, parser bidirecional de ações em texto e persistência `save_to_path` / `save_default_location`.
-  - `src/input.rs`: `evdev::Device::grab()` + `Drop` com `ungrab()`, multiplexação via `poll`, máquina de estados `EventTranslator` com janela de 200ms (`Key1` esquerda = `Ctrl+F1`, `Key2` meio = `Ctrl+F4`, `Key3` direita = `KEY_PLAYPAUSE`, `Key1+Key2` simultâneos = `OpenSettings`).
-  - `src/action.rs`: trait `ActionExecutor`, `ActionDispatcher::dispatch(event, profile_name)` e `EnigoExecutor` (`enigo 0.6` Wayland).
-- **Fase 2 (UI Overlay Slint)**:
-  - `src/ui/state.rs`: máquina de estados pura `OverlayController` (Normal ↔ Overlay, timeout de 3s, bloqueio de abertura quando Settings está aberta).
-  - `src/ui/overlay.slint` + `src/ui/mod.rs`: overlay minimalista escuro em `slint 1.19` (`backend-winit-wayland` + `renderer-software`).
-- **Fase 3 (Contexto Hyprland + Configurações Slint)**:
-  - **3A (`src/context.rs`)**: listener dedicado em `UnixStream` no `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock` (zero dependências extras, reconexão automática, consulta inicial via `.socket.sock` e fallback silencioso para `"global"` quando fora do Hyprland). `ContextState::profile_for_window` com testes unitários.
-  - **3B (`src/ui/settings.slint`, `src/ui/settings_mod.rs`, `src/ui/app.slint`)**: janela de configurações Slint no mesmo tema escuro, com lista de perfis, edição de nome/`window_class`/6 ações, botões Adicionar/Remover/Salvar/Cancelar, validação antes de salvar, persistência via `toml::to_string_pretty` em `~/.config/knobcontext/config.toml` e hot-reload em tempo real sem liberar `grab()` e sem conflitar com o overlay.
-  - Abertura via CLI `--settings` ou `Key1 + Key2` simultâneos.
-  - Validação: `cargo test` (29/29), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, e smoke test real no Hyprland Wayland com `--settings` + `.socket2.sock` + `grab()` + `SIGINT`.
+- **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
+- **Fase 1 (núcleo sem UI)**: `error.rs`, `config.rs`, `input.rs` (`evdev::grab()` + `ungrab()` + ordem física confirmada `Key1`/`Key2`/`Key3`), `action.rs` (`enigo` Wayland).
+- **Fase 2 (UI Overlay Slint)**: `ui/state.rs`, `ui/overlay.slint`, `ui/mod.rs` (overlay minimalista escuro com timeout de 3s).
+- **Fase 3 (Contexto Hyprland + Settings Slint)**: `context.rs` (listener `socket2` em `UnixStream`), `ui/settings.slint`, `ui/settings_mod.rs` (hot-reload sem liberar `grab()`, sem conflito com overlay).
+- **Fase 4C (Construtor visual de ações + ações ricas)**:
+  - `src/actions_catalog.rs`: enum `ActionType` com os 9 tipos (`Shortcut`, `Media`, `LaunchApp`, `OpenUrl`, `OpenFile`, `ExecCommand`, `Scroll`, `Macro`, `None`), `parse_action_string`, `action_to_string`, `action_type_title`, `action_summary`, `list_desktop_apps` (lendo `/usr/share/applications` e `~/.local/share/applications`, ignorando `NoDisplay=true`) e `resolve_desktop_exec` (sem shell).
+  - `src/config.rs` + `src/action.rs`: serialização TOML em strings canônicas com retrocompatibilidade para o formato legado de tabelas; execução de `Launch:` (`Command` sem shell), `Open:` (`open::that_detached` / `xdg-open`), `Exec:` (`sh -c`), `Macro:` (`enigo` + `Wait(ms)`) e `Scroll:<dir>:<1-10>`.
+  - `src/ui/action_editor_state.rs`: máquina de estados pura do popover coberta por testes unitários sem dependência do Slint.
+  - `src/ui/action_editor.slint` + `src/ui/action_editor_mod.rs`: popover modal escuro com os 9 seletores, captura de tecla ao vivo (`Ctrl`/`Alt`/`Shift`/`Super` + fallback manual de texto), busca de apps `.desktop`, file chooser nativo Wayland (`rfd` via XDG portal), seletor de Scroll e editor de passos de Macro.
+  - `src/ui/settings.slint` + `src/ui/settings_mod.rs`: resumo legível + botão `"Editar"` para cada um dos 6 controles, indicador de alterações não salvas e persistência validada.
+  - Validação: `cargo test` (37/37), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, e smoke test real no Hyprland Wayland.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
@@ -61,8 +55,9 @@ Fase 3 (perfis contextuais via Hyprland `socket2` + janela de configurações Sl
   - `/dev/hidraw*`: `root:root` (`0600`).
 
 ## Próximos Passos
-1. Validar interativamente a troca contextual de perfis (Firefox, GIMP, fallback `global`) e a janela de configurações (`--settings` ou `Key1+Key2`).
-2. **Fase 4 (Ações ricas + Empacotamento)**:
-   - Ações avançadas (comandos shell/D-Bus, controle direto PipeWire/WirePlumber, macros sequenciais).
-   - Serviço `systemd --user` + empacotamento (PKGBUILD / `.desktop` / ícone).
+1. Validar interativamente o construtor visual de ações (`--settings` → `"Editar"`): testar `Launch:`, `Macro:`, captura ao vivo (inclusive `Super+E`), `Open:` (URL e arquivo via `rfd`) e `Scroll:`.
+2. **Fase 5 (Empacotamento e distribuição)**:
+   - Serviço `systemd --user` (`knobcontext.service`) + regra `udev` instalada no pacote.
+   - Arquivo `.desktop` e ícone para abrir configurações diretamente do launcher.
+   - `PKGBUILD` (Arch Linux) / binário release otimizado (`strip`, `lto`, verificação de RSS < 50MB).
    - Suporte multiplataforma Windows/X11 (`focus-tracker` + `hidapi`).
