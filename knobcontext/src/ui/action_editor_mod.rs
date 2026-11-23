@@ -1,0 +1,157 @@
+use crate::actions_catalog::DesktopApp;
+use crate::ui::action_editor_state::ActionEditorState;
+use crate::ui::SettingsWindow;
+use slint::{ModelRc, SharedString, VecModel};
+use std::rc::Rc;
+
+/// Converte um evento de tecla capturado no Slint (`text` + modificadores) em string do parser
+/// (ex.: `"Ctrl+Shift+Tab"`, `"Super+E"`, `"Alt+F4"`). Retorna `None` para teclas modificadoras puras.
+pub fn format_captured_key(
+    text: &str,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+) -> Option<String> {
+    let key_name = map_slint_key_text(text)?;
+    let mut parts = Vec::new();
+    if ctrl {
+        parts.push("Ctrl".to_string());
+    }
+    if alt {
+        parts.push("Alt".to_string());
+    }
+    if shift {
+        parts.push("Shift".to_string());
+    }
+    if meta {
+        parts.push("Super".to_string());
+    }
+    parts.push(key_name);
+    Some(parts.join("+"))
+}
+
+fn map_slint_key_text(text: &str) -> Option<String> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+
+    // Mapeamento dos códigos Private Use Area usados pelo Slint (`slint::platform::Key`)
+    let mapped = match ch {
+        '\u{0008}' => "Backspace".to_string(),
+        '\u{0009}' => "Tab".to_string(),
+        '\u{000a}' | '\u{000d}' => "Return".to_string(),
+        '\u{001b}' => "Escape".to_string(),
+        '\u{0020}' => "Space".to_string(),
+        '\u{007f}' => "Delete".to_string(),
+        '\u{f700}' => "Up".to_string(),
+        '\u{f701}' => "Down".to_string(),
+        '\u{f702}' => "Left".to_string(),
+        '\u{f703}' => "Right".to_string(),
+        '\u{f704}' => "F1".to_string(),
+        '\u{f705}' => "F2".to_string(),
+        '\u{f706}' => "F3".to_string(),
+        '\u{f707}' => "F4".to_string(),
+        '\u{f708}' => "F5".to_string(),
+        '\u{f709}' => "F6".to_string(),
+        '\u{f70a}' => "F7".to_string(),
+        '\u{f70b}' => "F8".to_string(),
+        '\u{f70c}' => "F9".to_string(),
+        '\u{f70d}' => "F10".to_string(),
+        '\u{f70e}' => "F11".to_string(),
+        '\u{f70f}' => "F12".to_string(),
+        '\u{f729}' => "Home".to_string(),
+        '\u{f72b}' => "End".to_string(),
+        '\u{f72c}' => "PageUp".to_string(),
+        '\u{f72d}' => "PageDown".to_string(),
+        // Ignora teclas modificadoras isoladas enviadas pelo Slint (Shift/Control/Alt/Meta)
+        '\u{0010}'..='\u{0014}' => return None,
+        c if c.is_ascii_graphic() => c.to_ascii_uppercase().to_string(),
+        _ => return None,
+    };
+
+    Some(mapped)
+}
+
+/// Sincroniza todo o estado do `ActionEditorState` para as propriedades do popover na `SettingsWindow`.
+pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps: &[DesktopApp]) {
+    win.set_editor_open(editor.is_open);
+    if let Some(slot) = editor.target_slot {
+        win.set_editor_control_title(SharedString::from(slot.display_name()));
+    }
+    win.set_editor_type_index(editor.selected_type_index as i32);
+    win.set_editor_shortcut_text(SharedString::from(editor.shortcut_text.as_str()));
+    win.set_editor_capturing_shortcut(editor.capturing_shortcut);
+    win.set_editor_media_index(editor.media_index as i32);
+    win.set_editor_app_search(SharedString::from(editor.app_search.as_str()));
+
+    let filtered = editor.filtered_apps(apps);
+    let app_labels: Vec<SharedString> = filtered
+        .iter()
+        .map(|app| SharedString::from(format!("{} ({})", app.name, app.desktop_file)))
+        .collect();
+    let selected_app_idx = filtered
+        .iter()
+        .position(|app| app.desktop_file == editor.selected_desktop_file)
+        .map(|i| i as i32)
+        .unwrap_or(-1);
+    win.set_editor_filtered_apps(ModelRc::from(Rc::new(VecModel::from(app_labels))));
+    win.set_editor_selected_app_index(selected_app_idx);
+
+    win.set_editor_url_text(SharedString::from(editor.url_text.as_str()));
+    win.set_editor_file_text(SharedString::from(editor.file_uri.as_str()));
+    win.set_editor_exec_text(SharedString::from(editor.exec_command.as_str()));
+    win.set_editor_scroll_direction(editor.scroll_direction_index as i32);
+    win.set_editor_scroll_amount(i32::from(editor.scroll_amount));
+
+    let step_labels: Vec<SharedString> = editor
+        .macro_steps
+        .iter()
+        .map(|step| SharedString::from(step.to_token()))
+        .collect();
+    win.set_editor_macro_steps(ModelRc::from(Rc::new(VecModel::from(step_labels))));
+    win.set_editor_macro_key_text(SharedString::from(editor.macro_key_input.as_str()));
+    win.set_editor_macro_wait_text(SharedString::from(editor.macro_wait_ms_input.as_str()));
+    win.set_editor_capturing_macro(editor.capturing_macro_key);
+}
+
+/// Abre o diálogo nativo de seleção de arquivo (Wayland via XDG Portal usando `rfd`).
+pub fn pick_file_uri() -> Option<String> {
+    let path = rfd::FileDialog::new().pick_file()?;
+    Some(format!("file://{}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_captured_key;
+
+    #[test]
+    fn formats_captured_shortcuts_with_modifiers() {
+        assert_eq!(
+            format_captured_key("\u{0009}", true, false, false, false),
+            Some("Ctrl+Tab".to_string())
+        );
+        assert_eq!(
+            format_captured_key("e", false, false, false, true),
+            Some("Super+E".to_string())
+        );
+        assert_eq!(
+            format_captured_key("\u{f707}", false, true, false, false),
+            Some("Alt+F4".to_string())
+        );
+        assert_eq!(
+            format_captured_key("c", true, false, true, false),
+            Some("Ctrl+Shift+C".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_pure_modifier_codes() {
+        assert_eq!(
+            format_captured_key("\u{0011}", true, false, false, false),
+            None
+        );
+    }
+}

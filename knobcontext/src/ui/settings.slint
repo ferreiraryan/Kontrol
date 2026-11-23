@@ -1,3 +1,5 @@
+import { ActionEditorPopover } from "action_editor.slint";
+
 component DarkField inherits Rectangle {
     in property <string> label;
     in property <string> placeholder;
@@ -86,29 +88,115 @@ component DarkButton inherits Rectangle {
     }
 }
 
+component ActionRow inherits Rectangle {
+    in property <string> control-label;
+    in property <string> action-summary;
+    callback edit-clicked();
+
+    height: 40px;
+    border-radius: 7px;
+    background: rgba(18, 18, 20, 0.85);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.09);
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+        alignment: stretch;
+
+        Text {
+            width: 155px;
+            text: root.control-label;
+            color: #d4d4d8;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.action-summary;
+            color: #f5f5f7;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        DarkButton {
+            width: 68px;
+            height: 26px;
+            text: "Editar";
+            clicked => { root.edit-clicked(); }
+        }
+    }
+}
+
 export component SettingsWindow inherits Window {
     title: "KnobContext Settings";
-    width: 720px;
-    height: 520px;
+    width: 760px;
+    height: 540px;
     background: rgba(20, 20, 20, 0.92);
 
     in property <[string]> profile-names: ["global"];
     in property <int> selected-index: 0;
     in-out property <string> field-name;
     in-out property <string> field-window-class;
-    in-out property <string> field-knob-press;
-    in-out property <string> field-rotate-cw;
-    in-out property <string> field-rotate-ccw;
-    in-out property <string> field-key1;
-    in-out property <string> field-key2;
-    in-out property <string> field-key3;
+    in property <string> summary-knob-press: "Nenhuma";
+    in property <string> summary-rotate-cw: "Nenhuma";
+    in property <string> summary-rotate-ccw: "Nenhuma";
+    in property <string> summary-key1: "Nenhuma";
+    in property <string> summary-key2: "Nenhuma";
+    in property <string> summary-key3: "Nenhuma";
+    in property <bool> has-unsaved-changes: false;
     in-out property <string> error-message;
+
+    // Estado do Popover de edição de ação
+    in property <bool> editor-open: false;
+    in property <string> editor-control-title;
+    in property <[string]> editor-type-titles;
+    in property <int> editor-type-index: 0;
+    in-out property <string> editor-shortcut-text;
+    in property <bool> editor-capturing-shortcut: false;
+    in property <int> editor-media-index: 0;
+    in-out property <string> editor-app-search;
+    in property <[string]> editor-filtered-apps;
+    in property <int> editor-selected-app-index: -1;
+    in-out property <string> editor-url-text;
+    in-out property <string> editor-file-text;
+    in-out property <string> editor-exec-text;
+    in property <int> editor-scroll-direction: 0;
+    in property <int> editor-scroll-amount: 1;
+    in property <[string]> editor-macro-steps;
+    in-out property <string> editor-macro-key-text;
+    in-out property <string> editor-macro-wait-text: "100";
+    in property <bool> editor-capturing-macro: false;
+    in property <string> editor-error-message;
 
     callback select-profile(int);
     callback add-profile();
     callback remove-profile();
+    callback open-action-editor(int);
     callback save-requested();
     callback cancel-requested();
+
+    // Callbacks do Popover
+    callback editor-select-type(int);
+    callback editor-toggle-shortcut-capture();
+    callback editor-shortcut-key-captured(string, bool, bool, bool, bool);
+    callback editor-select-media(int);
+    callback editor-app-search-changed(string);
+    callback editor-select-app(int);
+    callback editor-pick-file();
+    callback editor-select-scroll-direction(int);
+    callback editor-change-scroll-amount(int);
+    callback editor-toggle-macro-capture();
+    callback editor-macro-key-captured(string, bool, bool, bool, bool);
+    callback editor-add-macro-key();
+    callback editor-add-macro-wait();
+    callback editor-remove-macro-step(int);
+    callback editor-save();
+    callback editor-cancel();
 
     HorizontalLayout {
         padding: 16px;
@@ -190,13 +278,25 @@ export component SettingsWindow inherits Window {
 
             VerticalLayout {
                 padding: 16px;
-                spacing: 10px;
+                spacing: 8px;
 
-                Text {
-                    text: "Configuração do Perfil";
-                    color: #f5f5f7;
-                    font-size: 16px;
-                    font-weight: 700;
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "Configuração do Perfil";
+                        color: #f5f5f7;
+                        font-size: 16px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    if root.has-unsaved-changes: Text {
+                        text: "• alterações não salvas";
+                        color: #fbbf24;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
                 }
 
                 HorizontalLayout {
@@ -217,64 +317,40 @@ export component SettingsWindow inherits Window {
                     }
                 }
 
-                Text {
-                    text: "Mapeamento de ações (ex: VolumeUp, Ctrl+Tab, next_tab, Scroll(2), None)";
-                    color: rgba(255, 255, 255, 0.55);
-                    font-size: 11px;
+                ActionRow {
+                    control-label: "KnobPress";
+                    action-summary: root.summary-knob-press;
+                    edit-clicked => { root.open-action-editor(0); }
                 }
 
-                HorizontalLayout {
-                    spacing: 12px;
-
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "KnobPress";
-                        placeholder: "VolumeMute";
-                        value <=> root.field-knob-press;
-                    }
-
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "RotateCw (Horário)";
-                        placeholder: "VolumeUp";
-                        value <=> root.field-rotate-cw;
-                    }
+                ActionRow {
+                    control-label: "RotateCw (Horário)";
+                    action-summary: root.summary-rotate-cw;
+                    edit-clicked => { root.open-action-editor(1); }
                 }
 
-                HorizontalLayout {
-                    spacing: 12px;
-
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "RotateCcw (Anti-horário)";
-                        placeholder: "VolumeDown";
-                        value <=> root.field-rotate-ccw;
-                    }
-
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "Key1 (Esquerda)";
-                        placeholder: "MediaPrev";
-                        value <=> root.field-key1;
-                    }
+                ActionRow {
+                    control-label: "RotateCcw (Anti-horário)";
+                    action-summary: root.summary-rotate-ccw;
+                    edit-clicked => { root.open-action-editor(2); }
                 }
 
-                HorizontalLayout {
-                    spacing: 12px;
+                ActionRow {
+                    control-label: "Key1 (Esquerda)";
+                    action-summary: root.summary-key1;
+                    edit-clicked => { root.open-action-editor(3); }
+                }
 
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "Key2 (Meio)";
-                        placeholder: "MediaNext";
-                        value <=> root.field-key2;
-                    }
+                ActionRow {
+                    control-label: "Key2 (Meio)";
+                    action-summary: root.summary-key2;
+                    edit-clicked => { root.open-action-editor(4); }
+                }
 
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "Key3 (Direita)";
-                        placeholder: "MediaPlayPause";
-                        value <=> root.field-key3;
-                    }
+                ActionRow {
+                    control-label: "Key3 (Direita)";
+                    action-summary: root.summary-key3;
+                    edit-clicked => { root.open-action-editor(5); }
                 }
 
                 if root.error-message != "": Rectangle {
@@ -316,5 +392,46 @@ export component SettingsWindow inherits Window {
                 }
             }
         }
+    }
+
+    if root.editor-open: ActionEditorPopover {
+        width: 100%;
+        height: 100%;
+        control-title: root.editor-control-title;
+        type-titles: root.editor-type-titles;
+        selected-type-index: root.editor-type-index;
+        shortcut-text <=> root.editor-shortcut-text;
+        capturing-shortcut: root.editor-capturing-shortcut;
+        selected-media-index: root.editor-media-index;
+        app-search <=> root.editor-app-search;
+        filtered-app-names: root.editor-filtered-apps;
+        selected-app-index: root.editor-selected-app-index;
+        url-text <=> root.editor-url-text;
+        file-text <=> root.editor-file-text;
+        exec-text <=> root.editor-exec-text;
+        scroll-direction-index: root.editor-scroll-direction;
+        scroll-amount: root.editor-scroll-amount;
+        macro-step-labels: root.editor-macro-steps;
+        macro-key-text <=> root.editor-macro-key-text;
+        macro-wait-text <=> root.editor-macro-wait-text;
+        capturing-macro-key: root.editor-capturing-macro;
+        error-message: root.editor-error-message;
+
+        select-type(i) => { root.editor-select-type(i); }
+        toggle-shortcut-capture => { root.editor-toggle-shortcut-capture(); }
+        shortcut-key-captured(t, c, a, s, m) => { root.editor-shortcut-key-captured(t, c, a, s, m); }
+        select-media(i) => { root.editor-select-media(i); }
+        app-search-changed(q) => { root.editor-app-search-changed(q); }
+        select-app(i) => { root.editor-select-app(i); }
+        pick-file => { root.editor-pick-file(); }
+        select-scroll-direction(i) => { root.editor-select-scroll-direction(i); }
+        change-scroll-amount(d) => { root.editor-change-scroll-amount(d); }
+        toggle-macro-capture => { root.editor-toggle-macro-capture(); }
+        macro-key-captured(t, c, a, s, m) => { root.editor-macro-key-captured(t, c, a, s, m); }
+        add-macro-key => { root.editor-add-macro-key(); }
+        add-macro-wait => { root.editor-add-macro-wait(); }
+        remove-macro-step(i) => { root.editor-remove-macro-step(i); }
+        save-action => { root.editor-save(); }
+        cancel-action => { root.editor-cancel(); }
     }
 }

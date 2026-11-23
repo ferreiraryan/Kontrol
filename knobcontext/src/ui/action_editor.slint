@@ -1,0 +1,713 @@
+component PopoverButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> active: false;
+    in property <bool> danger: false;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: root.primary
+        ? (touch.has-hover ? #3b82f6 : #2563eb)
+        : (root.active
+            ? rgba(59, 130, 246, 0.32)
+            : (root.danger
+                ? (touch.has-hover ? rgba(220, 38, 38, 0.35) : rgba(220, 38, 38, 0.2))
+                : (touch.has-hover ? rgba(255, 255, 255, 0.14) : rgba(255, 255, 255, 0.07))));
+    border-width: 1px;
+    border-color: root.primary
+        ? rgba(147, 197, 253, 0.45)
+        : (root.active
+            ? rgba(96, 165, 250, 0.7)
+            : (root.danger ? rgba(248, 113, 113, 0.35) : rgba(255, 255, 255, 0.12)));
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+
+        Text {
+            text: root.text;
+            color: #f5f5f7;
+            font-size: 12px;
+            font-weight: root.active || root.primary ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component PopoverInput inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text;
+    callback edited(string);
+
+    height: 32px;
+    border-radius: 6px;
+    background: rgba(16, 16, 18, 0.96);
+    border-width: 1px;
+    border-color: ti.has-focus ? rgba(255, 255, 255, 0.45) : rgba(255, 255, 255, 0.12);
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: stretch;
+
+        ti := TextInput {
+            text <=> root.text;
+            color: #f5f5f7;
+            font-size: 12px;
+            vertical-alignment: center;
+            single-line: true;
+            edited => { root.edited(self.text); }
+        }
+    }
+
+    if root.text == "" && !ti.has-focus: Text {
+        x: 10px;
+        text: root.placeholder;
+        color: rgba(255, 255, 255, 0.3);
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+}
+
+export component ActionEditorPopover inherits Rectangle {
+    in property <string> control-title: "Key1";
+    in property <[string]> type-titles;
+    in property <int> selected-type-index: 0;
+
+    // 0: Atalho de teclado
+    in-out property <string> shortcut-text;
+    in property <bool> capturing-shortcut: false;
+
+    // 1: Mídia
+    in property <[string]> media-labels: ["VolumeUp", "VolumeDown", "Mute", "PlayPause", "Prev", "Next"];
+    in property <int> selected-media-index: 0;
+
+    // 2: Abrir aplicativo
+    in-out property <string> app-search;
+    in property <[string]> filtered-app-names;
+    in property <int> selected-app-index: -1;
+
+    // 3: URL / 4: Arquivo / 5: Comando
+    in-out property <string> url-text;
+    in-out property <string> file-text;
+    in-out property <string> exec-text;
+
+    // 6: Scroll
+    in property <int> scroll-direction-index: 0;
+    in property <int> scroll-amount: 1;
+
+    // 7: Macro
+    in property <[string]> macro-step-labels;
+    in-out property <string> macro-key-text;
+    in-out property <string> macro-wait-text: "100";
+    in property <bool> capturing-macro-key: false;
+
+    in property <string> error-message;
+
+    callback select-type(int);
+    callback toggle-shortcut-capture();
+    callback shortcut-key-captured(string, bool, bool, bool, bool);
+    callback select-media(int);
+    callback app-search-changed(string);
+    callback select-app(int);
+    callback pick-file();
+    callback select-scroll-direction(int);
+    callback change-scroll-amount(int);
+    callback toggle-macro-capture();
+    callback macro-key-captured(string, bool, bool, bool, bool);
+    callback add-macro-key();
+    callback add-macro-wait();
+    callback remove-macro-step(int);
+    callback save-action();
+    callback cancel-action();
+
+    background: rgba(0, 0, 0, 0.62);
+
+    // Bloqueia cliques no fundo atrás do popover
+    TouchArea { }
+
+    Rectangle {
+        width: 640px;
+        height: 440px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 12px;
+        background: rgba(24, 24, 27, 0.98);
+        border-width: 1px;
+        border-color: rgba(255, 255, 255, 0.14);
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text: "Editar ação: " + root.control-title;
+                color: #f5f5f7;
+                font-size: 16px;
+                font-weight: 700;
+            }
+
+            HorizontalLayout {
+                spacing: 14px;
+                vertical-stretch: 1;
+
+                // Lista de tipos de ação (9 tipos)
+                Rectangle {
+                    width: 196px;
+                    border-radius: 8px;
+                    background: rgba(32, 32, 36, 0.9);
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.08);
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 4px;
+
+                        for title[idx] in root.type-titles: Rectangle {
+                            height: 30px;
+                            border-radius: 6px;
+                            background: idx == root.selected-type-index
+                                ? rgba(59, 130, 246, 0.28)
+                                : (t-touch.has-hover ? rgba(255, 255, 255, 0.08) : transparent);
+                            border-width: 1px;
+                            border-color: idx == root.selected-type-index
+                                ? rgba(96, 165, 250, 0.55)
+                                : transparent;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+
+                                Text {
+                                    text: title;
+                                    color: idx == root.selected-type-index ? #ffffff : #d4d4d8;
+                                    font-size: 12px;
+                                    font-weight: idx == root.selected-type-index ? 600 : 400;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            t-touch := TouchArea {
+                                clicked => { root.select-type(idx); }
+                            }
+                        }
+                    }
+                }
+
+                // Área do seletor específico do tipo escolhido
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: 8px;
+                    background: rgba(32, 32, 36, 0.9);
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.08);
+
+                    // 0: Atalho de teclado (captura ao vivo + fallback texto)
+                    if root.selected-type-index == 0: VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        Text {
+                            text: "Captura de tecla ao vivo";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        shortcut-capture-box := Rectangle {
+                            height: 64px;
+                            border-radius: 8px;
+                            background: root.capturing-shortcut
+                                ? rgba(37, 99, 235, 0.22)
+                                : rgba(18, 18, 20, 0.95);
+                            border-width: 1px;
+                            border-color: root.capturing-shortcut
+                                ? #60a5fa
+                                : rgba(255, 255, 255, 0.14);
+
+                            shortcut-scope := FocusScope {
+                                key-pressed(ev) => {
+                                    if root.capturing-shortcut {
+                                        root.shortcut-key-captured(
+                                            ev.text,
+                                            ev.modifiers.control,
+                                            ev.modifiers.alt,
+                                            ev.modifiers.shift,
+                                            ev.modifiers.meta,
+                                        );
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+
+                                TouchArea {
+                                    clicked => {
+                                        shortcut-scope.focus();
+                                        root.toggle-shortcut-capture();
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 4px;
+
+                                Text {
+                                    text: root.capturing-shortcut
+                                        ? "Pressione a combinação agora..."
+                                        : (root.shortcut-text == "" ? "Clique aqui para capturar atalho" : root.shortcut-text);
+                                    color: root.capturing-shortcut ? #93c5fd : #ffffff;
+                                    font-size: 15px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                }
+
+                                Text {
+                                    text: root.capturing-shortcut
+                                        ? "Ex.: Ctrl+Tab, Alt+F4, Super+E"
+                                        : "Clique para regravar";
+                                    color: rgba(255, 255, 255, 0.5);
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "Ou digite manualmente (fallback se o compositor interceptar Super):";
+                            color: #a1a1aa;
+                            font-size: 11px;
+                        }
+
+                        PopoverInput {
+                            placeholder: "ex: Ctrl+Tab, Super+E, Alt+F4";
+                            text <=> root.shortcut-text;
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // 1: Controle de mídia
+                    if root.selected-type-index == 1: VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+
+                        Text {
+                            text: "Selecione o controle de mídia";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        for label[idx] in root.media-labels: PopoverButton {
+                            text: label;
+                            active: idx == root.selected-media-index;
+                            clicked => { root.select-media(idx); }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // 2: Abrir aplicativo (.desktop com busca)
+                    if root.selected-type-index == 2: VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+
+                        Text {
+                            text: "Buscar aplicativo (.desktop)";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        PopoverInput {
+                            placeholder: "Buscar (ex: Firefox, GIMP, Spotify)...";
+                            text <=> root.app-search;
+                            edited(q) => { root.app-search-changed(q); }
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            content-height: root.filtered-app-names.length * 34px;
+
+                            VerticalLayout {
+                                spacing: 4px;
+                                alignment: start;
+
+                                for app_name[idx] in root.filtered-app-names: Rectangle {
+                                    height: 30px;
+                                    border-radius: 6px;
+                                    background: idx == root.selected-app-index
+                                        ? rgba(59, 130, 246, 0.3)
+                                        : (a-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
+                                    border-width: 1px;
+                                    border-color: idx == root.selected-app-index
+                                        ? rgba(96, 165, 250, 0.6)
+                                        : transparent;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+
+                                        Text {
+                                            text: app_name;
+                                            color: #f5f5f7;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    a-touch := TouchArea {
+                                        clicked => { root.select-app(idx); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3: Abrir URL
+                    if root.selected-type-index == 3: VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        Text {
+                            text: "URL para abrir no navegador padrão";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        PopoverInput {
+                            placeholder: "https://example.com";
+                            text <=> root.url-text;
+                        }
+
+                        Text {
+                            text: "Deve começar com http:// ou https://";
+                            color: #a1a1aa;
+                            font-size: 11px;
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // 4: Abrir arquivo (com file chooser via rfd)
+                    if root.selected-type-index == 4: VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        Text {
+                            text: "Arquivo para abrir com o app padrão";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        PopoverInput {
+                            placeholder: "file:///caminho/do/arquivo";
+                            text <=> root.file-text;
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            PopoverButton {
+                                text: "Escolher arquivo...";
+                                clicked => { root.pick-file(); }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // 5: Executar comando
+                    if root.selected-type-index == 5: VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        Text {
+                            text: "Comando shell (avançado)";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        PopoverInput {
+                            placeholder: "ex: playerctl play-pause";
+                            text <=> root.exec-text;
+                        }
+
+                        Text {
+                            text: "Executado via `sh -c` (suporta pipes/redirects). Use com cuidado.";
+                            color: #fbbf24;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // 6: Scroll
+                    if root.selected-type-index == 6: VerticalLayout {
+                        padding: 14px;
+                        spacing: 12px;
+
+                        Text {
+                            text: "Direção do Scroll";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+
+                            PopoverButton {
+                                horizontal-stretch: 1;
+                                text: "Cima";
+                                active: root.scroll-direction-index == 0;
+                                clicked => { root.select-scroll-direction(0); }
+                            }
+                            PopoverButton {
+                                horizontal-stretch: 1;
+                                text: "Baixo";
+                                active: root.scroll-direction-index == 1;
+                                clicked => { root.select-scroll-direction(1); }
+                            }
+                            PopoverButton {
+                                horizontal-stretch: 1;
+                                text: "Esquerda";
+                                active: root.scroll-direction-index == 2;
+                                clicked => { root.select-scroll-direction(2); }
+                            }
+                            PopoverButton {
+                                horizontal-stretch: 1;
+                                text: "Direita";
+                                active: root.scroll-direction-index == 3;
+                                clicked => { root.select-scroll-direction(3); }
+                            }
+                        }
+
+                        Text {
+                            text: "Quantidade (1 a 10)";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+
+                            PopoverButton {
+                                width: 38px;
+                                text: "-";
+                                clicked => { root.change-scroll-amount(-1); }
+                            }
+
+                            Text {
+                                width: 36px;
+                                text: root.scroll-amount;
+                                color: #ffffff;
+                                font-size: 16px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+
+                            PopoverButton {
+                                width: 38px;
+                                text: "+";
+                                clicked => { root.change-scroll-amount(1); }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // 7: Macro (sequência de teclas + esperas)
+                    if root.selected-type-index == 7: VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+
+                        Text {
+                            text: "Sequência de passos (Macro)";
+                            color: #f5f5f7;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            content-height: root.macro-step-labels.length * 34px;
+
+                            VerticalLayout {
+                                spacing: 4px;
+                                alignment: start;
+
+                                for step_label[idx] in root.macro-step-labels: Rectangle {
+                                    height: 30px;
+                                    border-radius: 6px;
+                                    background: rgba(255, 255, 255, 0.05);
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 6px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: (idx + 1) + ". " + step_label;
+                                            color: #f5f5f7;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        PopoverButton {
+                                            width: 28px;
+                                            height: 22px;
+                                            text: "×";
+                                            danger: true;
+                                            clicked => { root.remove-macro-step(idx); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Adicionar passo de tecla (com captura ao vivo + texto)
+                        HorizontalLayout {
+                            spacing: 6px;
+
+                            macro-cap := Rectangle {
+                                width: 92px;
+                                height: 32px;
+                                border-radius: 6px;
+                                background: root.capturing-macro-key
+                                    ? rgba(37, 99, 235, 0.35)
+                                    : rgba(255, 255, 255, 0.08);
+                                border-width: 1px;
+                                border-color: root.capturing-macro-key
+                                    ? #60a5fa
+                                    : rgba(255, 255, 255, 0.14);
+
+                                macro-scope := FocusScope {
+                                    key-pressed(ev) => {
+                                        if root.capturing-macro-key {
+                                            root.macro-key-captured(
+                                                ev.text,
+                                                ev.modifiers.control,
+                                                ev.modifiers.alt,
+                                                ev.modifiers.shift,
+                                                ev.modifiers.meta,
+                                            );
+                                            return accept;
+                                        }
+                                        return reject;
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            macro-scope.focus();
+                                            root.toggle-macro-capture();
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: root.capturing-macro-key ? "Pressione..." : "Capturar";
+                                    color: #f5f5f7;
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            PopoverInput {
+                                horizontal-stretch: 1;
+                                placeholder: "ex: Ctrl+C";
+                                text <=> root.macro-key-text;
+                            }
+
+                            PopoverButton {
+                                text: "+ Tecla";
+                                clicked => { root.add-macro-key(); }
+                            }
+                        }
+
+                        // Adicionar passo de espera (ms)
+                        HorizontalLayout {
+                            spacing: 6px;
+
+                            PopoverInput {
+                                horizontal-stretch: 1;
+                                placeholder: "Espera em ms (ex: 100)";
+                                text <=> root.macro-wait-text;
+                            }
+
+                            PopoverButton {
+                                text: "+ Espera (ms)";
+                                clicked => { root.add-macro-wait(); }
+                            }
+                        }
+                    }
+
+                    // 8: Nenhuma ação
+                    if root.selected-type-index == 8: VerticalLayout {
+                        padding: 16px;
+                        alignment: center;
+
+                        Text {
+                            text: "Nenhuma ação será executada por este controle.";
+                            color: #a1a1aa;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            if root.error-message != "": Rectangle {
+                border-radius: 6px;
+                background: rgba(220, 38, 38, 0.22);
+                border-width: 1px;
+                border-color: rgba(248, 113, 113, 0.45);
+
+                HorizontalLayout {
+                    padding: 8px;
+                    Text {
+                        text: root.error-message;
+                        color: #fca5a5;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+
+                PopoverButton {
+                    text: "Cancelar";
+                    clicked => { root.cancel-action(); }
+                }
+
+                PopoverButton {
+                    text: "Salvar";
+                    primary: true;
+                    clicked => { root.save-action(); }
+                }
+            }
+        }
+    }
+}
