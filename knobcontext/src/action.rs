@@ -140,10 +140,6 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
             .unwrap_or("<nenhum>")
     }
 
-    pub fn active_profile_index(&self) -> usize {
-        self.active_index
-    }
-
     pub fn set_active_profile_index(&mut self, index: usize) {
         if !self.profiles.is_empty() {
             self.active_index = index.min(self.profiles.len() - 1);

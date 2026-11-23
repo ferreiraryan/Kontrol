@@ -3,11 +3,12 @@ export component Overlay inherits Window {
     no-frame: true;
     always-on-top: true;
     background: transparent;
-    width: 420px;
-    height: 152px;
+    width: 480px;
+    height: 172px;
 
-    in property <string> active-profile-name: "Volume";
-    in property <[string]> profiles: ["Volume", "Pincel", "Scroll"];
+    in property <string> active-profile-name: "Automático";
+    in property <string> mode-subtitle: "Automático (global)";
+    in property <[string]> profiles: ["Automático", "global", "firefox", "gimp"];
     in property <int> highlighted-index: 0;
     in property <int> active-index: 0;
 
@@ -20,19 +21,32 @@ export component Overlay inherits Window {
         border-color: rgba(255, 255, 255, 0.1);
 
         VerticalLayout {
-            padding-top: 18px;
-            padding-bottom: 16px;
+            padding-top: 16px;
+            padding-bottom: 14px;
             padding-left: 20px;
             padding-right: 20px;
-            spacing: 14px;
+            spacing: 10px;
             alignment: center;
 
-            Text {
-                text: root.active-profile-name;
-                color: #f5f5f7;
-                font-size: 20px;
-                font-weight: 700;
-                horizontal-alignment: center;
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text: root.active-profile-name;
+                    color: #f5f5f7;
+                    font-size: 20px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.mode-subtitle;
+                    color: #93c5fd;
+                    font-size: 12px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                }
             }
 
             HorizontalLayout {

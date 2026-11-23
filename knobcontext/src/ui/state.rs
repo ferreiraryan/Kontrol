@@ -60,6 +60,7 @@ impl OverlayController {
         self.mode
     }
 
+    #[cfg(test)]
     pub fn active_index(&self) -> usize {
         self.active_index
     }

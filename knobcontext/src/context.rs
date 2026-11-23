@@ -9,17 +9,37 @@ use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Estado compartilhado da janela atualmente em foco no compositor.
+/// Modo de seleção de perfil ativo (volátil: sempre inicia em `Auto` ao abrir o app).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum ProfileMode {
+    /// Segue automaticamente a janela em foco no compositor.
+    #[default]
+    Auto,
+    /// Mantém um perfil fixo independente de mudanças de janela até voltar para `Auto`.
+    Manual(String),
+}
+
+/// Estado compartilhado da janela atualmente em foco no compositor e do modo de perfil.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ContextState {
     pub active_window: Option<String>,
+    pub mode: ProfileMode,
 }
 
 impl ContextState {
     pub fn new() -> Self {
         Self {
             active_window: None,
+            mode: ProfileMode::Auto,
         }
+    }
+
+    pub fn set_mode(&mut self, mode: ProfileMode) {
+        self.mode = mode;
+    }
+
+    pub fn mode(&self) -> &ProfileMode {
+        &self.mode
     }
 
     pub fn set_active_window(&mut self, window_class: Option<String>) {
@@ -38,8 +58,8 @@ impl ContextState {
         self.active_window.as_deref()
     }
 
-    /// Resolve o nome do perfil correspondente à janela ativa, com fallback para `"global"`.
-    pub fn profile_for_window(&self, config: &Config) -> String {
+    /// Resolve qual perfil corresponderia à janela ativa atual (sempre contextual, fallback `"global"`).
+    pub fn contextual_profile_for_window(&self, config: &Config) -> String {
         let Some(active_class) = self.active_window.as_deref() else {
             return GLOBAL_PROFILE_NAME.to_string();
         };
@@ -54,6 +74,16 @@ impl ContextState {
         }
 
         GLOBAL_PROFILE_NAME.to_string()
+    }
+
+    /// Resolve o nome do perfil efetivo respeitando `ProfileMode`:
+    /// - Em `Auto`: consulta o contexto da janela ativa (fallback `"global"`).
+    /// - Em `Manual(p)`: retorna `p` independente da janela ativa.
+    pub fn profile_for_window(&self, config: &Config) -> String {
+        match &self.mode {
+            ProfileMode::Auto => self.contextual_profile_for_window(config),
+            ProfileMode::Manual(profile_name) => profile_name.clone(),
+        }
     }
 }
 
@@ -209,8 +239,32 @@ pub fn spawn_hyprland_listener(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_activewindow_query_response, parse_hyprland_event, ContextState};
+    use super::{
+        parse_activewindow_query_response, parse_hyprland_event, ContextState, ProfileMode,
+    };
     use crate::config::{Config, GLOBAL_PROFILE_NAME};
+
+    #[test]
+    fn manual_mode_overrides_window_context_and_auto_restores_it() {
+        let cfg = Config::default();
+        let mut ctx = ContextState::new();
+        assert_eq!(*ctx.mode(), ProfileMode::Auto);
+
+        // Em Auto: segue Firefox
+        ctx.set_active_window(Some("firefox".to_string()));
+        assert_eq!(ctx.profile_for_window(&cfg), "firefox");
+
+        // Em Manual("global"): ignora Firefox e GIMP
+        ctx.set_mode(ProfileMode::Manual("global".to_string()));
+        assert_eq!(ctx.profile_for_window(&cfg), "global");
+        ctx.set_active_window(Some("gimp".to_string()));
+        assert_eq!(ctx.profile_for_window(&cfg), "global");
+        assert_eq!(ctx.contextual_profile_for_window(&cfg), "gimp");
+
+        // Voltar para Auto: imediatamente segue GIMP
+        ctx.set_mode(ProfileMode::Auto);
+        assert_eq!(ctx.profile_for_window(&cfg), "gimp");
+    }
 
     #[test]
     fn maps_known_windows_to_matching_profiles() {

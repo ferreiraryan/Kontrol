@@ -8,7 +8,7 @@ mod ui;
 
 use crate::action::{ActionDispatcher, DispatchOutcome, EnigoExecutor};
 use crate::config::Config;
-use crate::context::{spawn_hyprland_listener, ContextState};
+use crate::context::{spawn_hyprland_listener, ContextState, ProfileMode};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
 use crate::ui::settings_mod::SettingsController;
@@ -29,42 +29,52 @@ use std::time::{Duration, Instant};
 struct AppRuntime {
     config: Config,
     context: Arc<RwLock<ContextState>>,
-    last_window_class: Option<String>,
-    manual_profile_override: Option<String>,
     controller: OverlayController,
     dispatcher: ActionDispatcher<EnigoExecutor>,
     overlay: OverlayWindow,
 }
 
 impl AppRuntime {
+    fn overlay_active_index_and_subtitle(&self) -> (usize, String) {
+        if let Ok(ctx) = self.context.read() {
+            match ctx.mode() {
+                ProfileMode::Auto => {
+                    let contextual = ctx.contextual_profile_for_window(&self.config);
+                    (0, format!("Automático ({contextual})"))
+                }
+                ProfileMode::Manual(profile_name) => {
+                    let idx = self
+                        .dispatcher
+                        .find_profile_index(profile_name)
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    (idx, "Manual".to_string())
+                }
+            }
+        } else {
+            (0, format!("Automático ({})", self.config.active_profile))
+        }
+    }
+
     fn apply_saved_config(&mut self, new_config: Config) {
-        let active_idx = new_config.active_profile_index();
         let profile_names: Vec<String> =
             new_config.profiles.iter().map(|p| p.name.clone()).collect();
         self.dispatcher.update_profiles(new_config.profiles.clone());
-        self.overlay.update_profiles(profile_names, active_idx);
-        self.controller
-            .set_profile_count(new_config.profiles.len(), active_idx);
-        self.manual_profile_override = None;
         self.config = new_config;
+
+        let (overlay_idx, subtitle) = self.overlay_active_index_and_subtitle();
+        self.overlay
+            .update_profiles(profile_names, overlay_idx, &subtitle);
+        self.controller
+            .set_profile_count(self.config.profiles.len() + 1, overlay_idx);
         info!("Configuração salva e aplicada em tempo real.");
     }
 
     fn sync_context(&mut self) -> String {
-        let current_window = self
-            .context
-            .read()
-            .ok()
-            .and_then(|ctx| ctx.active_window.clone());
+        let (overlay_idx, _) = self.overlay_active_index_and_subtitle();
+        self.controller.sync_active_index(overlay_idx);
 
-        if current_window != self.last_window_class {
-            self.last_window_class = current_window;
-            self.manual_profile_override = None;
-        }
-
-        let resolved = if let Some(ref manual) = self.manual_profile_override {
-            manual.clone()
-        } else if let Ok(ctx) = self.context.read() {
+        let resolved = if let Ok(ctx) = self.context.read() {
             ctx.profile_for_window(&self.config)
         } else {
             self.config.active_profile.clone()
@@ -72,7 +82,6 @@ impl AppRuntime {
 
         if let Some(idx) = self.dispatcher.find_profile_index(&resolved) {
             self.dispatcher.set_active_profile_index(idx);
-            self.controller.sync_active_index(idx);
         }
 
         resolved
@@ -96,10 +105,12 @@ impl AppRuntime {
                         );
                     }
                     Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
-                        self.manual_profile_override = Some(new_profile.clone());
-                        self.controller
-                            .sync_active_index(self.dispatcher.active_profile_index());
-                        info!("Perfil alterado para '{new_profile}'");
+                        if let Ok(mut ctx) = self.context.write() {
+                            ctx.set_mode(ProfileMode::Manual(new_profile.clone()));
+                        }
+                        let (overlay_idx, _) = self.overlay_active_index_and_subtitle();
+                        self.controller.sync_active_index(overlay_idx);
+                        info!("Perfil alterado para Manual: '{new_profile}'");
                     }
                     Ok(DispatchOutcome::Ignored) => {
                         debug!(
@@ -113,24 +124,33 @@ impl AppRuntime {
                 }
             }
             OverlayTransition::OpenOverlay { highlighted_index } => {
-                debug!("Abrindo overlay (destaque={highlighted_index})");
-                if let Err(err) = self
-                    .overlay
-                    .show(self.controller.active_index(), highlighted_index)
-                {
+                let (active_idx, subtitle) = self.overlay_active_index_and_subtitle();
+                debug!("Abrindo overlay (ativo={active_idx}, destaque={highlighted_index})");
+                if let Err(err) = self.overlay.show(active_idx, highlighted_index, &subtitle) {
                     warn!("Falha ao abrir overlay: {err}");
                 }
             }
             OverlayTransition::UpdateHighlight { highlighted_index } => {
+                let (active_idx, subtitle) = self.overlay_active_index_and_subtitle();
                 debug!("Overlay destaque atualizado: {highlighted_index}");
                 self.overlay
-                    .update_selection(self.controller.active_index(), highlighted_index);
+                    .update_selection(active_idx, highlighted_index, &subtitle);
             }
             OverlayTransition::CommitAndClose { selected_index } => {
-                self.dispatcher.set_active_profile_index(selected_index);
-                let chosen = self.dispatcher.active_profile_name().to_string();
-                self.manual_profile_override = Some(chosen.clone());
-                info!("Perfil selecionado no overlay: '{chosen}'");
+                if selected_index == 0 {
+                    if let Ok(mut ctx) = self.context.write() {
+                        ctx.set_mode(ProfileMode::Auto);
+                    }
+                    let resolved = self.sync_context();
+                    info!("Modo alterado no overlay: Automático ('{resolved}')");
+                } else if let Some(profile) = self.config.profiles.get(selected_index - 1) {
+                    let chosen = profile.name.clone();
+                    if let Ok(mut ctx) = self.context.write() {
+                        ctx.set_mode(ProfileMode::Manual(chosen.clone()));
+                    }
+                    self.dispatcher.set_active_profile_index(selected_index - 1);
+                    info!("Modo alterado no overlay: Manual ('{chosen}')");
+                }
                 if let Err(err) = self.overlay.hide() {
                     warn!("Falha ao fechar overlay: {err}");
                 }
@@ -185,9 +205,9 @@ fn run() -> Result<(), KnobError> {
 
     let executor = EnigoExecutor::new(config.device.scroll_step)?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
-    let overlay = OverlayWindow::new(profile_names, active_idx)?;
-    let controller =
-        OverlayController::new(config.profiles.len(), active_idx, DEFAULT_OVERLAY_TIMEOUT);
+    // Índice 0 no overlay = "Automático" (padrão volátil na inicialização).
+    let overlay = OverlayWindow::new(profile_names, 0)?;
+    let controller = OverlayController::new(config.profiles.len() + 1, 0, DEFAULT_OVERLAY_TIMEOUT);
 
     info!(
         "Capturando dispositivos: kbd='{}', media='{}'",
@@ -209,8 +229,7 @@ fn run() -> Result<(), KnobError> {
     let hyprland_thread = spawn_hyprland_listener(Arc::clone(&context), Arc::clone(&running));
 
     info!(
-        "KnobContext ativo (perfil inicial: '{}'). Pressione o knob para o overlay, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair.",
-        dispatcher.active_profile_name()
+        "KnobContext ativo (modo: Automático). Pressione o knob para o overlay, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair."
     );
 
     let (tx, rx) = mpsc::channel::<KnobEvent>();
@@ -240,8 +259,6 @@ fn run() -> Result<(), KnobError> {
     let runtime = Rc::new(RefCell::new(AppRuntime {
         config,
         context,
-        last_window_class: None,
-        manual_profile_override: None,
         controller,
         dispatcher,
         overlay,
