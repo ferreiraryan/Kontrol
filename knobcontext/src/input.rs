@@ -20,15 +20,17 @@ pub enum KnobEvent {
 
 /// Máquina de estados pura que traduz eventos brutos `evdev` em `KnobEvent`.
 ///
-/// Trata combos como `Ctrl+F1` (`Key1`) e `Ctrl+F4` (`Key2`) exigindo que a segunda
-/// tecla chegue dentro de `combo_window` enquanto `Ctrl` está pressionado.
-/// Pressionar `Key1` e `Key2` simultaneamente (`F1` + `F4`) emite `OpenSettings`.
+/// Trata combos como `Ctrl+F1` (`Key1`), `Ctrl+F4` (`Key2`) e `Key1+Key2` (`OpenSettings`)
+/// exigindo que a segunda tecla chegue dentro de `combo_window` enquanto `Ctrl` está
+/// pressionado, e emitindo o `KnobEvent` somente quando o modificador (`Ctrl`) recebe `KEY_UP`
+/// para evitar estado residual de modificadores presos.
 #[derive(Debug)]
 pub struct EventTranslator {
     combo_window: Duration,
     ctrl_pressed_at: Option<Instant>,
     f1_down: bool,
     f4_down: bool,
+    pending_combo: Option<KnobEvent>,
 }
 
 impl EventTranslator {
@@ -38,6 +40,7 @@ impl EventTranslator {
             ctrl_pressed_at: None,
             f1_down: false,
             f4_down: false,
+            pending_combo: None,
         }
     }
 
@@ -59,7 +62,7 @@ impl EventTranslator {
                 self.ctrl_pressed_at = None;
                 self.f1_down = false;
                 self.f4_down = false;
-                None
+                self.pending_combo.take()
             }
             (Key::KEY_VOLUMEUP, 1) => Some(KnobEvent::RotateCw),
             (Key::KEY_VOLUMEDOWN, 1) => Some(KnobEvent::RotateCcw),
@@ -68,13 +71,11 @@ impl EventTranslator {
             (Key::KEY_F4, 1) => {
                 if self.ctrl_pressed_at.is_some() {
                     self.f4_down = true;
-                    if self.f1_down {
-                        self.ctrl_pressed_at = None;
-                        self.f1_down = false;
-                        self.f4_down = false;
-                        return Some(KnobEvent::OpenSettings);
+                    if self.f1_down || self.pending_combo == Some(KnobEvent::Key1) {
+                        self.pending_combo = Some(KnobEvent::OpenSettings);
+                    } else if self.is_within_combo_window(now) {
+                        self.pending_combo = Some(KnobEvent::Key2);
                     }
-                    return self.try_complete_ctrl_combo(now, KnobEvent::Key2);
                 }
                 None
             }
@@ -85,13 +86,11 @@ impl EventTranslator {
             (Key::KEY_F1, 1) => {
                 if self.ctrl_pressed_at.is_some() {
                     self.f1_down = true;
-                    if self.f4_down {
-                        self.ctrl_pressed_at = None;
-                        self.f1_down = false;
-                        self.f4_down = false;
-                        return Some(KnobEvent::OpenSettings);
+                    if self.f4_down || self.pending_combo == Some(KnobEvent::Key2) {
+                        self.pending_combo = Some(KnobEvent::OpenSettings);
+                    } else if self.is_within_combo_window(now) {
+                        self.pending_combo = Some(KnobEvent::Key1);
                     }
-                    return self.try_complete_ctrl_combo(now, KnobEvent::Key1);
                 }
                 None
             }
@@ -103,15 +102,10 @@ impl EventTranslator {
         }
     }
 
-    fn try_complete_ctrl_combo(&mut self, now: Instant, emitted: KnobEvent) -> Option<KnobEvent> {
-        let pressed_at = self.ctrl_pressed_at?;
-        if now.saturating_duration_since(pressed_at) <= self.combo_window {
-            self.ctrl_pressed_at = None;
-            Some(emitted)
-        } else {
-            self.ctrl_pressed_at = None;
-            None
-        }
+    fn is_within_combo_window(&self, now: Instant) -> bool {
+        self.ctrl_pressed_at.is_some_and(|pressed_at| {
+            now.saturating_duration_since(pressed_at) <= self.combo_window
+        })
     }
 }
 
@@ -304,14 +298,14 @@ mod tests {
         let mut tr = EventTranslator::new(Duration::from_millis(200));
         let t0 = Instant::now();
 
-        // Ctrl+F4 dentro de 50ms -> Key2 (meio)
+        // Ctrl+F4 dentro de 50ms -> emite Key2 quando Ctrl recebe KEY_UP
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t0),
             None
         );
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_F4, 1), t0 + Duration::from_millis(50)),
-            Some(KnobEvent::Key2)
+            None
         );
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_F4, 0), t0 + Duration::from_millis(55)),
@@ -322,10 +316,10 @@ mod tests {
                 key_event(Key::KEY_LEFTCTRL, 0),
                 t0 + Duration::from_millis(60)
             ),
-            None
+            Some(KnobEvent::Key2)
         );
 
-        // Ctrl+F1 dentro de 10ms -> Key1 (esquerda)
+        // Ctrl+F1 dentro de 10ms -> emite Key1 quando Ctrl recebe KEY_UP
         let t1 = t0 + Duration::from_millis(500);
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t1),
@@ -333,6 +327,13 @@ mod tests {
         );
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_F1, 1), t1 + Duration::from_millis(10)),
+            None
+        );
+        assert_eq!(
+            tr.process_input_event(
+                key_event(Key::KEY_LEFTCTRL, 0),
+                t1 + Duration::from_millis(20)
+            ),
             Some(KnobEvent::Key1)
         );
     }
@@ -392,18 +393,18 @@ mod tests {
         );
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_F1, 1), t0 + Duration::from_millis(10)),
-            Some(KnobEvent::Key1)
+            None
         );
-        // Enquanto F1 ainda está pressionado, Ctrl+F4 emite OpenSettings
+        // Enquanto F1 ainda está pressionado, Ctrl+F4 promove o combo pendente para OpenSettings
         assert_eq!(
-            tr.process_input_event(
-                key_event(Key::KEY_LEFTCTRL, 1),
-                t0 + Duration::from_millis(20)
-            ),
+            tr.process_input_event(key_event(Key::KEY_F4, 1), t0 + Duration::from_millis(30)),
             None
         );
         assert_eq!(
-            tr.process_input_event(key_event(Key::KEY_F4, 1), t0 + Duration::from_millis(30)),
+            tr.process_input_event(
+                key_event(Key::KEY_LEFTCTRL, 0),
+                t0 + Duration::from_millis(40)
+            ),
             Some(KnobEvent::OpenSettings)
         );
     }

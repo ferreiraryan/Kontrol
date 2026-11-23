@@ -30,6 +30,7 @@ impl SettingsController {
         initial_config: Config,
         on_saved: impl Fn(Config) + 'static,
         on_closed: impl Fn() + 'static,
+        on_release_modifiers: impl Fn() + 'static,
     ) -> Result<Self, KnobError> {
         let window = SettingsWindow::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
 
@@ -50,6 +51,7 @@ impl SettingsController {
 
         let on_saved = Rc::new(on_saved);
         let on_closed = Rc::new(on_closed);
+        let on_release_modifiers: Rc<dyn Fn()> = Rc::new(on_release_modifiers);
 
         // Selecionar perfil na lista lateral
         {
@@ -158,7 +160,7 @@ impl SettingsController {
             });
         }
 
-        wire_action_editor_callbacks(&window, Rc::clone(&draft));
+        wire_action_editor_callbacks(&window, Rc::clone(&draft), Rc::clone(&on_release_modifiers));
 
         // Salvar e persistir em ~/.config/knobcontext/config.toml
         {
@@ -208,12 +210,14 @@ impl SettingsController {
             let weak = window.as_weak();
             let open_ref = Rc::clone(&is_open);
             let on_closed_cb = Rc::clone(&on_closed);
+            let on_release_cb = Rc::clone(&on_release_modifiers);
             window.on_cancel_requested(move || {
                 *open_ref.borrow_mut() = false;
                 if let Some(win) = weak.upgrade() {
                     win.set_editor_open(false);
                     let _ = win.hide();
                 }
+                on_release_cb();
                 on_closed_cb();
             });
         }
@@ -223,12 +227,14 @@ impl SettingsController {
             let weak = window.as_weak();
             let open_ref = Rc::clone(&is_open);
             let on_closed_cb = Rc::clone(&on_closed);
+            let on_release_cb = Rc::clone(&on_release_modifiers);
             window.window().on_close_requested(move || {
                 *open_ref.borrow_mut() = false;
                 if let Some(win) = weak.upgrade() {
                     win.set_editor_open(false);
                     let _ = win.hide();
                 }
+                on_release_cb();
                 on_closed_cb();
                 CloseRequestResponse::KeepWindowShown
             });
@@ -267,17 +273,26 @@ impl SettingsController {
     }
 }
 
-fn wire_action_editor_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDraft>>) {
+fn wire_action_editor_callbacks(
+    window: &SettingsWindow,
+    draft: Rc<RefCell<SettingsDraft>>,
+    on_release_modifiers: Rc<dyn Fn()>,
+) {
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
+        let release_cb = Rc::clone(&on_release_modifiers);
         window.on_editor_select_type(move |idx| {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
+            let was_capturing = d.editor.capturing_shortcut || d.editor.capturing_macro_key;
             pull_editor_text_fields(&win, &mut d.editor);
             d.editor.select_type(idx.max(0) as usize);
             win.set_editor_error_message(SharedString::from(""));
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            if was_capturing {
+                release_cb();
+            }
         });
     }
 
@@ -459,6 +474,7 @@ fn wire_action_editor_callbacks(window: &SettingsWindow, draft: Rc<RefCell<Setti
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
+        let release_cb = Rc::clone(&on_release_modifiers);
         window.on_editor_save(move || {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
@@ -485,6 +501,7 @@ fn wire_action_editor_callbacks(window: &SettingsWindow, draft: Rc<RefCell<Setti
                     win.set_editor_error_message(SharedString::from(""));
                     sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
                     sync_draft_to_ui(&win, &d);
+                    release_cb();
                 }
                 Err(err) => win.set_editor_error_message(SharedString::from(err.to_string())),
             }
@@ -494,12 +511,14 @@ fn wire_action_editor_callbacks(window: &SettingsWindow, draft: Rc<RefCell<Setti
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
+        let release_cb = Rc::clone(&on_release_modifiers);
         window.on_editor_cancel(move || {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.cancel();
             win.set_editor_error_message(SharedString::from(""));
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            release_cb();
         });
     }
 }

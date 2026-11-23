@@ -10,6 +10,91 @@ use std::time::Duration;
 /// Abstração para execução de ações, permitindo testes unitários com mocks.
 pub trait ActionExecutor {
     fn execute(&mut self, action: &ActionConfig) -> Result<(), KnobError>;
+    /// Libera preventivamente todas as teclas modificadoras (Shift, Ctrl, Alt, Meta)
+    /// para evitar que fiquem presas após cancelamento de captura ou erro.
+    fn release_modifiers(&mut self) {}
+}
+
+/// Backend de baixo nível para envio de eventos de tecla (`Press`/`Release`),
+/// permitindo testar o `KeyReleaseGuard` (RAII) com falhas injetadas sem hardware real.
+trait KeyBackend {
+    fn send_key(&mut self, key: Key, direction: Direction) -> Result<(), KnobError>;
+}
+
+impl KeyBackend for Enigo {
+    fn send_key(&mut self, key: Key, direction: Direction) -> Result<(), KnobError> {
+        self.key(key, direction)
+            .map_err(|err| KnobError::InputSimulation(err.to_string()))
+    }
+}
+
+/// Guard RAII que garante `Direction::Release` (em ordem reversa) para todas as teclas
+/// pressionadas através dele, mesmo em caso de erro ou early-return no meio de um atalho/macro.
+struct KeyReleaseGuard<'a, B: KeyBackend> {
+    backend: &'a mut B,
+    pressed: Vec<Key>,
+}
+
+impl<'a, B: KeyBackend> KeyReleaseGuard<'a, B> {
+    fn new(backend: &'a mut B) -> Self {
+        Self {
+            backend,
+            pressed: Vec::new(),
+        }
+    }
+
+    fn press(&mut self, key: Key) -> Result<(), KnobError> {
+        self.backend.send_key(key, Direction::Press)?;
+        self.pressed.push(key);
+        Ok(())
+    }
+
+    fn release_all(&mut self) {
+        while let Some(key) = self.pressed.pop() {
+            let _ = self.backend.send_key(key, Direction::Release);
+        }
+    }
+}
+
+impl<B: KeyBackend> Drop for KeyReleaseGuard<'_, B> {
+    fn drop(&mut self) {
+        self.release_all();
+    }
+}
+
+fn execute_shortcut_with_backend<B: KeyBackend>(
+    backend: &mut B,
+    keys: &[String],
+) -> Result<(), KnobError> {
+    if keys.is_empty() {
+        return Err(KnobError::InvalidAction(
+            "atalho `shortcut` não pode ter lista `keys` vazia".to_string(),
+        ));
+    }
+    let parsed: Vec<Key> = keys
+        .iter()
+        .map(|k| parse_key_name(k))
+        .collect::<Result<_, _>>()?;
+
+    let mut guard = KeyReleaseGuard::new(backend);
+    for &key in &parsed {
+        guard.press(key)?;
+    }
+    guard.release_all();
+    Ok(())
+}
+
+fn execute_macro_with_backend<B: KeyBackend>(
+    backend: &mut B,
+    steps: &[MacroStep],
+) -> Result<(), KnobError> {
+    for step in steps {
+        match step {
+            MacroStep::Keys(keys) => execute_shortcut_with_backend(backend, keys)?,
+            MacroStep::WaitMs(ms) => thread::sleep(Duration::from_millis(*ms)),
+        }
+    }
+    Ok(())
 }
 
 /// Resultado do despacho de um `KnobEvent`.
@@ -69,6 +154,10 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
         self.profiles
             .iter()
             .position(|p| p.name.eq_ignore_ascii_case(profile_name))
+    }
+
+    pub fn release_modifiers(&mut self) {
+        self.executor.release_modifiers();
     }
 
     pub fn dispatch(
@@ -175,43 +264,28 @@ impl ActionExecutor for EnigoExecutor {
                     })?;
                 Ok(())
             }
-            ActionConfig::Macro { steps } => {
-                for step in steps {
-                    match step {
-                        MacroStep::Keys(keys) => self.execute_shortcut(keys)?,
-                        MacroStep::WaitMs(ms) => thread::sleep(Duration::from_millis(*ms)),
-                    }
-                }
-                Ok(())
-            }
+            ActionConfig::Macro { steps } => execute_macro_with_backend(&mut self.enigo, steps),
             ActionConfig::NextProfile | ActionConfig::None => Ok(()),
+        }
+    }
+
+    fn release_modifiers(&mut self) {
+        for key in [
+            Key::Shift,
+            Key::RShift,
+            Key::Control,
+            Key::RControl,
+            Key::Alt,
+            Key::Meta,
+        ] {
+            let _ = self.enigo.key(key, Direction::Release);
         }
     }
 }
 
 impl EnigoExecutor {
     fn execute_shortcut(&mut self, keys: &[String]) -> Result<(), KnobError> {
-        if keys.is_empty() {
-            return Err(KnobError::InvalidAction(
-                "atalho `shortcut` não pode ter lista `keys` vazia".to_string(),
-            ));
-        }
-        let parsed: Vec<Key> = keys
-            .iter()
-            .map(|k| parse_key_name(k))
-            .collect::<Result<_, _>>()?;
-
-        for &key in &parsed {
-            self.enigo
-                .key(key, Direction::Press)
-                .map_err(|err| KnobError::InputSimulation(err.to_string()))?;
-        }
-        for &key in parsed.iter().rev() {
-            self.enigo
-                .key(key, Direction::Release)
-                .map_err(|err| KnobError::InputSimulation(err.to_string()))?;
-        }
-        Ok(())
+        execute_shortcut_with_backend(&mut self.enigo, keys)
     }
 
     fn click_key(&mut self, key: Key) -> Result<(), KnobError> {
@@ -275,11 +349,107 @@ pub fn parse_key_name(name: &str) -> Result<Key, KnobError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_key_name, ActionDispatcher, ActionExecutor, DispatchOutcome};
+    use super::{
+        execute_macro_with_backend, execute_shortcut_with_backend, parse_key_name,
+        ActionDispatcher, ActionExecutor, DispatchOutcome, KeyBackend, KeyReleaseGuard,
+    };
+    use crate::actions_catalog::MacroStep;
     use crate::config::{ActionConfig, Config};
     use crate::error::KnobError;
     use crate::input::KnobEvent;
-    use enigo::Key;
+    use enigo::{Direction, Key};
+
+    struct RecordingKeyBackend {
+        events: Vec<(Key, Direction)>,
+        fail_on_key: Option<Key>,
+    }
+
+    impl RecordingKeyBackend {
+        fn new(fail_on_key: Option<Key>) -> Self {
+            Self {
+                events: Vec::new(),
+                fail_on_key,
+            }
+        }
+
+        fn net_pressed_count(&self, target: Key) -> isize {
+            self.events
+                .iter()
+                .filter(|(k, _)| *k == target)
+                .map(|(_, d)| match d {
+                    Direction::Press => 1,
+                    Direction::Release => -1,
+                    Direction::Click => 0,
+                })
+                .sum()
+        }
+    }
+
+    impl KeyBackend for RecordingKeyBackend {
+        fn send_key(&mut self, key: Key, direction: Direction) -> Result<(), KnobError> {
+            if direction == Direction::Press && self.fail_on_key == Some(key) {
+                return Err(KnobError::InputSimulation("falha simulada".to_string()));
+            }
+            self.events.push((key, direction));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn key_release_guard_leaves_no_residual_state_on_shift_down_up() {
+        let mut backend = RecordingKeyBackend::new(None);
+        {
+            let mut guard = KeyReleaseGuard::new(&mut backend);
+            guard.press(Key::Shift).expect("shift down");
+            guard.press(Key::Tab).expect("tab down");
+        }
+        assert_eq!(backend.net_pressed_count(Key::Shift), 0);
+        assert_eq!(backend.net_pressed_count(Key::Tab), 0);
+        assert_eq!(
+            backend.events,
+            vec![
+                (Key::Shift, Direction::Press),
+                (Key::Tab, Direction::Press),
+                (Key::Tab, Direction::Release),
+                (Key::Shift, Direction::Release),
+            ]
+        );
+    }
+
+    #[test]
+    fn key_release_guard_releases_shift_when_error_occurs_mid_macro() {
+        // Simula Shift+Tab onde Tab falha no meio da macro: Shift DEVE ser solto pelo Drop!
+        let mut backend = RecordingKeyBackend::new(Some(Key::Tab));
+        let steps = vec![
+            MacroStep::Keys(vec!["Shift".into(), "Tab".into()]),
+            MacroStep::Keys(vec!["Ctrl".into(), "V".into()]),
+        ];
+
+        let err = execute_macro_with_backend(&mut backend, &steps);
+        assert!(err.is_err());
+        assert_eq!(
+            backend.net_pressed_count(Key::Shift),
+            0,
+            "Shift não pode ficar preso após erro no meio da macro"
+        );
+        assert_eq!(
+            backend.events,
+            vec![
+                (Key::Shift, Direction::Press),
+                (Key::Shift, Direction::Release),
+            ]
+        );
+
+        // Também valida atalho isolado falhando após Ctrl+Shift
+        let mut backend2 = RecordingKeyBackend::new(Some(Key::Unicode('z')));
+        let err2 = execute_shortcut_with_backend(
+            &mut backend2,
+            &["Ctrl".into(), "Shift".into(), "Z".into()],
+        );
+        assert!(err2.is_err());
+        assert_eq!(backend2.net_pressed_count(Key::Control), 0);
+        assert_eq!(backend2.net_pressed_count(Key::Shift), 0);
+    }
 
     #[derive(Default)]
     struct MockExecutor {

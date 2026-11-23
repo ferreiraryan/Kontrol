@@ -249,6 +249,7 @@ fn run() -> Result<(), KnobError> {
 
     let runtime_on_saved = Rc::clone(&runtime);
     let runtime_on_closed = Rc::clone(&runtime);
+    let runtime_on_release = Rc::clone(&runtime);
     let settings = Rc::new(SettingsController::new(
         initial_config_for_settings,
         move |saved_config| {
@@ -262,6 +263,13 @@ fn run() -> Result<(), KnobError> {
                 .controller
                 .set_settings_open(false);
             debug!("Janela de configurações fechada; overlay reabilitado.");
+        },
+        move || {
+            runtime_on_release
+                .borrow_mut()
+                .dispatcher
+                .release_modifiers();
+            debug!("Modificadores liberados preventivamente após captura/fechamento.");
         },
     )?);
 
