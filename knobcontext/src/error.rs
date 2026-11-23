@@ -4,7 +4,6 @@ use thiserror::Error;
 
 /// Erros centralizados do aplicativo KnobContext.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum KnobError {
     #[error("falha ao ler arquivo de configuração '{path}': {source}")]
     ConfigRead {
@@ -52,7 +51,6 @@ pub enum KnobError {
 
 impl KnobError {
     /// Retorna `true` se o erro for causado por falta de permissão do SO (`PermissionDenied`).
-    #[allow(dead_code)]
     pub fn is_permission_denied(&self) -> bool {
         match self {
             Self::DeviceOpen { source, .. }

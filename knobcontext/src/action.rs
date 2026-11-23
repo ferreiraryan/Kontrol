@@ -23,7 +23,6 @@ pub struct ActionDispatcher<E: ActionExecutor> {
     executor: E,
 }
 
-#[allow(dead_code)]
 impl<E: ActionExecutor> ActionDispatcher<E> {
     pub fn new(profiles: Vec<ProfileConfig>, active_index: usize, executor: E) -> Self {
         let safe_index = if profiles.is_empty() {
@@ -80,7 +79,6 @@ pub struct EnigoExecutor {
     enigo: Enigo,
 }
 
-#[allow(dead_code)]
 impl EnigoExecutor {
     pub fn new() -> Result<Self, KnobError> {
         let enigo = Enigo::new(&Settings::default())

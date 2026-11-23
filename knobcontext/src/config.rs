@@ -115,7 +115,6 @@ impl Default for Config {
     }
 }
 
-#[allow(dead_code)]
 impl Config {
     /// Retorna o caminho padrão `~/.config/knobcontext/config.toml` (respeitando `XDG_CONFIG_HOME`).
     pub fn default_path() -> Option<PathBuf> {

@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 /// Eventos de alto nível emitidos pelo dispositivo knob (3 teclas + botão rotativo).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum KnobEvent {
     RotateCw,
     RotateCcw,
@@ -163,14 +162,12 @@ fn set_nonblocking(fd: i32) -> io::Result<()> {
 }
 
 /// Gerencia os dois nós `evdev` do knob com `grab()` exclusivo e leitura multiplexada via `poll`.
-#[allow(dead_code)]
 pub struct KnobInput {
     kbd: GrabbedDevice,
     media: GrabbedDevice,
     translator: EventTranslator,
 }
 
-#[allow(dead_code)]
 impl KnobInput {
     pub fn open(config: &DeviceConfig) -> Result<Self, KnobError> {
         let kbd = GrabbedDevice::open_and_grab(&config.kbd_path)?;
