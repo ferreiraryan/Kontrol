@@ -108,6 +108,7 @@ version = "0.1.0"
 dependencies = [
  "evdev",
  "hidapi",
+ "libc",
  "serde",
  "thiserror 2.0.21",
  "toml",
