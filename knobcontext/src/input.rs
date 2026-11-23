@@ -19,7 +19,7 @@ pub enum KnobEvent {
 
 /// Máquina de estados pura que traduz eventos brutos `evdev` em `KnobEvent`.
 ///
-/// Trata combos como `Ctrl+F4` (`Key2`) e `Ctrl+F1` (`Key3`) exigindo que a segunda
+/// Trata combos como `Ctrl+F1` (`Key1`) e `Ctrl+F4` (`Key2`) exigindo que a segunda
 /// tecla chegue dentro de `combo_window` enquanto `Ctrl` está pressionado.
 #[derive(Debug)]
 pub struct EventTranslator {
@@ -56,9 +56,9 @@ impl EventTranslator {
             (Key::KEY_VOLUMEUP, 1) => Some(KnobEvent::RotateCw),
             (Key::KEY_VOLUMEDOWN, 1) => Some(KnobEvent::RotateCcw),
             (Key::KEY_MUTE, 1) => Some(KnobEvent::KnobPress),
-            (Key::KEY_PLAYPAUSE, 1) => Some(KnobEvent::Key1),
+            (Key::KEY_PLAYPAUSE, 1) => Some(KnobEvent::Key3),
             (Key::KEY_F4, 1) => self.try_complete_ctrl_combo(now, KnobEvent::Key2),
-            (Key::KEY_F1, 1) => self.try_complete_ctrl_combo(now, KnobEvent::Key3),
+            (Key::KEY_F1, 1) => self.try_complete_ctrl_combo(now, KnobEvent::Key1),
             _ => None,
         }
     }
@@ -255,7 +255,7 @@ mod tests {
         );
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_PLAYPAUSE, 1), t0),
-            Some(KnobEvent::Key1)
+            Some(KnobEvent::Key3)
         );
     }
 
@@ -264,7 +264,7 @@ mod tests {
         let mut tr = EventTranslator::new(Duration::from_millis(200));
         let t0 = Instant::now();
 
-        // Ctrl+F4 dentro de 50ms -> Key2
+        // Ctrl+F4 dentro de 50ms -> Key2 (meio)
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t0),
             None
@@ -281,7 +281,7 @@ mod tests {
             None
         );
 
-        // Ctrl+F1 dentro de 10ms -> Key3
+        // Ctrl+F1 dentro de 10ms -> Key1 (esquerda)
         let t1 = t0 + Duration::from_millis(500);
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t1),
@@ -289,7 +289,7 @@ mod tests {
         );
         assert_eq!(
             tr.process_input_event(key_event(Key::KEY_F1, 1), t1 + Duration::from_millis(10)),
-            Some(KnobEvent::Key3)
+            Some(KnobEvent::Key1)
         );
     }
 
