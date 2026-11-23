@@ -78,19 +78,38 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             device: DeviceConfig::default(),
-            active_profile: "volume".to_string(),
+            active_profile: "Volume".to_string(),
             profiles: vec![
                 ProfileConfig {
-                    name: "volume".to_string(),
+                    name: "Volume".to_string(),
                     knob_cw: ActionConfig::VolumeUp,
                     knob_ccw: ActionConfig::VolumeDown,
                     knob_press: ActionConfig::VolumeMute,
-                    key1: ActionConfig::MediaPlayPause,
-                    key2: ActionConfig::MediaPrev,
-                    key3: ActionConfig::MediaNext,
+                    key1: ActionConfig::MediaPrev,
+                    key2: ActionConfig::MediaNext,
+                    key3: ActionConfig::MediaPlayPause,
                 },
                 ProfileConfig {
-                    name: "scroll".to_string(),
+                    name: "Pincel".to_string(),
+                    knob_cw: ActionConfig::Shortcut {
+                        keys: vec!["]".to_string()],
+                    },
+                    knob_ccw: ActionConfig::Shortcut {
+                        keys: vec!["[".to_string()],
+                    },
+                    knob_press: ActionConfig::None,
+                    key1: ActionConfig::Shortcut {
+                        keys: vec!["ctrl".to_string(), "z".to_string()],
+                    },
+                    key2: ActionConfig::Shortcut {
+                        keys: vec!["ctrl".to_string(), "shift".to_string(), "z".to_string()],
+                    },
+                    key3: ActionConfig::Shortcut {
+                        keys: vec!["b".to_string()],
+                    },
+                },
+                ProfileConfig {
+                    name: "Scroll".to_string(),
                     knob_cw: ActionConfig::Scroll {
                         delta: 2,
                         horizontal: false,

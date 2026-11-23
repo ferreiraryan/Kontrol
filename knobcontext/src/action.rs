@@ -44,6 +44,16 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
             .unwrap_or("<nenhum>")
     }
 
+    pub fn active_profile_index(&self) -> usize {
+        self.active_index
+    }
+
+    pub fn set_active_profile_index(&mut self, index: usize) {
+        if !self.profiles.is_empty() {
+            self.active_index = index.min(self.profiles.len() - 1);
+        }
+    }
+
     pub fn dispatch(&mut self, event: KnobEvent) -> Result<DispatchOutcome, KnobError> {
         let Some(profile) = self.profiles.get(self.active_index) else {
             return Ok(DispatchOutcome::Ignored);
@@ -240,9 +250,9 @@ mod tests {
                 ActionConfig::VolumeUp,
                 ActionConfig::VolumeDown,
                 ActionConfig::VolumeMute,
-                ActionConfig::MediaPlayPause,
                 ActionConfig::MediaPrev,
                 ActionConfig::MediaNext,
+                ActionConfig::MediaPlayPause,
             ]
         );
     }
@@ -253,25 +263,24 @@ mod tests {
         cfg.profiles[0].key3 = ActionConfig::NextProfile;
         let mut dispatcher = ActionDispatcher::new(cfg.profiles, 0, MockExecutor::default());
 
-        assert_eq!(dispatcher.active_profile_name(), "volume");
+        assert_eq!(dispatcher.active_profile_name(), "Volume");
         let switched = dispatcher
             .dispatch(KnobEvent::Key3)
             .expect("troca de perfil");
         assert_eq!(
             switched,
-            DispatchOutcome::ProfileSwitched("scroll".to_string())
+            DispatchOutcome::ProfileSwitched("Pincel".to_string())
         );
-        assert_eq!(dispatcher.active_profile_name(), "scroll");
+        assert_eq!(dispatcher.active_profile_name(), "Pincel");
 
-        // No perfil "scroll", RotateCw deve disparar Scroll
+        // No perfil "Pincel", RotateCw deve disparar atalho "]"
         let next = dispatcher
             .dispatch(KnobEvent::RotateCw)
             .expect("ação no segundo perfil");
         assert_eq!(
             next,
-            DispatchOutcome::Executed(ActionConfig::Scroll {
-                delta: 2,
-                horizontal: false,
+            DispatchOutcome::Executed(ActionConfig::Shortcut {
+                keys: vec!["]".to_string()],
             })
         );
     }
