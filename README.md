@@ -8,10 +8,9 @@ Mapeador global leve em Rust para dispositivos knob USB (3 teclas + botão rotat
 - Perfis globais configuráveis em `~/.config/knobcontext/config.toml` (padrão embutido: `Volume`, `Pincel`, `Scroll`).
 - Simulação de entrada nativa no Wayland via `enigo` (backend `wayland`).
 - Overlay minimalista escuro em Slint (`backend-winit-wayland` + `renderer-software` para baixo consumo de memória):
-  - **Pressionar o knob** em modo normal abre o overlay.
-  - **Girar o knob** com o overlay aberto alterna entre os perfis.
-  - **Pressionar o knob** novamente seleciona o perfil destacado e fecha o overlay.
-  - **Inatividade de 3s** fecha o overlay automaticamente sem alterar o perfil ativo.
+  - **Pressionar o knob (`KnobPress`)** é reservado para abrir/fechar o overlay (não é configurável como ação de perfil).
+  - A primeira opção do overlay é **Automático** (segue a janela ativa via Hyprland); escolher um perfil nomeado trava em modo **Manual** até voltar para **Automático**. O modo é **volátil** (sempre reinicia em **Automático** ao abrir o app).
+  - **Inatividade de 3s** fecha o overlay automaticamente sem alterar o modo/perfil ativo.
 - **Limitação conhecida**: a v1.0 no Linux Wayland opera em modo global (sem detecção de janela em primeiro plano). A detecção de aplicativo em foco está prevista para a Fase 3 (Windows/X11).
 
 ## Requisitos de permissão no Linux
@@ -76,6 +75,10 @@ O arquivo usa strings legíveis para cada ação (compatível também com o form
 
 > **Captura de tecla `Super` no Wayland**: a captura ao vivo na janela de configurações suporta `Ctrl`, `Alt`, `Shift` e `Super`, mas alguns atalhos com `Super` podem ser interceptados pelo compositor (ex.: atalhos globais do Hyprland) antes de chegar à janela. Nesses casos, utilize o campo de texto manual logo abaixo da área de captura para digitar a combinação diretamente (ex.: `Super+E`).
 
+> **Sensibilidade do Scroll no Wayland (`device.scroll_step`)**: no Wayland (`wlr_virtual_pointer::axis`), o `enigo` envia unidades contínuas (pixels), não cliques discretos. O valor de `Scroll:<dir>:<qtd>` é multiplicado por `device.scroll_step` (padrão `20`: `Scroll:up:1` = 20px, `Scroll:up:5` = 100px, `Scroll:up:10` = 200px). Ajuste `scroll_step` em `[device]` (1–200) se quiser rolagem mais lenta ou mais rápida no Hyprland.
+
+> **Teste manual de prevenção de tecla presa (BUG 1)**: abra as configurações (`--settings`), clique em **Editar** em qualquer controle, escolha *Atalho de teclado*, clique na área de captura, pressione `Shift` (ou `Shift+Tab`) e clique em **Cancelar**. Digite texto em outro aplicativo/terminal e confirme que `Shift` não ficou preso.
+
 ```toml
 active_profile = "global"
 
@@ -83,12 +86,12 @@ active_profile = "global"
 kbd_path = "/dev/input/by-id/usb-1189_8890-event-kbd"
 media_path = "/dev/input/by-id/usb-1189_8890-if02-event-kbd"
 combo_window_ms = 200
+scroll_step = 20
 
 [[profiles]]
 name = "global"
 knob_cw = "VolumeUp"
 knob_ccw = "VolumeDown"
-knob_press = "Mute"
 key1 = "Prev"
 key2 = "Next"
 key3 = "PlayPause"
@@ -98,7 +101,6 @@ name = "firefox"
 window_class = "firefox"
 knob_cw = "Ctrl+Tab"
 knob_ccw = "Ctrl+Shift+Tab"
-knob_press = "None"
 key1 = "Launch:firefox.desktop"
 key2 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
 key3 = "Scroll:down:3"

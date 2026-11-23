@@ -19,20 +19,20 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-Fase 4C (construtor visual de ações em popover + tipos de ação ricos) implementada, testada e validada no Hyprland Wayland. Pronto para teste interativo do usuário e preparação da Fase 5 (empacotamento e distribuição).
+Fase 4C-fix (correções de bugs + ajustes de design) implementada, testada e validada no Hyprland Wayland. Pronto para validação manual final e preparação da Fase 5 (empacotamento e distribuição).
 
 ## Concluído
 - **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
 - **Fase 1 (núcleo sem UI)**: `error.rs`, `config.rs`, `input.rs` (`evdev::grab()` + `ungrab()` + ordem física confirmada `Key1`/`Key2`/`Key3`), `action.rs` (`enigo` Wayland).
 - **Fase 2 (UI Overlay Slint)**: `ui/state.rs`, `ui/overlay.slint`, `ui/mod.rs` (overlay minimalista escuro com timeout de 3s).
 - **Fase 3 (Contexto Hyprland + Settings Slint)**: `context.rs` (listener `socket2` em `UnixStream`), `ui/settings.slint`, `ui/settings_mod.rs` (hot-reload sem liberar `grab()`, sem conflito com overlay).
-- **Fase 4C (Construtor visual de ações + ações ricas)**:
-  - `src/actions_catalog.rs`: enum `ActionType` com os 9 tipos (`Shortcut`, `Media`, `LaunchApp`, `OpenUrl`, `OpenFile`, `ExecCommand`, `Scroll`, `Macro`, `None`), `parse_action_string`, `action_to_string`, `action_type_title`, `action_summary`, `list_desktop_apps` (lendo `/usr/share/applications` e `~/.local/share/applications`, ignorando `NoDisplay=true`) e `resolve_desktop_exec` (sem shell).
-  - `src/config.rs` + `src/action.rs`: serialização TOML em strings canônicas com retrocompatibilidade para o formato legado de tabelas; execução de `Launch:` (`Command` sem shell), `Open:` (`open::that_detached` / `xdg-open`), `Exec:` (`sh -c`), `Macro:` (`enigo` + `Wait(ms)`) e `Scroll:<dir>:<1-10>`.
-  - `src/ui/action_editor_state.rs`: máquina de estados pura do popover coberta por testes unitários sem dependência do Slint.
-  - `src/ui/action_editor.slint` + `src/ui/action_editor_mod.rs`: popover modal escuro com os 9 seletores, captura de tecla ao vivo (`Ctrl`/`Alt`/`Shift`/`Super` + fallback manual de texto), busca de apps `.desktop`, file chooser nativo Wayland (`rfd` via XDG portal), seletor de Scroll e editor de passos de Macro.
-  - `src/ui/settings.slint` + `src/ui/settings_mod.rs`: resumo legível + botão `"Editar"` para cada um dos 6 controles, indicador de alterações não salvas e persistência validada.
-  - Validação: `cargo test` (37/37), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, e smoke test real no Hyprland Wayland.
+- **Fase 4C (Construtor visual de ações + ações ricas)**: `actions_catalog.rs`, `ui/action_editor.slint`, `ui/action_editor_mod.rs`, `ui/action_editor_state.rs` (9 tipos de ação, captura ao vivo, apps `.desktop`, `rfd` file chooser, macros, TOML em strings canônicas).
+- **Fase 4C-fix (Estabilidade e Design)**:
+  - **BUG 1 (tecla presa)**: criado `KeyReleaseGuard` (RAII) em `src/action.rs` garantindo `Direction::Release` em ordem reversa mesmo em erros no meio de atalhos/macros; `release_modifiers()` disparado ao cancelar/fechar captura no popover; `EventTranslator` em `src/input.rs` agora emite combos com `Ctrl` somente no `KEY_UP` do modificador (sem estado residual).
+  - **BUG 2 (scroll lento no Wayland)**: descoberto que `enigo` envia pixels contínuos no `wlr_virtual_pointer::axis`; adicionado `device.scroll_step` (padrão `20`, configurável 1–200) multiplicando `Scroll:<dir>:<qtd>`.
+  - **DESIGN 1 (`KnobPress` reservado)**: `KnobPress` é reservado exclusivamente para abrir/fechar o overlay; removido da tabela de ações nas Settings e ignorado no `ActionDispatcher`. Campos legados `knob_press` em TOMLs antigos geram warning único ao carregar e são omitidos ao salvar.
+  - **DESIGN 2 (Modo Automático / Manual)**: adicionado `ProfileMode { Auto, Manual(String) }` volátil em `ContextState`; primeira opção do overlay é `"Automático"` (subtítulo `"Automático (<perfil>)"`), enquanto perfis nomeados ativam modo `"Manual"` que não é sobrescrito por mudanças de janela.
+  - Validação: `cargo test` (41/41), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
