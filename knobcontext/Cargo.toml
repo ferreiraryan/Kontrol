@@ -7,3 +7,4 @@ description = "Global HID knob mapper and context overlay"
 [dependencies]
 evdev = "0.12"
 hidapi = "2.6"
+thiserror = "2"
