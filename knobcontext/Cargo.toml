@@ -5,6 +5,7 @@ edition = "2021"
 description = "Global HID knob mapper and context overlay"
 
 [dependencies]
+enigo = { version = "0.6", default-features = false, features = ["wayland"] }
 evdev = "0.12"
 hidapi = "2.6"
 libc = "0.2"
