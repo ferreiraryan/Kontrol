@@ -321,7 +321,6 @@ impl Config {
     }
 
     /// Salva no caminho padrão `~/.config/knobcontext/config.toml`.
-    #[allow(dead_code)]
     pub fn save_default_location(&self) -> Result<PathBuf, KnobError> {
         let path = Self::default_path().ok_or_else(|| {
             KnobError::ConfigValidation(

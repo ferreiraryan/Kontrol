@@ -1,3 +1,4 @@
+pub mod settings_mod;
 pub mod state;
 
 use crate::error::KnobError;
@@ -15,15 +16,20 @@ pub struct OverlayWindow {
 impl OverlayWindow {
     pub fn new(profile_names: Vec<String>, active_index: usize) -> Result<Self, KnobError> {
         let window = Overlay::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
-        let model: Vec<SharedString> = profile_names.iter().map(SharedString::from).collect();
-        window.set_profiles(ModelRc::from(Rc::new(VecModel::from(model))));
-
-        let controller = Self {
+        let mut controller = Self {
             window,
-            profile_names,
+            profile_names: Vec::new(),
         };
-        controller.update_selection(active_index, active_index);
+        controller.update_profiles(profile_names, active_index);
         Ok(controller)
+    }
+
+    pub fn update_profiles(&mut self, profile_names: Vec<String>, active_index: usize) {
+        let model: Vec<SharedString> = profile_names.iter().map(SharedString::from).collect();
+        self.window
+            .set_profiles(ModelRc::from(Rc::new(VecModel::from(model))));
+        self.profile_names = profile_names;
+        self.update_selection(active_index, active_index);
     }
 
     pub fn update_selection(&self, active_index: usize, highlighted_index: usize) {

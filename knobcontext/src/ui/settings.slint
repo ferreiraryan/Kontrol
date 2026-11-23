@@ -1,0 +1,320 @@
+component DarkField inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> value;
+
+    height: 54px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 4px;
+
+        Text {
+            text: root.label;
+            color: #a1a1aa;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        Rectangle {
+            height: 32px;
+            border-radius: 6px;
+            background: rgba(18, 18, 18, 0.95);
+            border-width: 1px;
+            border-color: input.has-focus ? rgba(255, 255, 255, 0.45) : rgba(255, 255, 255, 0.12);
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: stretch;
+
+                input := TextInput {
+                    text <=> root.value;
+                    color: #f5f5f7;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    single-line: true;
+                }
+            }
+
+            if root.value == "" && !input.has-focus: Text {
+                x: 10px;
+                text: root.placeholder;
+                color: rgba(255, 255, 255, 0.28);
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+component DarkButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 6px;
+    background: root.primary
+        ? (touch.has-hover ? #3b82f6 : #2563eb)
+        : (root.danger
+            ? (touch.has-hover ? rgba(220, 38, 38, 0.35) : rgba(220, 38, 38, 0.2))
+            : (touch.has-hover ? rgba(255, 255, 255, 0.14) : rgba(255, 255, 255, 0.08)));
+    border-width: 1px;
+    border-color: root.primary
+        ? rgba(147, 197, 253, 0.4)
+        : (root.danger ? rgba(248, 113, 113, 0.35) : rgba(255, 255, 255, 0.12));
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+
+        Text {
+            text: root.text;
+            color: #f5f5f7;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "KnobContext Settings";
+    width: 720px;
+    height: 520px;
+    background: rgba(20, 20, 20, 0.92);
+
+    in property <[string]> profile-names: ["global"];
+    in property <int> selected-index: 0;
+    in-out property <string> field-name;
+    in-out property <string> field-window-class;
+    in-out property <string> field-knob-press;
+    in-out property <string> field-rotate-cw;
+    in-out property <string> field-rotate-ccw;
+    in-out property <string> field-key1;
+    in-out property <string> field-key2;
+    in-out property <string> field-key3;
+    in-out property <string> error-message;
+
+    callback select-profile(int);
+    callback add-profile();
+    callback remove-profile();
+    callback save-requested();
+    callback cancel-requested();
+
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 16px;
+
+        // Coluna esquerda: lista de perfis
+        Rectangle {
+            width: 200px;
+            border-radius: 10px;
+            background: rgba(30, 30, 30, 0.9);
+            border-width: 1px;
+            border-color: rgba(255, 255, 255, 0.1);
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                Text {
+                    text: "Perfis";
+                    color: #f5f5f7;
+                    font-size: 15px;
+                    font-weight: 700;
+                }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    vertical-stretch: 1;
+
+                    for name[idx] in root.profile-names: Rectangle {
+                        height: 34px;
+                        border-radius: 7px;
+                        background: idx == root.selected-index
+                            ? rgba(255, 255, 255, 0.18)
+                            : (item-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
+                        border-width: 1px;
+                        border-color: idx == root.selected-index
+                            ? rgba(255, 255, 255, 0.35)
+                            : rgba(255, 255, 255, 0.06);
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+
+                            Text {
+                                text: name;
+                                color: idx == root.selected-index ? #ffffff : #d4d4d8;
+                                font-size: 13px;
+                                font-weight: idx == root.selected-index ? 600 : 400;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        item-touch := TouchArea {
+                            clicked => { root.select-profile(idx); }
+                        }
+                    }
+                }
+
+                DarkButton {
+                    text: "+ Adicionar perfil";
+                    clicked => { root.add-profile(); }
+                }
+
+                DarkButton {
+                    text: "Remover perfil";
+                    danger: true;
+                    clicked => { root.remove-profile(); }
+                }
+            }
+        }
+
+        // Coluna direita: editor do perfil selecionado
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 10px;
+            background: rgba(30, 30, 30, 0.9);
+            border-width: 1px;
+            border-color: rgba(255, 255, 255, 0.1);
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+
+                Text {
+                    text: "Configuração do Perfil";
+                    color: #f5f5f7;
+                    font-size: 16px;
+                    font-weight: 700;
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "Nome do perfil";
+                        placeholder: "ex: firefox";
+                        value <=> root.field-name;
+                    }
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "Janela correspondente (WINDOWCLASS)";
+                        placeholder: "vazio para global (ex: firefox, gimp)";
+                        value <=> root.field-window-class;
+                    }
+                }
+
+                Text {
+                    text: "Mapeamento de ações (ex: VolumeUp, Ctrl+Tab, next_tab, Scroll(2), None)";
+                    color: rgba(255, 255, 255, 0.55);
+                    font-size: 11px;
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "KnobPress";
+                        placeholder: "VolumeMute";
+                        value <=> root.field-knob-press;
+                    }
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "RotateCw (Horário)";
+                        placeholder: "VolumeUp";
+                        value <=> root.field-rotate-cw;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "RotateCcw (Anti-horário)";
+                        placeholder: "VolumeDown";
+                        value <=> root.field-rotate-ccw;
+                    }
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "Key1 (Esquerda)";
+                        placeholder: "MediaPrev";
+                        value <=> root.field-key1;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "Key2 (Meio)";
+                        placeholder: "MediaNext";
+                        value <=> root.field-key2;
+                    }
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "Key3 (Direita)";
+                        placeholder: "MediaPlayPause";
+                        value <=> root.field-key3;
+                    }
+                }
+
+                if root.error-message != "": Rectangle {
+                    border-radius: 6px;
+                    background: rgba(220, 38, 38, 0.22);
+                    border-width: 1px;
+                    border-color: rgba(248, 113, 113, 0.45);
+
+                    HorizontalLayout {
+                        padding: 8px;
+                        Text {
+                            text: root.error-message;
+                            color: #fca5a5;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+
+                    DarkButton {
+                        text: "Cancelar";
+                        clicked => { root.cancel-requested(); }
+                    }
+
+                    DarkButton {
+                        text: "Salvar";
+                        primary: true;
+                        clicked => { root.save-requested(); }
+                    }
+                }
+            }
+        }
+    }
+}

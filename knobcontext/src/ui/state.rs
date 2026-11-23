@@ -32,6 +32,7 @@ pub struct OverlayController {
     profile_count: usize,
     active_index: usize,
     highlighted_index: usize,
+    settings_open: bool,
     timeout: Duration,
     last_interaction: Option<Instant>,
 }
@@ -48,6 +49,7 @@ impl OverlayController {
             profile_count,
             active_index: clamped_active,
             highlighted_index: clamped_active,
+            settings_open: false,
             timeout,
             last_interaction: None,
         }
@@ -67,6 +69,26 @@ impl OverlayController {
         self.highlighted_index
     }
 
+    pub fn set_settings_open(&mut self, open: bool) {
+        self.settings_open = open;
+        if open && self.mode == AppMode::Overlay {
+            self.mode = AppMode::Normal;
+            self.highlighted_index = self.active_index;
+            self.last_interaction = None;
+        }
+    }
+
+    pub fn set_profile_count(&mut self, count: usize, active_index: usize) {
+        self.profile_count = count;
+        let clamped = if count == 0 {
+            0
+        } else {
+            active_index.min(count - 1)
+        };
+        self.active_index = clamped;
+        self.highlighted_index = clamped;
+    }
+
     pub fn sync_active_index(&mut self, active_index: usize) {
         if self.profile_count > 0 {
             self.active_index = active_index.min(self.profile_count - 1);
@@ -76,7 +98,7 @@ impl OverlayController {
     pub fn handle_event(&mut self, event: KnobEvent, now: Instant) -> OverlayTransition {
         match self.mode {
             AppMode::Normal => match event {
-                KnobEvent::KnobPress if self.profile_count > 0 => {
+                KnobEvent::KnobPress if self.profile_count > 0 && !self.settings_open => {
                     self.mode = AppMode::Overlay;
                     self.highlighted_index = self.active_index;
                     self.last_interaction = Some(now);
@@ -234,5 +256,26 @@ mod tests {
             OverlayTransition::Consume
         );
         assert_eq!(ctrl.mode(), AppMode::Overlay);
+    }
+
+    #[test]
+    fn overlay_does_not_open_while_settings_window_is_open() {
+        let mut ctrl = OverlayController::new(3, 0, DEFAULT_OVERLAY_TIMEOUT);
+        let t0 = Instant::now();
+
+        ctrl.set_settings_open(true);
+        assert_eq!(
+            ctrl.handle_event(KnobEvent::KnobPress, t0),
+            OverlayTransition::DispatchAction(KnobEvent::KnobPress)
+        );
+        assert_eq!(ctrl.mode(), AppMode::Normal);
+
+        ctrl.set_settings_open(false);
+        assert_eq!(
+            ctrl.handle_event(KnobEvent::KnobPress, t0 + Duration::from_millis(50)),
+            OverlayTransition::OpenOverlay {
+                highlighted_index: 0
+            }
+        );
     }
 }

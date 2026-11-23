@@ -39,9 +39,7 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
 
     pub fn update_profiles(&mut self, profiles: Vec<ProfileConfig>) {
         self.profiles = profiles;
-        if self.profiles.is_empty() {
-            self.active_index = 0;
-        } else if self.active_index >= self.profiles.len() {
+        if self.profiles.is_empty() || self.active_index >= self.profiles.len() {
             self.active_index = 0;
         }
     }
@@ -91,6 +89,7 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
             KnobEvent::Key1 => profile.key1.clone(),
             KnobEvent::Key2 => profile.key2.clone(),
             KnobEvent::Key3 => profile.key3.clone(),
+            KnobEvent::OpenSettings => return Ok(DispatchOutcome::Ignored),
         };
 
         match action {

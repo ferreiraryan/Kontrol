@@ -10,12 +10,14 @@ use crate::config::Config;
 use crate::context::{spawn_hyprland_listener, ContextState};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
+use crate::ui::settings_mod::SettingsController;
 use crate::ui::state::{OverlayController, OverlayTransition, DEFAULT_OVERLAY_TIMEOUT};
 use crate::ui::OverlayWindow;
 use env_logger::Env;
 use log::{debug, error, info, warn};
 use slint::{Timer, TimerMode};
 use std::cell::RefCell;
+use std::env;
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +36,19 @@ struct AppRuntime {
 }
 
 impl AppRuntime {
+    fn apply_saved_config(&mut self, new_config: Config) {
+        let active_idx = new_config.active_profile_index();
+        let profile_names: Vec<String> =
+            new_config.profiles.iter().map(|p| p.name.clone()).collect();
+        self.dispatcher.update_profiles(new_config.profiles.clone());
+        self.overlay.update_profiles(profile_names, active_idx);
+        self.controller
+            .set_profile_count(new_config.profiles.len(), active_idx);
+        self.manual_profile_override = None;
+        self.config = new_config;
+        info!("Configuração salva e aplicada em tempo real.");
+    }
+
     fn sync_context(&mut self) -> String {
         let current_window = self
             .context
@@ -62,7 +77,12 @@ impl AppRuntime {
         resolved
     }
 
-    fn handle_knob_event(&mut self, event: KnobEvent) {
+    fn handle_knob_event(&mut self, event: KnobEvent, settings: &SettingsController) {
+        if event == KnobEvent::OpenSettings {
+            self.open_settings(settings);
+            return;
+        }
+
         let profile_name = self.sync_context();
         let transition = self.controller.handle_event(event, Instant::now());
         match transition {
@@ -126,6 +146,17 @@ impl AppRuntime {
         }
     }
 
+    fn open_settings(&mut self, settings: &SettingsController) {
+        self.controller.set_settings_open(true);
+        let _ = self.overlay.hide();
+        if let Err(err) = settings.open(&self.config) {
+            warn!("Falha ao abrir janela de configurações: {err}");
+            self.controller.set_settings_open(false);
+        } else {
+            info!("Janela de configurações aberta (grab mantido ativo).");
+        }
+    }
+
     fn check_timeout(&mut self) {
         if let Some(OverlayTransition::TimeoutClose) = self.controller.check_timeout(Instant::now())
         {
@@ -138,6 +169,8 @@ impl AppRuntime {
 }
 
 fn run() -> Result<(), KnobError> {
+    let open_settings_on_start = env::args().skip(1).any(|arg| arg == "--settings");
+
     let (config, loaded_path) = Config::load_default_location()?;
     match loaded_path {
         Some(path) => info!("Configuração carregada de {}", path.display()),
@@ -175,7 +208,7 @@ fn run() -> Result<(), KnobError> {
     let hyprland_thread = spawn_hyprland_listener(Arc::clone(&context), Arc::clone(&running));
 
     info!(
-        "KnobContext ativo (perfil inicial: '{}'). Pressione o knob para abrir o overlay ou Ctrl+C para sair.",
+        "KnobContext ativo (perfil inicial: '{}'). Pressione o knob para o overlay, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair.",
         dispatcher.active_profile_name()
     );
 
@@ -202,6 +235,7 @@ fn run() -> Result<(), KnobError> {
         // `input` é descartado aqui ao sair do loop, executando `Drop` -> `ungrab()`.
     });
 
+    let initial_config_for_settings = config.clone();
     let runtime = Rc::new(RefCell::new(AppRuntime {
         config,
         context,
@@ -212,12 +246,35 @@ fn run() -> Result<(), KnobError> {
         overlay,
     }));
 
+    let runtime_on_saved = Rc::clone(&runtime);
+    let runtime_on_closed = Rc::clone(&runtime);
+    let settings = Rc::new(SettingsController::new(
+        initial_config_for_settings,
+        move |saved_config| {
+            runtime_on_saved
+                .borrow_mut()
+                .apply_saved_config(saved_config);
+        },
+        move || {
+            runtime_on_closed
+                .borrow_mut()
+                .controller
+                .set_settings_open(false);
+            debug!("Janela de configurações fechada; overlay reabilitado.");
+        },
+    )?);
+
+    if open_settings_on_start {
+        runtime.borrow_mut().open_settings(&settings);
+    }
+
     let runtime_for_timer = Rc::clone(&runtime);
+    let settings_for_timer = Rc::clone(&settings);
     let poll_timer = Timer::default();
     poll_timer.start(TimerMode::Repeated, Duration::from_millis(20), move || {
         let mut rt = runtime_for_timer.borrow_mut();
         while let Ok(ev) = rx.try_recv() {
-            rt.handle_knob_event(ev);
+            rt.handle_knob_event(ev, &settings_for_timer);
         }
         rt.check_timeout();
     });
@@ -225,14 +282,15 @@ fn run() -> Result<(), KnobError> {
     let loop_result =
         slint::run_event_loop_until_quit().map_err(|err| KnobError::UiRun(err.to_string()));
 
-    // Encerramento gracioso: garante fechamento do overlay, parada do listener e `ungrab()`.
+    // Encerramento gracioso: fecha janelas, encerra listener e faz `ungrab()` dos dispositivos.
     running.store(false, Ordering::SeqCst);
+    let _ = settings.hide();
     let _ = runtime.borrow().overlay.hide();
     let _ = input_thread.join();
     if let Some(handle) = hyprland_thread {
         let _ = handle.join();
     }
-    info!("Overlay fechado e dispositivos liberados (ungrab). Atalhos originais restaurados.");
+    info!("Janelas fechadas e dispositivos liberados (ungrab). Atalhos originais restaurados.");
 
     loop_result
 }
