@@ -1,7 +1,11 @@
+use crate::actions_catalog::{resolve_desktop_exec, MacroStep};
 use crate::config::{ActionConfig, ProfileConfig};
 use crate::error::KnobError;
 use crate::input::KnobEvent;
 use enigo::{Axis, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 /// Abstração para execução de ações, permitindo testes unitários com mocks.
 pub trait ActionExecutor {
@@ -140,26 +144,43 @@ impl ActionExecutor for EnigoExecutor {
                     .scroll(*delta, axis)
                     .map_err(|err| KnobError::InputSimulation(err.to_string()))
             }
-            ActionConfig::Shortcut { keys } => {
-                if keys.is_empty() {
-                    return Err(KnobError::InvalidAction(
-                        "atalho `shortcut` não pode ter lista `keys` vazia".to_string(),
-                    ));
-                }
-                let parsed: Vec<Key> = keys
-                    .iter()
-                    .map(|k| parse_key_name(k))
-                    .collect::<Result<_, _>>()?;
-
-                for &key in &parsed {
-                    self.enigo
-                        .key(key, Direction::Press)
-                        .map_err(|err| KnobError::InputSimulation(err.to_string()))?;
-                }
-                for &key in parsed.iter().rev() {
-                    self.enigo
-                        .key(key, Direction::Release)
-                        .map_err(|err| KnobError::InputSimulation(err.to_string()))?;
+            ActionConfig::Shortcut { keys } => self.execute_shortcut(keys),
+            ActionConfig::Launch { desktop_file } => {
+                let tokens = resolve_desktop_exec(desktop_file)?;
+                let program = tokens
+                    .first()
+                    .ok_or_else(|| KnobError::InvalidAction("Exec= vazio".to_string()))?;
+                Command::new(program)
+                    .args(&tokens[1..])
+                    .spawn()
+                    .map_err(|err| {
+                        KnobError::InputSimulation(format!(
+                            "falha ao abrir aplicativo '{desktop_file}' ({program}): {err}"
+                        ))
+                    })?;
+                Ok(())
+            }
+            ActionConfig::Open { target } => open::that_detached(target).map_err(|err| {
+                KnobError::InputSimulation(format!("falha ao abrir '{target}': {err}"))
+            }),
+            ActionConfig::Exec { command } => {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .spawn()
+                    .map_err(|err| {
+                        KnobError::InputSimulation(format!(
+                            "falha ao executar comando '{command}': {err}"
+                        ))
+                    })?;
+                Ok(())
+            }
+            ActionConfig::Macro { steps } => {
+                for step in steps {
+                    match step {
+                        MacroStep::Keys(keys) => self.execute_shortcut(keys)?,
+                        MacroStep::WaitMs(ms) => thread::sleep(Duration::from_millis(*ms)),
+                    }
                 }
                 Ok(())
             }
@@ -169,6 +190,30 @@ impl ActionExecutor for EnigoExecutor {
 }
 
 impl EnigoExecutor {
+    fn execute_shortcut(&mut self, keys: &[String]) -> Result<(), KnobError> {
+        if keys.is_empty() {
+            return Err(KnobError::InvalidAction(
+                "atalho `shortcut` não pode ter lista `keys` vazia".to_string(),
+            ));
+        }
+        let parsed: Vec<Key> = keys
+            .iter()
+            .map(|k| parse_key_name(k))
+            .collect::<Result<_, _>>()?;
+
+        for &key in &parsed {
+            self.enigo
+                .key(key, Direction::Press)
+                .map_err(|err| KnobError::InputSimulation(err.to_string()))?;
+        }
+        for &key in parsed.iter().rev() {
+            self.enigo
+                .key(key, Direction::Release)
+                .map_err(|err| KnobError::InputSimulation(err.to_string()))?;
+        }
+        Ok(())
+    }
+
     fn click_key(&mut self, key: Key) -> Result<(), KnobError> {
         self.enigo
             .key(key, Direction::Click)

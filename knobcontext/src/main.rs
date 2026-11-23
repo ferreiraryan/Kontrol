@@ -1,4 +1,5 @@
 mod action;
+mod actions_catalog;
 mod config;
 mod context;
 mod error;

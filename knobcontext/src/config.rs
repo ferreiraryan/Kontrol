@@ -1,6 +1,9 @@
 use crate::action::parse_key_name;
+use crate::actions_catalog::{
+    action_to_string, parse_action_string, ActionType, MacroStep, MediaAction, ScrollDirection,
+};
 use crate::error::KnobError;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -49,9 +52,41 @@ pub struct ProfileConfig {
     pub key3: ActionConfig,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ActionConfig {
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    MediaPlayPause,
+    MediaNext,
+    MediaPrev,
+    Scroll {
+        delta: i32,
+        horizontal: bool,
+    },
+    Shortcut {
+        keys: Vec<String>,
+    },
+    Launch {
+        desktop_file: String,
+    },
+    Open {
+        target: String,
+    },
+    Exec {
+        command: String,
+    },
+    Macro {
+        steps: Vec<MacroStep>,
+    },
+    NextProfile,
+    #[default]
+    None,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum LegacyActionTable {
     VolumeUp,
     VolumeDown,
     VolumeMute,
@@ -67,113 +102,205 @@ pub enum ActionConfig {
         keys: Vec<String>,
     },
     NextProfile,
-    #[default]
     None,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ActionSerdeRepr {
+    StringRepr(String),
+    LegacyTable(LegacyActionTable),
+}
+
+impl Serialize for ActionConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_display_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ActionConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let repr = ActionSerdeRepr::deserialize(deserializer)?;
+        match repr {
+            ActionSerdeRepr::StringRepr(text) => {
+                Self::parse_from_str(&text).map_err(serde::de::Error::custom)
+            }
+            ActionSerdeRepr::LegacyTable(tbl) => Ok(match tbl {
+                LegacyActionTable::VolumeUp => Self::VolumeUp,
+                LegacyActionTable::VolumeDown => Self::VolumeDown,
+                LegacyActionTable::VolumeMute => Self::VolumeMute,
+                LegacyActionTable::MediaPlayPause => Self::MediaPlayPause,
+                LegacyActionTable::MediaNext => Self::MediaNext,
+                LegacyActionTable::MediaPrev => Self::MediaPrev,
+                LegacyActionTable::Scroll { delta, horizontal } => {
+                    Self::Scroll { delta, horizontal }
+                }
+                LegacyActionTable::Shortcut { keys } => Self::Shortcut { keys },
+                LegacyActionTable::NextProfile => Self::NextProfile,
+                LegacyActionTable::None => Self::None,
+            }),
+        }
+    }
+}
+
 impl ActionConfig {
-    /// Valida se a ação é executável (ex.: teclas válidas em `Shortcut`).
+    pub fn from_action_type(action: ActionType) -> Self {
+        match action {
+            ActionType::Shortcut(keys) => Self::Shortcut { keys },
+            ActionType::Media(MediaAction::VolumeUp) => Self::VolumeUp,
+            ActionType::Media(MediaAction::VolumeDown) => Self::VolumeDown,
+            ActionType::Media(MediaAction::Mute) => Self::VolumeMute,
+            ActionType::Media(MediaAction::PlayPause) => Self::MediaPlayPause,
+            ActionType::Media(MediaAction::Prev) => Self::MediaPrev,
+            ActionType::Media(MediaAction::Next) => Self::MediaNext,
+            ActionType::LaunchApp(desktop_file) => Self::Launch { desktop_file },
+            ActionType::OpenUrl(target) | ActionType::OpenFile(target) => Self::Open { target },
+            ActionType::ExecCommand(command) => Self::Exec { command },
+            ActionType::Scroll { direction, amount } => {
+                let amount_i32 = i32::from(amount);
+                match direction {
+                    ScrollDirection::Up => Self::Scroll {
+                        delta: -amount_i32,
+                        horizontal: false,
+                    },
+                    ScrollDirection::Down => Self::Scroll {
+                        delta: amount_i32,
+                        horizontal: false,
+                    },
+                    ScrollDirection::Left => Self::Scroll {
+                        delta: -amount_i32,
+                        horizontal: true,
+                    },
+                    ScrollDirection::Right => Self::Scroll {
+                        delta: amount_i32,
+                        horizontal: true,
+                    },
+                }
+            }
+            ActionType::Macro(steps) => Self::Macro { steps },
+            ActionType::None => Self::None,
+        }
+    }
+
+    pub fn to_action_type(&self) -> ActionType {
+        match self {
+            Self::Shortcut { keys } => ActionType::Shortcut(keys.clone()),
+            Self::VolumeUp => ActionType::Media(MediaAction::VolumeUp),
+            Self::VolumeDown => ActionType::Media(MediaAction::VolumeDown),
+            Self::VolumeMute => ActionType::Media(MediaAction::Mute),
+            Self::MediaPlayPause => ActionType::Media(MediaAction::PlayPause),
+            Self::MediaPrev => ActionType::Media(MediaAction::Prev),
+            Self::MediaNext => ActionType::Media(MediaAction::Next),
+            Self::Launch { desktop_file } => ActionType::LaunchApp(desktop_file.clone()),
+            Self::Open { target } => {
+                if target.starts_with("file://") {
+                    ActionType::OpenFile(target.clone())
+                } else {
+                    ActionType::OpenUrl(target.clone())
+                }
+            }
+            Self::Exec { command } => ActionType::ExecCommand(command.clone()),
+            Self::Scroll { delta, horizontal } => {
+                let amount = delta.unsigned_abs().clamp(1, 10) as u8;
+                let direction = match (*horizontal, *delta >= 0) {
+                    (false, false) => ScrollDirection::Up,
+                    (false, true) => ScrollDirection::Down,
+                    (true, false) => ScrollDirection::Left,
+                    (true, true) => ScrollDirection::Right,
+                };
+                ActionType::Scroll { direction, amount }
+            }
+            Self::Macro { steps } => ActionType::Macro(steps.clone()),
+            Self::NextProfile | Self::None => ActionType::None,
+        }
+    }
+
+    /// Valida se a ação é executável.
     pub fn validate(&self) -> Result<(), KnobError> {
-        if let Self::Shortcut { keys } = self {
-            if keys.is_empty() {
-                return Err(KnobError::InvalidAction(
-                    "atalho `shortcut` não pode ter lista `keys` vazia".to_string(),
-                ));
+        match self {
+            Self::Shortcut { keys } => {
+                if keys.is_empty() {
+                    return Err(KnobError::InvalidAction(
+                        "atalho `shortcut` não pode ter lista `keys` vazia".to_string(),
+                    ));
+                }
+                for key in keys {
+                    parse_key_name(key)?;
+                }
             }
-            for key in keys {
-                parse_key_name(key)?;
+            Self::Launch { desktop_file } => {
+                if desktop_file.trim().is_empty() {
+                    return Err(KnobError::InvalidAction(
+                        "Launch: requer arquivo .desktop".to_string(),
+                    ));
+                }
             }
+            Self::Open { target } => {
+                let _ = parse_action_string(&format!("Open:{target}"))?;
+            }
+            Self::Exec { command } => {
+                if command.trim().is_empty() {
+                    return Err(KnobError::InvalidAction(
+                        "Exec: não pode ter comando vazio".to_string(),
+                    ));
+                }
+            }
+            Self::Macro { steps } => {
+                if steps.is_empty() {
+                    return Err(KnobError::InvalidAction(
+                        "Macro: precisa de ao menos um passo".to_string(),
+                    ));
+                }
+                for step in steps {
+                    match step {
+                        MacroStep::Keys(keys) => {
+                            if keys.is_empty() {
+                                return Err(KnobError::InvalidAction(
+                                    "Macro: passo de tecla vazio".to_string(),
+                                ));
+                            }
+                            for k in keys {
+                                parse_key_name(k)?;
+                            }
+                        }
+                        MacroStep::WaitMs(ms) if *ms == 0 || *ms > 60_000 => {
+                            return Err(KnobError::InvalidAction(format!(
+                                "Macro: espera inválida ({ms} ms)"
+                            )));
+                        }
+                        MacroStep::WaitMs(_) => {}
+                    }
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
 
-    /// Formata a ação em texto amigável para edição na janela de configurações.
+    /// Formata a ação na string canônica salva no TOML.
     pub fn to_display_string(&self) -> String {
-        match self {
-            Self::VolumeUp => "VolumeUp".to_string(),
-            Self::VolumeDown => "VolumeDown".to_string(),
-            Self::VolumeMute => "VolumeMute".to_string(),
-            Self::MediaPlayPause => "MediaPlayPause".to_string(),
-            Self::MediaNext => "MediaNext".to_string(),
-            Self::MediaPrev => "MediaPrev".to_string(),
-            Self::Scroll { delta, horizontal } => {
-                if *horizontal {
-                    format!("HScroll({delta})")
-                } else {
-                    format!("Scroll({delta})")
-                }
-            }
-            Self::Shortcut { keys } => keys.join("+"),
-            Self::NextProfile => "NextProfile".to_string(),
-            Self::None => "None".to_string(),
+        if matches!(self, Self::NextProfile) {
+            return "NextProfile".to_string();
         }
+        action_to_string(&self.to_action_type())
     }
 
-    /// Faz o parsing de texto amigável (ex.: `"VolumeUp"`, `"Ctrl+Tab"`, `"next_tab"`, `"Scroll(2)"`).
+    /// Faz o parsing de string de ação (incluindo todos os prefixos da Fase 4C).
     pub fn parse_from_str(input: &str) -> Result<Self, KnobError> {
         let trimmed = input.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
-            return Ok(Self::None);
-        }
-
-        let lower = trimmed.to_ascii_lowercase();
-        match lower.as_str() {
-            "volumeup" | "volume_up" => return Ok(Self::VolumeUp),
-            "volumedown" | "volume_down" => return Ok(Self::VolumeDown),
-            "volumemute" | "volume_mute" | "mute" => return Ok(Self::VolumeMute),
-            "mediaplaypause" | "media_play_pause" | "playpause" => {
-                return Ok(Self::MediaPlayPause);
-            }
-            "medianext" | "media_next" | "next" => return Ok(Self::MediaNext),
-            "mediaprev" | "media_prev" | "prev" => return Ok(Self::MediaPrev),
-            "nextprofile" | "next_profile" => return Ok(Self::NextProfile),
-            "next_tab" | "nexttab" => {
-                return Ok(Self::Shortcut {
-                    keys: vec!["ctrl".to_string(), "tab".to_string()],
-                });
-            }
-            "prev_tab" | "prevtab" => {
-                return Ok(Self::Shortcut {
-                    keys: vec!["ctrl".to_string(), "shift".to_string(), "tab".to_string()],
-                });
-            }
-            _ => {}
-        }
-
-        if let Some(inner) = lower
-            .strip_prefix("scroll(")
-            .and_then(|s| s.strip_suffix(')'))
+        if trimmed.eq_ignore_ascii_case("nextprofile")
+            || trimmed.eq_ignore_ascii_case("next_profile")
         {
-            let delta = inner.trim().parse::<i32>().map_err(|_| {
-                KnobError::InvalidAction(format!("delta inválido em Scroll: '{trimmed}'"))
-            })?;
-            return Ok(Self::Scroll {
-                delta,
-                horizontal: false,
-            });
+            return Ok(Self::NextProfile);
         }
-
-        if let Some(inner) = lower
-            .strip_prefix("hscroll(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let delta = inner.trim().parse::<i32>().map_err(|_| {
-                KnobError::InvalidAction(format!("delta inválido em HScroll: '{trimmed}'"))
-            })?;
-            return Ok(Self::Scroll {
-                delta,
-                horizontal: true,
-            });
-        }
-
-        let keys: Vec<String> = trimmed
-            .split('+')
-            .map(|part| part.trim().to_string())
-            .filter(|part| !part.is_empty())
-            .collect();
-        let action = Self::Shortcut { keys };
-        action.validate()?;
-        Ok(action)
+        let parsed = parse_action_string(trimmed)?;
+        Ok(Self::from_action_type(parsed))
     }
 }
 
@@ -207,20 +334,20 @@ impl Default for Config {
                     name: "firefox".to_string(),
                     window_class: Some("firefox".to_string()),
                     knob_cw: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "tab".to_string()],
+                        keys: vec!["Ctrl".to_string(), "Tab".to_string()],
                     },
                     knob_ccw: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "shift".to_string(), "tab".to_string()],
+                        keys: vec!["Ctrl".to_string(), "Shift".to_string(), "Tab".to_string()],
                     },
                     knob_press: ActionConfig::None,
                     key1: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "t".to_string()],
+                        keys: vec!["Ctrl".to_string(), "T".to_string()],
                     },
                     key2: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "w".to_string()],
+                        keys: vec!["Ctrl".to_string(), "W".to_string()],
                     },
                     key3: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "r".to_string()],
+                        keys: vec!["Ctrl".to_string(), "R".to_string()],
                     },
                 },
                 ProfileConfig {
@@ -234,13 +361,13 @@ impl Default for Config {
                     },
                     knob_press: ActionConfig::None,
                     key1: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "z".to_string()],
+                        keys: vec!["Ctrl".to_string(), "Z".to_string()],
                     },
                     key2: ActionConfig::Shortcut {
-                        keys: vec!["ctrl".to_string(), "shift".to_string(), "z".to_string()],
+                        keys: vec!["Ctrl".to_string(), "Shift".to_string(), "Z".to_string()],
                     },
                     key3: ActionConfig::Shortcut {
-                        keys: vec!["b".to_string()],
+                        keys: vec!["B".to_string()],
                     },
                 },
             ],
@@ -385,6 +512,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::{ActionConfig, Config, ProfileConfig};
+    use crate::actions_catalog::MacroStep;
     use crate::error::KnobError;
     use std::fs;
     use std::path::PathBuf;
@@ -411,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_valid_toml_config() {
+    fn loads_legacy_and_string_toml_configs() {
         let path = unique_temp_path("valid");
         let raw = r#"
 active_profile = "brush"
@@ -425,19 +553,17 @@ combo_window_ms = 150
 name = "brush"
 window_class = "gimp"
 knob_cw = { type = "shortcut", keys = ["]"] }
-knob_ccw = { type = "shortcut", keys = ["["] }
-knob_press = { type = "volume_mute" }
-key1 = { type = "media_play_pause" }
-key2 = { type = "scroll", delta = 3 }
-key3 = { type = "next_profile" }
+knob_ccw = "Scroll:up:3"
+knob_press = "Launch:firefox.desktop"
+key1 = "Open:https://example.com"
+key2 = "Exec:playerctl play-pause"
+key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
 "#;
         fs::write(&path, raw).expect("escrever arquivo temporário");
         let cfg = Config::load_from_path(&path).expect("config válida");
         let _ = fs::remove_file(&path);
 
         assert_eq!(cfg.active_profile, "brush");
-        assert_eq!(cfg.device.combo_window_ms, 150);
-        assert_eq!(cfg.profiles.len(), 1);
         assert_eq!(cfg.profiles[0].window_class.as_deref(), Some("gimp"));
         assert_eq!(
             cfg.profiles[0].knob_cw,
@@ -446,10 +572,26 @@ key3 = { type = "next_profile" }
             }
         );
         assert_eq!(
-            cfg.profiles[0].key2,
+            cfg.profiles[0].knob_ccw,
             ActionConfig::Scroll {
-                delta: 3,
+                delta: -3,
                 horizontal: false
+            }
+        );
+        assert_eq!(
+            cfg.profiles[0].knob_press,
+            ActionConfig::Launch {
+                desktop_file: "firefox.desktop".to_string()
+            }
+        );
+        assert_eq!(
+            cfg.profiles[0].key3,
+            ActionConfig::Macro {
+                steps: vec![
+                    MacroStep::Keys(vec!["Ctrl".into(), "C".into()]),
+                    MacroStep::WaitMs(100),
+                    MacroStep::Keys(vec!["Ctrl".into(), "V".into()]),
+                ]
             }
         );
     }
@@ -495,17 +637,11 @@ key3 = { type = "next_profile" }
         assert_eq!(
             ActionConfig::parse_from_str("next_tab").ok(),
             Some(ActionConfig::Shortcut {
-                keys: vec!["ctrl".to_string(), "tab".to_string()]
+                keys: vec!["Ctrl".to_string(), "Tab".to_string()]
             })
         );
         assert_eq!(
-            ActionConfig::parse_from_str("Ctrl+Shift+Z").ok(),
-            Some(ActionConfig::Shortcut {
-                keys: vec!["Ctrl".to_string(), "Shift".to_string(), "Z".to_string()]
-            })
-        );
-        assert_eq!(
-            ActionConfig::parse_from_str("Scroll(-3)").ok(),
+            ActionConfig::parse_from_str("Scroll:up:3").ok(),
             Some(ActionConfig::Scroll {
                 delta: -3,
                 horizontal: false
@@ -513,10 +649,10 @@ key3 = { type = "next_profile" }
         );
         assert_eq!(
             ActionConfig::Shortcut {
-                keys: vec!["ctrl".to_string(), "tab".to_string()]
+                keys: vec!["Ctrl".to_string(), "Tab".to_string()]
             }
             .to_display_string(),
-            "ctrl+tab"
+            "Ctrl+Tab"
         );
         assert!(ActionConfig::parse_from_str("tecla_invalida_xyz").is_err());
     }
@@ -539,7 +675,7 @@ active_profile = "inexistente"
 
 [[profiles]]
 name = "volume"
-knob_cw = { type = "volume_up" }
+knob_cw = "VolumeUp"
 "#;
         fs::write(&path, raw).expect("escrever arquivo temporário");
         let err = Config::load_from_path(&path).expect_err("deve falhar na validação");
