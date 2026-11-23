@@ -47,6 +47,12 @@ pub enum KnobError {
 
     #[error("ação inválida na configuração: {0}")]
     InvalidAction(String),
+
+    #[error("falha ao inicializar interface overlay (Slint): {0}")]
+    UiInit(String),
+
+    #[error("falha no loop de eventos da interface (Slint): {0}")]
+    UiRun(String),
 }
 
 impl KnobError {
