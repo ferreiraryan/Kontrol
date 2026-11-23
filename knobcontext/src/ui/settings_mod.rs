@@ -90,7 +90,7 @@ impl SettingsController {
                     window_class: None,
                     knob_cw: ActionConfig::VolumeUp,
                     knob_ccw: ActionConfig::VolumeDown,
-                    knob_press: ActionConfig::None,
+                    knob_press: None,
                     key1: ActionConfig::None,
                     key2: ActionConfig::None,
                     key3: ActionConfig::None,
@@ -535,7 +535,6 @@ fn pull_editor_text_fields(win: &SettingsWindow, editor: &mut ActionEditorState)
 
 fn get_slot_action(profile: &ProfileConfig, slot: ControlSlot) -> &ActionConfig {
     match slot {
-        ControlSlot::KnobPress => &profile.knob_press,
         ControlSlot::RotateCw => &profile.knob_cw,
         ControlSlot::RotateCcw => &profile.knob_ccw,
         ControlSlot::Key1 => &profile.key1,
@@ -546,7 +545,6 @@ fn get_slot_action(profile: &ProfileConfig, slot: ControlSlot) -> &ActionConfig 
 
 fn set_slot_action(profile: &mut ProfileConfig, slot: ControlSlot, action: ActionConfig) {
     match slot {
-        ControlSlot::KnobPress => profile.knob_press = action,
         ControlSlot::RotateCw => profile.knob_cw = action,
         ControlSlot::RotateCcw => profile.knob_ccw = action,
         ControlSlot::Key1 => profile.key1 = action,
@@ -593,7 +591,6 @@ fn sync_draft_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         win.set_field_window_class(SharedString::from(
             profile.window_class.as_deref().unwrap_or(""),
         ));
-        win.set_summary_knob_press(format_summary(&profile.knob_press, &draft.desktop_apps));
         win.set_summary_rotate_cw(format_summary(&profile.knob_cw, &draft.desktop_apps));
         win.set_summary_rotate_ccw(format_summary(&profile.knob_ccw, &draft.desktop_apps));
         win.set_summary_key1(format_summary(&profile.key1, &draft.desktop_apps));

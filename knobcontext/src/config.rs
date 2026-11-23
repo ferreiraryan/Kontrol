@@ -45,8 +45,10 @@ pub struct ProfileConfig {
     pub knob_cw: ActionConfig,
     #[serde(default)]
     pub knob_ccw: ActionConfig,
-    #[serde(default)]
-    pub knob_press: ActionConfig,
+    /// Campo legado mantido apenas para retrocompatibilidade na leitura de TOMLs antigos.
+    /// `KnobPress` é reservado para abrir/fechar o overlay e é ignorado na execução.
+    #[serde(default, skip_serializing)]
+    pub knob_press: Option<ActionConfig>,
     #[serde(default)]
     pub key1: ActionConfig,
     #[serde(default)]
@@ -329,7 +331,7 @@ impl Default for Config {
                     window_class: None,
                     knob_cw: ActionConfig::VolumeUp,
                     knob_ccw: ActionConfig::VolumeDown,
-                    knob_press: ActionConfig::VolumeMute,
+                    knob_press: None,
                     key1: ActionConfig::MediaPrev,
                     key2: ActionConfig::MediaNext,
                     key3: ActionConfig::MediaPlayPause,
@@ -343,7 +345,7 @@ impl Default for Config {
                     knob_ccw: ActionConfig::Shortcut {
                         keys: vec!["Ctrl".to_string(), "Shift".to_string(), "Tab".to_string()],
                     },
-                    knob_press: ActionConfig::None,
+                    knob_press: None,
                     key1: ActionConfig::Shortcut {
                         keys: vec!["Ctrl".to_string(), "T".to_string()],
                     },
@@ -363,7 +365,7 @@ impl Default for Config {
                     knob_ccw: ActionConfig::Shortcut {
                         keys: vec!["[".to_string()],
                     },
-                    knob_press: ActionConfig::None,
+                    knob_press: None,
                     key1: ActionConfig::Shortcut {
                         keys: vec!["Ctrl".to_string(), "Z".to_string()],
                     },
@@ -428,6 +430,15 @@ impl Config {
             message: err.to_string(),
         })?;
         config.validate()?;
+        if config
+            .profiles
+            .iter()
+            .any(|p| matches!(&p.knob_press, Some(act) if !matches!(act, ActionConfig::None)))
+        {
+            log::warn!(
+                "O campo `knob_press` no config.toml é legado e será ignorado: KnobPress é reservado para o overlay."
+            );
+        }
         Ok(config)
     }
 
@@ -493,7 +504,6 @@ impl Config {
             for action in [
                 &profile.knob_cw,
                 &profile.knob_ccw,
-                &profile.knob_press,
                 &profile.key1,
                 &profile.key2,
                 &profile.key3,
@@ -590,9 +600,9 @@ key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
         );
         assert_eq!(
             cfg.profiles[0].knob_press,
-            ActionConfig::Launch {
+            Some(ActionConfig::Launch {
                 desktop_file: "firefox.desktop".to_string()
-            }
+            })
         );
         assert_eq!(
             cfg.profiles[0].key3,
@@ -627,7 +637,7 @@ key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
             window_class: None,
             knob_cw: ActionConfig::None,
             knob_ccw: ActionConfig::None,
-            knob_press: ActionConfig::None,
+            knob_press: None,
             key1: ActionConfig::None,
             key2: ActionConfig::None,
             key3: ActionConfig::None,

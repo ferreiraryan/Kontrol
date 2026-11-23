@@ -178,11 +178,13 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
         let action = match event {
             KnobEvent::RotateCw => profile.knob_cw.clone(),
             KnobEvent::RotateCcw => profile.knob_ccw.clone(),
-            KnobEvent::KnobPress => profile.knob_press.clone(),
             KnobEvent::Key1 => profile.key1.clone(),
             KnobEvent::Key2 => profile.key2.clone(),
             KnobEvent::Key3 => profile.key3.clone(),
-            KnobEvent::OpenSettings => return Ok(DispatchOutcome::Ignored),
+            // `KnobPress` é reservado para o overlay; nunca executa ação de perfil.
+            KnobEvent::KnobPress | KnobEvent::OpenSettings => {
+                return Ok(DispatchOutcome::Ignored);
+            }
         };
 
         match action {
@@ -484,7 +486,6 @@ mod tests {
         let events = [
             KnobEvent::RotateCw,
             KnobEvent::RotateCcw,
-            KnobEvent::KnobPress,
             KnobEvent::Key1,
             KnobEvent::Key2,
             KnobEvent::Key3,
@@ -496,12 +497,19 @@ mod tests {
             assert!(matches!(outcome, DispatchOutcome::Executed(_)));
         }
 
+        // KnobPress é reservado para o overlay e nunca dispara ação de perfil
+        assert_eq!(
+            dispatcher
+                .dispatch(KnobEvent::KnobPress, "global")
+                .expect("KnobPress ignorado"),
+            DispatchOutcome::Ignored
+        );
+
         assert_eq!(
             dispatcher.executor.executed,
             vec![
                 ActionConfig::VolumeUp,
                 ActionConfig::VolumeDown,
-                ActionConfig::VolumeMute,
                 ActionConfig::MediaPrev,
                 ActionConfig::MediaNext,
                 ActionConfig::MediaPlayPause,

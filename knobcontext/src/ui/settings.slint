@@ -142,7 +142,6 @@ export component SettingsWindow inherits Window {
     in property <int> selected-index: 0;
     in-out property <string> field-name;
     in-out property <string> field-window-class;
-    in property <string> summary-knob-press: "Nenhuma";
     in property <string> summary-rotate-cw: "Nenhuma";
     in property <string> summary-rotate-ccw: "Nenhuma";
     in property <string> summary-key1: "Nenhuma";
@@ -318,39 +317,39 @@ export component SettingsWindow inherits Window {
                 }
 
                 ActionRow {
-                    control-label: "KnobPress";
-                    action-summary: root.summary-knob-press;
-                    edit-clicked => { root.open-action-editor(0); }
-                }
-
-                ActionRow {
                     control-label: "RotateCw (Horário)";
                     action-summary: root.summary-rotate-cw;
-                    edit-clicked => { root.open-action-editor(1); }
+                    edit-clicked => { root.open-action-editor(0); }
                 }
 
                 ActionRow {
                     control-label: "RotateCcw (Anti-horário)";
                     action-summary: root.summary-rotate-ccw;
-                    edit-clicked => { root.open-action-editor(2); }
+                    edit-clicked => { root.open-action-editor(1); }
                 }
 
                 ActionRow {
                     control-label: "Key1 (Esquerda)";
                     action-summary: root.summary-key1;
-                    edit-clicked => { root.open-action-editor(3); }
+                    edit-clicked => { root.open-action-editor(2); }
                 }
 
                 ActionRow {
                     control-label: "Key2 (Meio)";
                     action-summary: root.summary-key2;
-                    edit-clicked => { root.open-action-editor(4); }
+                    edit-clicked => { root.open-action-editor(3); }
                 }
 
                 ActionRow {
                     control-label: "Key3 (Direita)";
                     action-summary: root.summary-key3;
-                    edit-clicked => { root.open-action-editor(5); }
+                    edit-clicked => { root.open-action-editor(4); }
+                }
+
+                Text {
+                    text: "Nota: o clique no knob (KnobPress) é reservado para abrir/fechar o overlay de perfis.";
+                    color: rgba(255, 255, 255, 0.48);
+                    font-size: 11px;
                 }
 
                 if root.error-message != "": Rectangle {

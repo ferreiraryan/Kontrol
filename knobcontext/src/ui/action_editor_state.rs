@@ -4,10 +4,10 @@ use crate::actions_catalog::{
 };
 use crate::error::KnobError;
 
-/// Identificador dos 6 controles físicos editáveis na janela de configurações.
+/// Identificador dos 5 controles físicos editáveis na janela de configurações
+/// (`KnobPress` é reservado para abrir/fechar o overlay).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlSlot {
-    KnobPress,
     RotateCw,
     RotateCcw,
     Key1,
@@ -18,19 +18,17 @@ pub enum ControlSlot {
 impl ControlSlot {
     pub fn from_index(index: usize) -> Option<Self> {
         match index {
-            0 => Some(Self::KnobPress),
-            1 => Some(Self::RotateCw),
-            2 => Some(Self::RotateCcw),
-            3 => Some(Self::Key1),
-            4 => Some(Self::Key2),
-            5 => Some(Self::Key3),
+            0 => Some(Self::RotateCw),
+            1 => Some(Self::RotateCcw),
+            2 => Some(Self::Key1),
+            3 => Some(Self::Key2),
+            4 => Some(Self::Key3),
             _ => None,
         }
     }
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::KnobPress => "KnobPress",
             Self::RotateCw => "RotateCw (Horário)",
             Self::RotateCcw => "RotateCcw (Anti-horário)",
             Self::Key1 => "Key1 (Esquerda)",
