@@ -19,14 +19,20 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-Fase 0 concluída com dados reais do hardware. Pronto para propor e confirmar a arquitetura da Fase 1 (mapeador global Wayland + configuração TOML + overlay Slint).
+Fase 1 (núcleo sem UI) implementada, testada e validada no Linux Wayland (Hyprland). Aguardando teste interativo do usuário (e confirmação final da ordem física das 3 teclas) antes de avançar para a Fase 2 (overlay Slint).
 
 ## Concluído
-- Criação de `AGENTS.md` e `CONTEXT.md` na raiz do projeto.
-- Criação do pacote Rust `knobcontext/` com dependências `evdev` (0.12.2) e `hidapi` (2.6.7).
-- Implementação de `knobcontext/src/bin/probe.rs` (descoberta via `/dev/input/by-id/` e captura de eventos `evdev`) e `knobcontext/src/bin/hid_probe.rs` (enumeração HID e inspeção somente-leitura via `hidapi`).
-- Validação de build e qualidade: `cargo test` (3/3), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-- Inspeção real de interfaces USB (`lsusb -d 1189:8890 -v`), `hid_probe`, Report Descriptors (`sysfs`) e captura interativa de todos os controles do knob via `probe`.
+- **Fase 0**:
+  - Criação de `AGENTS.md` e `CONTEXT.md`.
+  - Criação do pacote Rust `knobcontext/` e binários `probe` (`evdev`) e `hid_probe` (`hidapi`).
+  - Mapeamento real das 4 interfaces USB e eventos `EV_KEY` do dispositivo `1189:8890`.
+- **Fase 1 (núcleo sem UI)**:
+  - `src/error.rs`: enum `KnobError` centralizado com `thiserror` e helper `is_permission_denied()`.
+  - `src/config.rs`: configuração TOML (`serde` + `toml`) carregada de `~/.config/knobcontext/config.toml` com fallback para `Config::default()`, perfis globais e validação.
+  - `src/input.rs`: abertura e `grab()` exclusivo via `evdev` nas 2 interfaces do knob (`event-kbd` e `if02-event-kbd`), multiplexação via `poll`, `Drop` com `ungrab()` garantido, e máquina de estados `EventTranslator` com janela de 200ms para combos (`Ctrl+F4`, `Ctrl+F1`).
+  - `src/action.rs`: trait `ActionExecutor`, `ActionDispatcher` com suporte a troca de perfil (`NextProfile`) e `EnigoExecutor` usando `enigo 0.6` com backend nativo `wayland`.
+  - `src/main.rs`: orquestração do loop principal com `log` + `env_logger`, tratamento gracioso de `Ctrl+C` (`ctrlc`) executando `ungrab()`, e orientação clara para erros de permissão.
+  - Validação: `cargo test` (15/15), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, e smoke test real no Hyprland Wayland (inicialização `enigo`, `grab()` e `ungrab()` no `SIGINT`).
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
@@ -49,5 +55,6 @@ Fase 0 concluída com dados reais do hardware. Pronto para propor e confirmar a 
   - `/dev/hidraw*`: `root:root` (`0600`).
 
 ## Próximos Passos
-1. Confirmar com o usuário a arquitetura proposta para a **Fase 1** (leitor `evdev` com `grab()` + parser de eventos/combos + configuração TOML + executor de ações no Wayland + overlay Slint).
-2. Validar o método de simulação de entrada no Linux Wayland (`enigo` com backend `uinput`/`wayland` ou `uinput` direto — verificar permissões de `/dev/uinput` antes de implementar).
+1. Confirmar em uso real (`cargo run --bin knobcontext`) o ajuste de volume, mute, ações das 3 teclas e a ordem física exata de `Key1`/`Key2`/`Key3`.
+2. **Fase 2 (UI Overlay Slint)**: propor e implementar overlay minimalista escuro em Slint (fundo escuro, cantos arredondados, animações suaves) disparado ao pressionar o knob, exibindo o perfil ativo e permitindo alternar modos.
+3. **Versão futura**: detecção de janela em foco no Windows/X11 e (opcional) utilitário de escrita de firmware via Interface 1 (`EP 2 OUT`).
