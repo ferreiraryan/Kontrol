@@ -12,6 +12,13 @@ pub enum KnobError {
         source: io::Error,
     },
 
+    #[error("falha ao salvar arquivo de configuração '{path}': {source}")]
+    ConfigWrite {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
     #[error("arquivo de configuração inválido '{path}': {message}")]
     ConfigParse { path: PathBuf, message: String },
 

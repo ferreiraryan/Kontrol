@@ -16,7 +16,7 @@ pub enum DispatchOutcome {
     Ignored,
 }
 
-/// Despacha `KnobEvent` de acordo com o perfil global ativo.
+/// Despacha `KnobEvent` de acordo com o perfil solicitado.
 pub struct ActionDispatcher<E: ActionExecutor> {
     profiles: Vec<ProfileConfig>,
     active_index: usize,
@@ -37,6 +37,15 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
         }
     }
 
+    pub fn update_profiles(&mut self, profiles: Vec<ProfileConfig>) {
+        self.profiles = profiles;
+        if self.profiles.is_empty() {
+            self.active_index = 0;
+        } else if self.active_index >= self.profiles.len() {
+            self.active_index = 0;
+        }
+    }
+
     pub fn active_profile_name(&self) -> &str {
         self.profiles
             .get(self.active_index)
@@ -54,10 +63,26 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
         }
     }
 
-    pub fn dispatch(&mut self, event: KnobEvent) -> Result<DispatchOutcome, KnobError> {
-        let Some(profile) = self.profiles.get(self.active_index) else {
+    pub fn find_profile_index(&self, profile_name: &str) -> Option<usize> {
+        self.profiles
+            .iter()
+            .position(|p| p.name.eq_ignore_ascii_case(profile_name))
+    }
+
+    pub fn dispatch(
+        &mut self,
+        event: KnobEvent,
+        profile_name: &str,
+    ) -> Result<DispatchOutcome, KnobError> {
+        let target_idx = self
+            .find_profile_index(profile_name)
+            .or_else(|| self.find_profile_index(crate::config::GLOBAL_PROFILE_NAME))
+            .unwrap_or(self.active_index);
+
+        let Some(profile) = self.profiles.get(target_idx) else {
             return Ok(DispatchOutcome::Ignored);
         };
+        self.active_index = target_idx;
 
         let action = match event {
             KnobEvent::RotateCw => profile.knob_cw.clone(),
@@ -240,7 +265,9 @@ mod tests {
             KnobEvent::Key3,
         ];
         for ev in events {
-            let outcome = dispatcher.dispatch(ev).expect("despacho deve funcionar");
+            let outcome = dispatcher
+                .dispatch(ev, "global")
+                .expect("despacho deve funcionar");
             assert!(matches!(outcome, DispatchOutcome::Executed(_)));
         }
 
@@ -258,31 +285,37 @@ mod tests {
     }
 
     #[test]
+    fn dispatches_contextual_profile_by_name() {
+        let cfg = Config::default();
+        let mut dispatcher = ActionDispatcher::new(cfg.profiles, 0, MockExecutor::default());
+
+        let outcome = dispatcher
+            .dispatch(KnobEvent::RotateCw, "gimp")
+            .expect("despacho no perfil gimp");
+        assert_eq!(
+            outcome,
+            DispatchOutcome::Executed(ActionConfig::Shortcut {
+                keys: vec!["]".to_string()],
+            })
+        );
+        assert_eq!(dispatcher.active_profile_name(), "gimp");
+    }
+
+    #[test]
     fn switches_profiles_on_next_profile_action() {
         let mut cfg = Config::default();
         cfg.profiles[0].key3 = ActionConfig::NextProfile;
         let mut dispatcher = ActionDispatcher::new(cfg.profiles, 0, MockExecutor::default());
 
-        assert_eq!(dispatcher.active_profile_name(), "Volume");
+        assert_eq!(dispatcher.active_profile_name(), "global");
         let switched = dispatcher
-            .dispatch(KnobEvent::Key3)
+            .dispatch(KnobEvent::Key3, "global")
             .expect("troca de perfil");
         assert_eq!(
             switched,
-            DispatchOutcome::ProfileSwitched("Pincel".to_string())
+            DispatchOutcome::ProfileSwitched("firefox".to_string())
         );
-        assert_eq!(dispatcher.active_profile_name(), "Pincel");
-
-        // No perfil "Pincel", RotateCw deve disparar atalho "]"
-        let next = dispatcher
-            .dispatch(KnobEvent::RotateCw)
-            .expect("ação no segundo perfil");
-        assert_eq!(
-            next,
-            DispatchOutcome::Executed(ActionConfig::Shortcut {
-                keys: vec!["]".to_string()],
-            })
-        );
+        assert_eq!(dispatcher.active_profile_name(), "firefox");
     }
 
     #[test]

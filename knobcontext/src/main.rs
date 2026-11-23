@@ -1,11 +1,13 @@
 mod action;
 mod config;
+mod context;
 mod error;
 mod input;
 mod ui;
 
 use crate::action::{ActionDispatcher, DispatchOutcome, EnigoExecutor};
 use crate::config::Config;
+use crate::context::{spawn_hyprland_listener, ContextState};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
 use crate::ui::state::{OverlayController, OverlayTransition, DEFAULT_OVERLAY_TIMEOUT};
@@ -17,43 +19,78 @@ use std::cell::RefCell;
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 struct AppRuntime {
+    config: Config,
+    context: Arc<RwLock<ContextState>>,
+    last_window_class: Option<String>,
+    manual_profile_override: Option<String>,
     controller: OverlayController,
     dispatcher: ActionDispatcher<EnigoExecutor>,
     overlay: OverlayWindow,
 }
 
 impl AppRuntime {
+    fn sync_context(&mut self) -> String {
+        let current_window = self
+            .context
+            .read()
+            .ok()
+            .and_then(|ctx| ctx.active_window.clone());
+
+        if current_window != self.last_window_class {
+            self.last_window_class = current_window;
+            self.manual_profile_override = None;
+        }
+
+        let resolved = if let Some(ref manual) = self.manual_profile_override {
+            manual.clone()
+        } else if let Ok(ctx) = self.context.read() {
+            ctx.profile_for_window(&self.config)
+        } else {
+            self.config.active_profile.clone()
+        };
+
+        if let Some(idx) = self.dispatcher.find_profile_index(&resolved) {
+            self.dispatcher.set_active_profile_index(idx);
+            self.controller.sync_active_index(idx);
+        }
+
+        resolved
+    }
+
     fn handle_knob_event(&mut self, event: KnobEvent) {
+        let profile_name = self.sync_context();
         let transition = self.controller.handle_event(event, Instant::now());
         match transition {
-            OverlayTransition::DispatchAction(ev) => match self.dispatcher.dispatch(ev) {
-                Ok(DispatchOutcome::Executed(action)) => {
-                    info!(
-                        "[{}] {ev:?} -> {action:?}",
-                        self.dispatcher.active_profile_name()
-                    );
+            OverlayTransition::DispatchAction(ev) => {
+                match self.dispatcher.dispatch(ev, &profile_name) {
+                    Ok(DispatchOutcome::Executed(action)) => {
+                        info!(
+                            "[{}] {ev:?} -> {action:?}",
+                            self.dispatcher.active_profile_name()
+                        );
+                    }
+                    Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
+                        self.manual_profile_override = Some(new_profile.clone());
+                        self.controller
+                            .sync_active_index(self.dispatcher.active_profile_index());
+                        info!("Perfil alterado para '{new_profile}'");
+                    }
+                    Ok(DispatchOutcome::Ignored) => {
+                        debug!(
+                            "[{}] {ev:?} ignorado",
+                            self.dispatcher.active_profile_name()
+                        );
+                    }
+                    Err(err) => {
+                        warn!("Falha ao executar ação para {ev:?}: {err}");
+                    }
                 }
-                Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
-                    self.controller
-                        .sync_active_index(self.dispatcher.active_profile_index());
-                    info!("Perfil alterado para '{new_profile}'");
-                }
-                Ok(DispatchOutcome::Ignored) => {
-                    debug!(
-                        "[{}] {ev:?} ignorado",
-                        self.dispatcher.active_profile_name()
-                    );
-                }
-                Err(err) => {
-                    warn!("Falha ao executar ação para {ev:?}: {err}");
-                }
-            },
+            }
             OverlayTransition::OpenOverlay { highlighted_index } => {
                 debug!("Abrindo overlay (destaque={highlighted_index})");
                 if let Err(err) = self
@@ -70,10 +107,9 @@ impl AppRuntime {
             }
             OverlayTransition::CommitAndClose { selected_index } => {
                 self.dispatcher.set_active_profile_index(selected_index);
-                info!(
-                    "Perfil selecionado no overlay: '{}'",
-                    self.dispatcher.active_profile_name()
-                );
+                let chosen = self.dispatcher.active_profile_name().to_string();
+                self.manual_profile_override = Some(chosen.clone());
+                info!("Perfil selecionado no overlay: '{chosen}'");
                 if let Err(err) = self.overlay.hide() {
                     warn!("Falha ao fechar overlay: {err}");
                 }
@@ -125,10 +161,6 @@ fn run() -> Result<(), KnobError> {
         config.device.media_path.display()
     );
     let mut input = KnobInput::open(&config.device)?;
-    info!(
-        "KnobContext ativo (perfil: '{}'). Pressione o knob para abrir o overlay ou Ctrl+C para sair.",
-        dispatcher.active_profile_name()
-    );
 
     let running = Arc::new(AtomicBool::new(true));
     let running_ctrlc = Arc::clone(&running);
@@ -138,6 +170,14 @@ fn run() -> Result<(), KnobError> {
     }) {
         warn!("Não foi possível registrar handler de sinal Ctrl+C: {err}");
     }
+
+    let context = Arc::new(RwLock::new(ContextState::new()));
+    let hyprland_thread = spawn_hyprland_listener(Arc::clone(&context), Arc::clone(&running));
+
+    info!(
+        "KnobContext ativo (perfil inicial: '{}'). Pressione o knob para abrir o overlay ou Ctrl+C para sair.",
+        dispatcher.active_profile_name()
+    );
 
     let (tx, rx) = mpsc::channel::<KnobEvent>();
     let running_input = Arc::clone(&running);
@@ -163,6 +203,10 @@ fn run() -> Result<(), KnobError> {
     });
 
     let runtime = Rc::new(RefCell::new(AppRuntime {
+        config,
+        context,
+        last_window_class: None,
+        manual_profile_override: None,
         controller,
         dispatcher,
         overlay,
@@ -181,10 +225,13 @@ fn run() -> Result<(), KnobError> {
     let loop_result =
         slint::run_event_loop_until_quit().map_err(|err| KnobError::UiRun(err.to_string()));
 
-    // Encerramento gracioso: garante fechamento do overlay e `ungrab()` dos dispositivos.
+    // Encerramento gracioso: garante fechamento do overlay, parada do listener e `ungrab()`.
     running.store(false, Ordering::SeqCst);
     let _ = runtime.borrow().overlay.hide();
     let _ = input_thread.join();
+    if let Some(handle) = hyprland_thread {
+        let _ = handle.join();
+    }
     info!("Overlay fechado e dispositivos liberados (ungrab). Atalhos originais restaurados.");
 
     loop_result
