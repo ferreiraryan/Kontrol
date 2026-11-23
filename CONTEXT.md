@@ -19,31 +19,35 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-Fase 0 em andamento: probes compilados, testados e executados para descoberta de interfaces/descritores; falta capturar os eventos reais de giro/clique com interação física do usuário.
+Fase 0 concluída com dados reais do hardware. Pronto para propor e confirmar a arquitetura da Fase 1 (mapeador global Wayland + configuração TOML + overlay Slint).
 
 ## Concluído
 - Criação de `AGENTS.md` e `CONTEXT.md` na raiz do projeto.
 - Criação do pacote Rust `knobcontext/` com dependências `evdev` (0.12.2) e `hidapi` (2.6.7).
 - Implementação de `knobcontext/src/bin/probe.rs` (descoberta via `/dev/input/by-id/` e captura de eventos `evdev`) e `knobcontext/src/bin/hid_probe.rs` (enumeração HID e inspeção somente-leitura via `hidapi`).
 - Validação de build e qualidade: `cargo test` (3/3), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-- Inspeção real de interfaces USB (`lsusb -d 1189:8890 -v`), `hid_probe` e Report Descriptors (`sysfs`).
+- Inspeção real de interfaces USB (`lsusb -d 1189:8890 -v`), `hid_probe`, Report Descriptors (`sysfs`) e captura interativa de todos os controles do knob via `probe`.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
-  - **Interface 0** (`hidraw8`, `/dev/input/by-id/usb-1189_8890-event-kbd`): Boot Keyboard (`EP 1 IN`, 64B), `evdev` suporta `EV_KEY`.
-  - **Interface 1** (sem `hidraw` no kernel): HID genérico (`SubClass=0, Protocol=0`) com **`EP 2 OUT` (64B)** — canal de saída/escrita para configuração do firmware.
-  - **Interface 2** (`hidraw9`, `/dev/input/by-id/usb-1189_8890-if02-event-kbd`): Keyboard (Report ID `0x01`) + Consumer Control (`usage_page=0x000c`, Report ID `0x02`), `evdev` suporta `EV_KEY + EV_REL`.
-  - **Interface 3** (`hidraw10`, `/dev/input/by-id/usb-1189_8890-if03-event-mouse`): Boot Mouse (3 botões + X/Y/Wheel), `evdev` suporta `EV_KEY + EV_REL`.
-- **Suporte a escrita HID / Feature Reports**:
-  - Os Report Descriptors de `hidraw8..10` não declaram Feature Reports (`0xB1`).
-  - A escrita/reprogramação do firmware ocorre pela **Interface 1 (`EP 2 OUT`, 64B)** (requer permissão root/regra `udev` e protocolo específico de escrita, ainda não investigado/enviado).
-  - Alternativa no nível do SO: `evdev::Device::grab()` (`EVIOCGRAB`) intercepta exclusivamente as interfaces `event*` do `1189:8890` sem deixar os atalhos atuais chegarem ao Wayland — desde que cada tecla/rotação emita eventos distintos.
+  - **Interface 0** (`hidraw8`, `/dev/input/by-id/usb-1189_8890-event-kbd`): Boot Keyboard (`EP 1 IN`, 64B), `evdev` suporta `EV_KEY`. Emite os atalhos de teclado das teclas configuradas.
+  - **Interface 1** (sem `hidraw` no kernel): HID genérico (`SubClass=0, Protocol=0`) com **`EP 2 OUT` (64B)** — canal de escrita para reprogramação do firmware.
+  - **Interface 2** (`hidraw9`, `/dev/input/by-id/usb-1189_8890-if02-event-kbd`): Keyboard (Report ID `0x01`) + Consumer Control (`usage_page=0x000c`, Report ID `0x02`), `evdev` suporta `EV_KEY + EV_REL`. Emite os eventos de mídia do knob e tecla de mídia.
+  - **Interface 3** (`hidraw10`, `/dev/input/by-id/usb-1189_8890-if03-event-mouse`): Boot Mouse (3 botões + X/Y/Wheel), não emite eventos com o keymap atual.
+- **Formato real dos eventos capturados via `evdev`** (importante: o knob envia `EV_KEY`, não `EV_REL`!):
+  - **Clique do knob** (`usb-1189_8890-if02-event-kbd`): `KEY_MUTE` (`code=113`, `value=1`/`0`, `MSC_SCAN=786658`)
+  - **Giro do knob (sentido +)** (`usb-1189_8890-if02-event-kbd`): `KEY_VOLUMEUP` (`code=115`, `value=1`/`0`, `MSC_SCAN=786665`)
+  - **Giro do knob (sentido -)** (`usb-1189_8890-if02-event-kbd`): `KEY_VOLUMEDOWN` (`code=114`, `value=1`/`0`, `MSC_SCAN=786666`)
+  - **Tecla mídia** (`usb-1189_8890-if02-event-kbd`): `KEY_PLAYPAUSE` (`code=164`, `value=1`/`0`, `MSC_SCAN=786637`)
+  - **Tecla atalho A** (`usb-1189_8890-event-kbd`): `KEY_LEFTCTRL` (`code=29`) + `KEY_F4` (`code=62`) (`value=1`/`0`)
+  - **Tecla atalho B** (`usb-1189_8890-event-kbd`): `KEY_LEFTCTRL` (`code=29`) + `KEY_F1` (`code=59`) (`value=1`/`0`)
+- **Decisão sobre reset de atalhos**:
+  - Os Report Descriptors de `hidraw8..10` não declaram Feature Reports (`0xB1`); a escrita no firmware ocorre apenas pela Interface 1 (`EP 2 OUT`, 64B).
+  - Como todas as 6 ações físicas já emitem eventos `EV_KEY` distintos, usar **`evdev::Device::grab()` (`EVIOCGRAB`)** em `usb-1189_8890-event-kbd` e `usb-1189_8890-if02-event-kbd` intercepta e bloqueia os atalhos atuais no nível do SO (evitando vazamento de `Ctrl+F4`/`Ctrl+F1`/volume para o Wayland), sem precisar regravar o firmware na v1.0.
 - **Permissões no ambiente**:
-  - `/dev/input/event23..25`: `root:input` (leitura `evdev` liberada para o usuário atual).
-  - `/dev/hidraw*`: `root:root` (`0600`) — acesso `hidapi` requer `sudo` ou regra `udev`.
-- **Formato de eventos `evdev` (rotação/teclas)**: pendente de captura interativa (girar/clicar no knob com `probe`).
+  - `/dev/input/event23..25`: `root:input` (leitura e `grab()` via `evdev` liberados para o usuário atual).
+  - `/dev/hidraw*`: `root:root` (`0600`).
 
 ## Próximos Passos
-1. Capturar eventos reais do knob com `probe` (giro horário, anti-horário, clique do knob e 3 teclas) e registrar os códigos/valores exatos neste arquivo.
-2. Confirmar com o usuário se cada controle já emite eventos distintos (permitindo usar `evdev` + `grab()` sem tocar no firmware) ou se precisamos implementar reset/reprogramação pela Interface 1 (`EP 2 OUT`).
-3. Após concluir a Fase 0, propor a arquitetura da Fase 1 (mapeador global Wayland com TOML + `enigo` + overlay Slint).
+1. Confirmar com o usuário a arquitetura proposta para a **Fase 1** (leitor `evdev` com `grab()` + parser de eventos/combos + configuração TOML + executor de ações no Wayland + overlay Slint).
+2. Validar o método de simulação de entrada no Linux Wayland (`enigo` com backend `uinput`/`wayland` ou `uinput` direto — verificar permissões de `/dev/uinput` antes de implementar).
