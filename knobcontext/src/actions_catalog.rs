@@ -811,6 +811,22 @@ mod tests {
                     )]),
                 },
             ),
+            (
+                "Provider:mpris:play_pause",
+                ActionType::Provider {
+                    provider_id: "mpris".into(),
+                    command_id: "play_pause".into(),
+                    args: std::collections::BTreeMap::new(),
+                },
+            ),
+            (
+                "Provider:mpris:seek:seconds=10",
+                ActionType::Provider {
+                    provider_id: "mpris".into(),
+                    command_id: "seek".into(),
+                    args: std::collections::BTreeMap::from([("seconds".into(), "10".into())]),
+                },
+            ),
             ("None", ActionType::None),
         ];
 

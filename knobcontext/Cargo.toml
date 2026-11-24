@@ -24,6 +24,7 @@ slint = { version = "1.19", default-features = false, features = ["std", "backen
 thiserror = "2"
 toml = "1"
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 
 [build-dependencies]
 slint-build = "1.19"

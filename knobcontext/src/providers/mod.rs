@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
+pub mod mpris;
 pub mod obs;
 
 use crate::config::ProvidersConfig;
+use crate::providers::mpris::MprisProvider;
 use crate::providers::obs::ObsProvider;
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
@@ -162,6 +164,7 @@ impl ProviderRegistry {
     pub fn default_registry(config: &ProvidersConfig) -> Self {
         let mut reg = Self::new();
         reg.register(Box::new(ObsProvider::new(config.obs.clone())));
+        reg.register(Box::new(MprisProvider::new()));
         reg
     }
 
