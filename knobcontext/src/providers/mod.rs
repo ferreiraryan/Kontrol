@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
+pub mod obs;
+
 use crate::config::ProvidersConfig;
+use crate::providers::obs::ObsProvider;
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
@@ -156,8 +159,10 @@ impl ProviderRegistry {
     }
 
     /// Constrói o registro padrão com todos os providers embutidos a partir de `[providers]`.
-    pub fn default_registry(_config: &ProvidersConfig) -> Self {
-        Self::new()
+    pub fn default_registry(config: &ProvidersConfig) -> Self {
+        let mut reg = Self::new();
+        reg.register(Box::new(ObsProvider::new(config.obs.clone())));
+        reg
     }
 
     pub fn register(&mut self, provider: Box<dyn Provider>) {

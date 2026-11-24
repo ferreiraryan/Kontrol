@@ -841,6 +841,8 @@ mod tests {
             "Provider:obs:",
             "Provider:obs:set_scene:sem_igual",
             "Provider:obs:set_scene:scene_name=",
+            "Provider:obs:comando_inexistente",
+            "Provider:provider_inexistente:toggle_record",
             "TeclaInexistenteXYZ",
         ];
 
