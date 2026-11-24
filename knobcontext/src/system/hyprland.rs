@@ -193,12 +193,32 @@ struct HyprClientJson {
     at: [i32; 2],
 }
 
-fn find_overlay_client() -> Option<HyprClientJson> {
+fn find_client_by_title(title: &str) -> Option<HyprClientJson> {
     let raw = hypr_socket1_command("j/clients").ok()?;
     let clients: Vec<HyprClientJson> = serde_json::from_str(&raw).ok()?;
     clients
         .into_iter()
-        .find(|c| c.title == "KnobContext Overlay" && !c.address.trim().is_empty())
+        .find(|c| c.title == title && !c.address.trim().is_empty())
+}
+
+/// Calcula a posição `(x, y)` no canto inferior direito do monitor, respeitando `scale` e `transform`.
+pub fn compute_bottom_right_position(
+    mon: &MonitorInfo,
+    win_w: i32,
+    win_h: i32,
+    margin: i32,
+) -> (i32, i32) {
+    let rotated = matches!(mon.transform % 4, 1 | 3);
+    let raw_w = if rotated { mon.height } else { mon.width };
+    let raw_h = if rotated { mon.width } else { mon.height };
+    let scale = if mon.scale > 0.1 { mon.scale } else { 1.0 };
+    let logical_w = ((raw_w as f32) / scale).round() as i32;
+    let logical_h = ((raw_h as f32) / scale).round() as i32;
+
+    let m = margin.max(0);
+    let x = mon.x + (logical_w - win_w - m).max(0);
+    let y = mon.y + (logical_h - win_h - m).max(0);
+    (x, y)
 }
 
 /// Registra dinamicamente a regra de janela do Overlay no Hyprland 0.56+ (Lua) para que
@@ -213,10 +233,45 @@ pub fn register_overlay_window_rule(bottom_margin: i32) {
     let _ = hypr_socket1_command(&lua_rule);
 }
 
+/// Registra dinamicamente a regra de janela do Mini-HUD (`KnobContext HUD`) no canto inferior direito,
+/// sem borda/sombra e sem roubar o foco do aplicativo ativo.
+pub fn register_hud_window_rule(margin: i32) {
+    let m = margin.max(0);
+    let lua_rule = format!(
+        "eval hl.window_rule({{ name = \"knobcontext-hud\", match = {{ title = \"^(KnobContext HUD)$\" }}, float = true, pin = true, center = false, move = \"(monitor_w-window_w-{m}) (monitor_h-window_h-{m})\", no_initial_focus = true, border_size = 0, no_shadow = true, opacity = \"1 override\" }})"
+    );
+    let _ = hypr_socket1_command(&lua_rule);
+}
+
+fn move_titled_window_to(title: &str, x: i32, y: i32) {
+    for attempt in 0..12 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if let Some(client) = find_client_by_title(title) {
+            if (client.at[0] - x).abs() <= 2 && (client.at[1] - y).abs() <= 2 {
+                return;
+            }
+            let lua_cmd = format!(
+                "eval hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = \"address:{}\" }}))",
+                client.address
+            );
+            if let Ok(resp) = hypr_socket1_command(&lua_cmd) {
+                if resp.trim().eq_ignore_ascii_case("ok") {
+                    return;
+                }
+            }
+            let legacy_cmd = format!(
+                "dispatch movewindowpixel exact {x} {y},address:{}",
+                client.address
+            );
+            let _ = hypr_socket1_command(&legacy_cmd);
+            return;
+        }
+    }
+}
+
 /// Posiciona a janela `KnobContext Overlay` na parte inferior central do monitor focado via IPC.
-///
-/// Suporta tanto Hyprland 0.56+ (API Lua `hl.dispatch(hl.dsp.window.move(...))`) quanto
-/// versões clássicas (`dispatch movewindowpixel exact ...`).
 pub fn position_overlay_bottom_center(
     win_w: i32,
     win_h: i32,
@@ -231,34 +286,22 @@ pub fn position_overlay_bottom_center(
         return Ok(());
     };
     let (x, y) = compute_bottom_center_position(target, win_w, win_h, bottom_margin);
+    move_titled_window_to("KnobContext Overlay", x, y);
+    Ok(())
+}
 
-    // Aguarda o compositor mapear a xdg_toplevel recém-criada para obter seu `address` exato.
-    for attempt in 0..12 {
-        if attempt > 0 {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        if let Some(client) = find_overlay_client() {
-            // Se a window_rule já posicionou no lugar exato, nada a fazer.
-            if (client.at[0] - x).abs() <= 2 && (client.at[1] - y).abs() <= 2 {
-                return Ok(());
-            }
-            let lua_cmd = format!(
-                "eval hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = \"address:{}\" }}))",
-                client.address
-            );
-            if let Ok(resp) = hypr_socket1_command(&lua_cmd) {
-                if resp.trim().eq_ignore_ascii_case("ok") {
-                    return Ok(());
-                }
-            }
-            let legacy_cmd = format!(
-                "dispatch movewindowpixel exact {x} {y},address:{}",
-                client.address
-            );
-            let _ = hypr_socket1_command(&legacy_cmd);
-            return Ok(());
-        }
-    }
+/// Posiciona a janela `KnobContext HUD` no canto inferior direito do monitor focado via IPC.
+pub fn position_hud_bottom_right(win_w: i32, win_h: i32, margin: i32) -> Result<(), KnobError> {
+    let monitors = fetch_monitors()?;
+    let Some(target) = monitors
+        .iter()
+        .find(|m| m.focused)
+        .or_else(|| monitors.first())
+    else {
+        return Ok(());
+    };
+    let (x, y) = compute_bottom_right_position(target, win_w, win_h, margin);
+    move_titled_window_to("KnobContext HUD", x, y);
     Ok(())
 }
 

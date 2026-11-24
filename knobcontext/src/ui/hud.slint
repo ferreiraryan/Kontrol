@@ -1,0 +1,110 @@
+export component MiniHud inherits Window {
+    title: "KnobContext HUD";
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    width: 236px;
+    height: 64px;
+
+    in property <string> glyph: "♫";
+    in property <string> label: "Volume";
+    in property <string> value-text: "50%";
+    in property <bool> has-progress: true;
+    in property <int> value-percent: 50;
+    in property <int> max-percent: 100;
+    in property <bool> is-muted: false;
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: rgba(17, 20, 27, 0.92);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: root.is-muted
+            ? rgba(248, 113, 113, 0.55)
+            : rgba(255, 255, 255, 0.12);
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 10px;
+            alignment: stretch;
+
+            // Badge de ícone compacto à esquerda
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 8px;
+                background: root.is-muted
+                    ? rgba(239, 68, 68, 0.18)
+                    : rgba(96, 165, 250, 0.16);
+                border-width: 1px;
+                border-color: root.is-muted
+                    ? rgba(248, 113, 113, 0.4)
+                    : rgba(147, 197, 253, 0.3);
+
+                Text {
+                    text: root.glyph;
+                    color: root.is-muted ? #fca5a5 : #bfdbfe;
+                    font-size: 16px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Conteúdo: título + valor + barra fina opcional
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 5px;
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: stretch;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.label;
+                        color: #f8fafc;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    if root.value-text != "": Text {
+                        text: root.value-text;
+                        color: root.is-muted ? #f87171 : #93c5fd;
+                        font-size: 12px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.has-progress: Rectangle {
+                    height: 5px;
+                    border-radius: 3px;
+                    background: rgba(255, 255, 255, 0.12);
+                    clip: true;
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        height: 100%;
+                        width: parent.width * max(0.0, min(1.0, root.value-percent / max(1, root.max-percent)));
+                        border-radius: 3px;
+                        background: root.is-muted ? #ef4444 : #60a5fa;
+
+                        animate width {
+                            duration: 90ms;
+                            easing: ease-out;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

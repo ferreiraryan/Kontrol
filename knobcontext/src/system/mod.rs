@@ -16,8 +16,8 @@ use crate::system::caelestia::{
     trigger_caelestia_toggle, CaelestiaToggleKind, CaelestiaTogglesSnapshot, WallpapersSnapshot,
 };
 use crate::system::hyprland::{
-    fetch_workspaces, position_overlay_bottom_center, switch_workspace, toggle_special_workspace,
-    WorkspacesSnapshot,
+    fetch_workspaces, position_hud_bottom_right, position_overlay_bottom_center, switch_workspace,
+    toggle_special_workspace, WorkspacesSnapshot,
 };
 use crate::system::thumbs::{load_or_generate_thumbnail, DecodedThumbnail, ThumbnailRequest};
 use log::warn;
@@ -81,6 +81,11 @@ pub enum SystemRequest {
         width: i32,
         height: i32,
         bottom_margin: i32,
+    },
+    PositionHud {
+        width: i32,
+        height: i32,
+        margin: i32,
     },
     Shutdown,
 }
@@ -171,6 +176,9 @@ pub fn coalesce_request(queue: &mut VecDeque<SystemRequest>, incoming: SystemReq
         }
         SystemRequest::PositionOverlay { .. } => {
             queue.retain(|req| !matches!(req, SystemRequest::PositionOverlay { .. }));
+        }
+        SystemRequest::PositionHud { .. } => {
+            queue.retain(|req| !matches!(req, SystemRequest::PositionHud { .. }));
         }
         _ => {}
     }
@@ -410,6 +418,16 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
         } => {
             if let Err(err) = position_overlay_bottom_center(width, height, bottom_margin) {
                 log::debug!("Posicionamento automático do overlay no Hyprland ignorado: {err}");
+            }
+            None
+        }
+        SystemRequest::PositionHud {
+            width,
+            height,
+            margin,
+        } => {
+            if let Err(err) = position_hud_bottom_right(width, height, margin) {
+                log::debug!("Posicionamento automático do Mini-HUD no Hyprland ignorado: {err}");
             }
             None
         }

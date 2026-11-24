@@ -17,6 +17,7 @@ use crate::input::{KnobEvent, KnobInput};
 use crate::overlay_hub::{HubController, HubEffect};
 use crate::system::{SystemRequest, SystemResponse, SystemWorker};
 use crate::tray::{TrayCommand, TrayController};
+use crate::ui::hud_mod::{HudController, HUD_HEIGHT_PX, HUD_WIDTH_PX};
 use crate::ui::settings_mod::SettingsController;
 use crate::ui::{OverlayWindow, OVERLAY_HEIGHT_PX, OVERLAY_WIDTH_PX};
 use env_logger::Env;
@@ -37,6 +38,7 @@ struct AppRuntime {
     hub: HubController,
     dispatcher: ActionDispatcher<EnigoExecutor>,
     overlay: OverlayWindow,
+    hud: HudController,
     system: SystemWorker,
     tray: TrayController,
 }
@@ -143,6 +145,29 @@ impl AppRuntime {
                                 "[{}] {ev:?} -> {action:?}",
                                 self.dispatcher.active_profile_name()
                             );
+                            if matches!(ev, KnobEvent::RotateCw | KnobEvent::RotateCcw) {
+                                match self.hud.show_for_action(
+                                    &action,
+                                    self.config.overlay.volume_step,
+                                    self.config.overlay.max_volume_percent,
+                                ) {
+                                    Ok((just_opened, should_query_vol)) => {
+                                        if just_opened {
+                                            self.system.send(SystemRequest::PositionHud {
+                                                width: HUD_WIDTH_PX,
+                                                height: HUD_HEIGHT_PX,
+                                                margin: self.config.overlay.bottom_margin_px,
+                                            });
+                                        }
+                                        if should_query_vol {
+                                            self.system.send(SystemRequest::FetchAudioMixer);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!("Falha ao exibir Mini-HUD: {err}");
+                                    }
+                                }
+                            }
                         }
                         Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
                             self.persist_mode(ProfileMode::Manual(new_profile.clone()));
@@ -159,23 +184,26 @@ impl AppRuntime {
                         }
                     }
                 }
-                HubEffect::RenderOverlay(vm) => match self.overlay.render(&vm) {
-                    Ok(outcome) => {
-                        if outcome.just_opened {
-                            self.system.send(SystemRequest::PositionOverlay {
-                                width: OVERLAY_WIDTH_PX,
-                                height: OVERLAY_HEIGHT_PX,
-                                bottom_margin: self.config.overlay.bottom_margin_px,
-                            });
+                HubEffect::RenderOverlay(vm) => {
+                    let _ = self.hud.hide();
+                    match self.overlay.render(&vm) {
+                        Ok(outcome) => {
+                            if outcome.just_opened {
+                                self.system.send(SystemRequest::PositionOverlay {
+                                    width: OVERLAY_WIDTH_PX,
+                                    height: OVERLAY_HEIGHT_PX,
+                                    bottom_margin: self.config.overlay.bottom_margin_px,
+                                });
+                            }
+                            for req in outcome.missing_thumbnails {
+                                self.system.send(SystemRequest::LoadThumbnail(req));
+                            }
                         }
-                        for req in outcome.missing_thumbnails {
-                            self.system.send(SystemRequest::LoadThumbnail(req));
+                        Err(err) => {
+                            warn!("Falha ao renderizar overlay: {err}");
                         }
                     }
-                    Err(err) => {
-                        warn!("Falha ao renderizar overlay: {err}");
-                    }
-                },
+                }
                 HubEffect::CloseOverlay => {
                     if let Err(err) = self.overlay.hide() {
                         warn!("Falha ao fechar overlay: {err}");
@@ -222,6 +250,15 @@ impl AppRuntime {
                 }
                 continue;
             }
+            if let SystemResponse::AudioMixer(ref snap) = resp {
+                if let Some(master) = snap.streams.iter().find(|s| s.is_master) {
+                    let _ = self.hud.update_master_volume(
+                        master.volume_percent,
+                        master.muted,
+                        self.config.overlay.max_volume_percent,
+                    );
+                }
+            }
             let (mode, contextual) = self.current_mode_and_contextual();
             if let Some(effect) =
                 self.hub
@@ -235,6 +272,7 @@ impl AppRuntime {
     fn open_settings(&mut self, settings: &SettingsController) {
         self.hub.set_settings_open(true);
         let _ = self.overlay.hide();
+        let _ = self.hud.hide();
         if let Err(err) = settings.open(&self.config) {
             warn!("Falha ao abrir janela de configurações: {err}");
             self.hub.set_settings_open(false);
@@ -244,6 +282,9 @@ impl AppRuntime {
     }
 
     fn check_timeout(&mut self) {
+        if let Err(err) = self.hud.check_timeout() {
+            warn!("Falha ao fechar Mini-HUD no timeout: {err}");
+        }
         if let Some(effect) = self.hub.check_timeout(Instant::now(), &self.config.overlay) {
             debug!("Overlay fechado automaticamente por inatividade.");
             self.apply_hub_effects(vec![effect]);
@@ -279,9 +320,11 @@ fn run() -> Result<(), KnobError> {
     let executor = EnigoExecutor::new(config.device.scroll_step)?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
     let overlay = OverlayWindow::new();
+    let hud = HudController::new();
     let hub = HubController::new();
     let system = SystemWorker::spawn();
     system::hyprland::register_overlay_window_rule(config.overlay.bottom_margin_px);
+    system::hyprland::register_hud_window_rule(config.overlay.bottom_margin_px);
 
     info!(
         "Capturando dispositivos: kbd='{}', media='{}'",
@@ -350,6 +393,7 @@ fn run() -> Result<(), KnobError> {
         hub,
         dispatcher,
         overlay,
+        hud,
         system,
         tray,
     }));
@@ -414,6 +458,7 @@ fn run() -> Result<(), KnobError> {
     {
         let mut rt = runtime.borrow_mut();
         let _ = rt.overlay.hide();
+        let _ = rt.hud.hide();
         rt.system.shutdown();
         rt.tray.shutdown();
     }

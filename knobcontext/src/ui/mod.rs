@@ -1,6 +1,7 @@
 pub mod action_editor_mod;
 pub mod action_editor_state;
 pub mod animator;
+pub mod hud_mod;
 pub mod settings_mod;
 
 use crate::error::KnobError;
