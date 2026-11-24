@@ -19,7 +19,7 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-**Fase 6 (Fechar o ciclo de usabilidade)** concluída e validada: Mini-HUD de 500ms ao girar fora do Hub, editor visual de `inherits` com cadeia clicável e validação anti-ciclo, serviço `systemd --user` adaptado ao Hyprland (`WantedBy=default.target`), `install.sh` completo (checagem do grupo `input`, udev `evdev` + `hidraw`, cópia para `~/.local/bin/knobcontext` e habilitação do serviço), e `KnobContext-x86_64.AppImage` (12 MB, RSS ~19.5 MB em execução) gerado e validado.
+**Fase 7 (Hub contextual por app em foco + Modo Aprender)** concluída e validada: módulos do Hub por perfil com herança explícita (`None` = herda do pai/`global`; `Some(vec![])` = Hub vazio explícito; `Some(vec![...])` = substitui), 6 novos módulos nativos contextuais (`browser_tabs`, `media_control`, `zoom`, `scroll_page`, `brush_size`, `undo_redo`), snapshot travado durante a interação do Hub, editor de módulos por perfil nas Configurações (`Ações do Knob | Módulos do Hub`), e janela flutuante dedicada de **Modo Aprender** (`src/ui/learn.slint` + `src/ui/learn_mod.rs`). AppImage (`KnobContext-x86_64.AppImage`) regerado e 70/70 testes unitários passando.
 
 ## Concluído
 - **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
@@ -54,6 +54,15 @@
   - **Serviço `systemd --user` (`packaging/systemd/knobcontext.service`)**: `WantedBy=default.target` + `After=graphical-session.target hyprland-session.target` + `ExecStartPre=/bin/sleep 2` (confirmado no ambiente que apenas `default.target` está ativo, enquanto `WAYLAND_DISPLAY` e `HYPRLAND_INSTANCE_SIGNATURE` são importados pelo Hyprland).
   - **AppImage validado (`KnobContext-x86_64.AppImage`, 12 MB)**: gerado com `appimagetool` (`~/.local/bin/appimagetool`) + `fuse2`, validado em execução real (RSS ~19.5 MB, warning udev ausente, conexão Hyprland, registro Tray SNI e `ungrab()` gracioso). `install.sh` aprimorado com verificação do grupo `input`, regra udev (`evdev` + `hidraw`), instalação em `~/.local/bin/knobcontext` e habilitação do `systemd --user`.
   - Validação: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (64/64).
+- **Fase 7 — Hub Contextual + Modo Aprender**:
+  - **Hub Contextual por perfil (`config.rs`, `overlay_hub.rs`)**: campo `hub_modules: Option<Vec<OverlayItemConfig>>` em `ProfileConfig` com desserialização resiliente (aceita aliases `type`/`label` e ignora módulos desconhecidos com `warn!`).
+    - **Semântica de herança de módulos** (diferente da herança campo-a-campo de ações): `None` (omitido no TOML) herda pela cadeia `inherits` até `global` / `overlay.items`; `Some(vec![])` define Hub explicitamente vazio (não herda); `Some(vec![...])` substitui os módulos do pai.
+    - **6 novos módulos nativos**: `browser_tabs` (`Ctrl+Tab`/`Ctrl+Shift+Tab`/`Ctrl+T`/`Ctrl+W`), `media_control` (`playerctl play-pause`/`next`/`previous`), `zoom` (`Ctrl+Plus`/`Ctrl+Minus`/`Ctrl+0`), `scroll_page` (`PageUp`/`PageDown`/`Home`/`End`), `brush_size` (`]`/`[`), `undo_redo` (`Ctrl+Z`/`Ctrl+Shift+Z`).
+    - **`HubController`**: tira snapshot dos módulos habilitados do perfil ativo na abertura e mantém esse snapshot travado até fechar (evitando troca no meio da interação).
+  - **Editor de Módulos por Perfil (`ui/settings.slint`, `ui/settings_mod.rs`)**: sub-aba `Ações do Knob | Módulos do Hub` dentro de `Perfis & Contexto` com indicador de herança (*"Herdado de \<pai\> — clique para customizar"* vs *"Definido neste perfil"* + *Restaurar herança*), reordenação `↑`/`↓`, edição de rótulo, remoção e seletor `+ Adicionar módulo`.
+  - **Modo Aprender (`ui/learn.slint`, `ui/learn_mod.rs`)**: janela flutuante sempre no topo (`420×144px`, com foco de teclado via `wl_keyboard` do Slint) acionada pelo botão **Aprender** em cada `ActionRow` e no popover de atalhos. Exibe a combinação em tempo real, confirma automaticamente `200ms` após soltar todas as teclas (ou imediatamente com `Enter`) e cancela com `Esc`.
+    - *Limitação no Wayland*: atalhos interceptados pelo compositor antes de chegar à janela (ex.: `Super+E` no Hyprland) não são entregues ao `wl_keyboard` sem `zwp_keyboard_shortcuts_inhibit_manager_v1` (não exposto pelo Slint 1.19 sem crates extras); o fallback é digitar manualmente no campo de texto do construtor visual.
+  - Validação: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (70/70), AppImage regerado.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
