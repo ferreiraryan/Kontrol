@@ -5,6 +5,7 @@ import {
     StepperControl,
     AppListItem,
     MacroStepItem,
+    PresetListItem,
 } from "theme.slint";
 
 component CategoryNavItem inherits Rectangle {
@@ -111,6 +112,11 @@ export component ActionEditorPopover inherits Rectangle {
     // 0: Atalho de teclado
     in-out property <string> shortcut-text;
     in property <[string]> shortcut-parts: [];
+    in property <string> active-preset-label: "";
+    in property <bool> preset-dropdown-open: false;
+    in property <[string]> preset-apps: [];
+    in property <int> preset-app-index: 0;
+    in property <[PresetListItem]> preset-items: [];
 
     // 1: Mídia
     in property <int> selected-media-index: 0;
@@ -142,6 +148,9 @@ export component ActionEditorPopover inherits Rectangle {
     callback shortcut-text-edited(string);
     callback toggle-shortcut-modifier(string);
     callback apply-shortcut-preset(string);
+    callback toggle-preset-dropdown();
+    callback select-preset-app(int);
+    callback select-preset-item(int);
     callback clear-shortcut();
     callback select-media(int);
     callback app-search-changed(string);
@@ -357,21 +366,48 @@ export component ActionEditorPopover inherits Rectangle {
                     border-color: Theme.border-subtle;
                     clip: true;
 
-                    // 0: Atalho de teclado (Keycaps + Modo Aprender + Chips + Manual)
+                    // 0: Atalho de teclado (Keycaps + Modo Aprender + Presets por App + Chips + Manual)
                     if root.selected-type-index == 0: VerticalLayout {
                         padding: 16px;
-                        spacing: 12px;
+                        spacing: 10px;
 
-                        Text {
-                            text: "Atalho de teclado";
-                            color: Theme.text-primary;
-                            font-size: 14px;
-                            font-weight: 700;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: space-between;
+
+                            Text {
+                                text: "Atalho de teclado";
+                                color: Theme.text-primary;
+                                font-size: 14px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+
+                            if root.active-preset-label != "": Rectangle {
+                                height: 22px;
+                                border-radius: 6px;
+                                background: Theme.success-soft;
+                                border-width: 1px;
+                                border-color: rgba(34, 197, 94, 0.4);
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: root.active-preset-label;
+                                        color: #86efac;
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
                         }
 
-                        // Banner de Keycaps + Ação principal de captura
+                        // Banner de Keycaps + Ação principal de captura + Dropdown Presets
                         Rectangle {
-                            height: 92px;
+                            height: 86px;
                             border-radius: 10px;
                             background: Theme.bg-input;
                             border-width: 1px;
@@ -380,8 +416,8 @@ export component ActionEditorPopover inherits Rectangle {
                                 : Theme.border-default;
 
                             VerticalLayout {
-                                padding: 12px;
-                                spacing: 10px;
+                                padding: 10px;
+                                spacing: 8px;
                                 alignment: center;
 
                                 HorizontalLayout {
@@ -408,7 +444,7 @@ export component ActionEditorPopover inherits Rectangle {
                                         }
 
                                         Rectangle {
-                                            height: 28px;
+                                            height: 26px;
                                             border-radius: 6px;
                                             background: Theme.bg-elevated;
                                             border-width: 1px;
@@ -436,8 +472,15 @@ export component ActionEditorPopover inherits Rectangle {
                                     AppButton {
                                         height: 28px;
                                         primary: true;
-                                        text: "⌨ Gravar tecla (Modo Aprender)";
+                                        text: "⌨ Gravar tecla";
                                         clicked => { root.open-learn-shortcut(); }
+                                    }
+
+                                    AppButton {
+                                        height: 28px;
+                                        active: root.preset-dropdown-open;
+                                        text: root.preset-dropdown-open ? "Presets ▴" : "Presets ▾";
+                                        clicked => { root.toggle-preset-dropdown(); }
                                     }
 
                                     if root.shortcut-text != "": AppButton {
@@ -449,8 +492,82 @@ export component ActionEditorPopover inherits Rectangle {
                             }
                         }
 
-                        // Chips rápidos de modificadores (útil para atalhos com Super no Wayland)
-                        VerticalLayout {
+                        // Dropdown inline de Presets por aplicativo (Firefox / VSCode / Terminal)
+                        if root.preset-dropdown-open: Rectangle {
+                            vertical-stretch: 1;
+                            border-radius: 9px;
+                            background: Theme.bg-card;
+                            border-width: 1px;
+                            border-color: Theme.border-accent;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    for app-name[aidx] in root.preset-apps: AppButton {
+                                        height: 26px;
+                                        font-size: 11px;
+                                        active: aidx == root.preset-app-index;
+                                        text: app-name;
+                                        clicked => { root.select-preset-app(aidx); }
+                                    }
+                                }
+
+                                Flickable {
+                                    vertical-stretch: 1;
+                                    content-height: root.preset-items.length * 34px;
+
+                                    VerticalLayout {
+                                        spacing: 4px;
+                                        alignment: start;
+
+                                        for item[pidx] in root.preset-items: Rectangle {
+                                            height: 30px;
+                                            border-radius: 6px;
+                                            background: pr-touch.has-hover ? Theme.accent-soft : Theme.bg-input;
+                                            border-width: 1px;
+                                            border-color: pr-touch.has-hover ? Theme.border-accent : Theme.border-subtle;
+
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+
+                                                Text {
+                                                    horizontal-stretch: 1;
+                                                    text: item.name;
+                                                    color: Theme.text-primary;
+                                                    font-size: 12px;
+                                                    font-weight: 500;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
+
+                                                Text {
+                                                    text: item.combo;
+                                                    color: Theme.accent-text;
+                                                    font-size: 11px;
+                                                    font-weight: 600;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+
+                                            pr-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.select-preset-item(pidx); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Chips rápidos de modificadores (visível quando dropdown de presets está fechado)
+                        if !root.preset-dropdown-open: VerticalLayout {
                             spacing: 6px;
 
                             Text {
@@ -488,7 +605,7 @@ export component ActionEditorPopover inherits Rectangle {
                         }
 
                         // Atalhos populares em 1 clique
-                        VerticalLayout {
+                        if !root.preset-dropdown-open: VerticalLayout {
                             spacing: 6px;
 
                             Text {
@@ -536,7 +653,7 @@ export component ActionEditorPopover inherits Rectangle {
                         }
 
                         // Edição manual (fallback)
-                        VerticalLayout {
+                        if !root.preset-dropdown-open: VerticalLayout {
                             spacing: 5px;
 
                             Text {
@@ -552,7 +669,7 @@ export component ActionEditorPopover inherits Rectangle {
                             }
                         }
 
-                        Rectangle { vertical-stretch: 1; }
+                        if !root.preset-dropdown-open: Rectangle { vertical-stretch: 1; }
                     }
 
                     // 1: Controle de mídia (Grid 2x3 em português)

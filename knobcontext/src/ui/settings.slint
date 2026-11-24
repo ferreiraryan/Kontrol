@@ -10,6 +10,7 @@ import {
     ControlSlotView,
     AppListItem,
     MacroStepItem,
+    PresetListItem,
 } from "theme.slint";
 import { ActionEditorPopover } from "action_editor.slint";
 
@@ -354,6 +355,11 @@ export component SettingsWindow inherits Window {
     in property <string> editor-preview-text: "";
     in-out property <string> editor-shortcut-text;
     in property <[string]> editor-shortcut-parts: [];
+    in property <string> editor-active-preset-label: "";
+    in property <bool> editor-preset-dropdown-open: false;
+    in property <[string]> editor-preset-apps: [];
+    in property <int> editor-preset-app-index: 0;
+    in property <[PresetListItem]> editor-preset-items: [];
     in property <int> editor-media-index: 0;
     in-out property <string> editor-app-search;
     in property <[AppListItem]> editor-filtered-apps;
@@ -429,6 +435,9 @@ export component SettingsWindow inherits Window {
     callback editor-shortcut-text-edited(string);
     callback editor-toggle-shortcut-modifier(string);
     callback editor-apply-shortcut-preset(string);
+    callback editor-toggle-preset-dropdown();
+    callback editor-select-preset-app(int);
+    callback editor-select-preset-item(int);
     callback editor-clear-shortcut();
     callback editor-select-media(int);
     callback editor-app-search-changed(string);
@@ -2013,6 +2022,11 @@ export component SettingsWindow inherits Window {
         preview-text: root.editor-preview-text;
         shortcut-text <=> root.editor-shortcut-text;
         shortcut-parts: root.editor-shortcut-parts;
+        active-preset-label: root.editor-active-preset-label;
+        preset-dropdown-open: root.editor-preset-dropdown-open;
+        preset-apps: root.editor-preset-apps;
+        preset-app-index: root.editor-preset-app-index;
+        preset-items: root.editor-preset-items;
         selected-media-index: root.editor-media-index;
         app-search <=> root.editor-app-search;
         filtered-apps: root.editor-filtered-apps;
@@ -2033,6 +2047,9 @@ export component SettingsWindow inherits Window {
         shortcut-text-edited(v) => { root.editor-shortcut-text-edited(v); }
         toggle-shortcut-modifier(m) => { root.editor-toggle-shortcut-modifier(m); }
         apply-shortcut-preset(p) => { root.editor-apply-shortcut-preset(p); }
+        toggle-preset-dropdown => { root.editor-toggle-preset-dropdown(); }
+        select-preset-app(i) => { root.editor-select-preset-app(i); }
+        select-preset-item(i) => { root.editor-select-preset-item(i); }
         clear-shortcut => { root.editor-clear-shortcut(); }
         select-media(i) => { root.editor-select-media(i); }
         app-search-changed(q) => { root.editor-app-search-changed(q); }

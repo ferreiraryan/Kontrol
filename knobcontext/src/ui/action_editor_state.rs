@@ -46,6 +46,9 @@ pub struct ActionEditorState {
     pub custom_title: Option<String>,
     pub selected_type_index: usize,
     pub shortcut_text: String,
+    pub active_preset_label: String,
+    pub preset_dropdown_open: bool,
+    pub preset_app_index: usize,
     pub capturing_shortcut: bool,
     pub media_index: usize,
     pub app_search: String,
@@ -69,6 +72,9 @@ impl Default for ActionEditorState {
             custom_title: None,
             selected_type_index: 8, // Nenhuma ação
             shortcut_text: String::new(),
+            active_preset_label: String::new(),
+            preset_dropdown_open: false,
+            preset_app_index: 0,
             capturing_shortcut: false,
             media_index: 0,
             app_search: String::new(),
@@ -145,6 +151,7 @@ impl ActionEditorState {
 
     pub fn select_type(&mut self, index: usize) {
         self.selected_type_index = index.min(8);
+        self.preset_dropdown_open = false;
         self.capturing_shortcut = false;
         self.capturing_macro_key = false;
     }
@@ -152,8 +159,24 @@ impl ActionEditorState {
     pub fn cancel(&mut self) {
         self.is_open = false;
         self.target_slot = None;
+        self.preset_dropdown_open = false;
         self.capturing_shortcut = false;
         self.capturing_macro_key = false;
+    }
+
+    /// Aplica um preset nomeado de aplicativo (ex.: Firefox — Nova aba -> `Ctrl+T`).
+    pub fn apply_named_preset(&mut self, app: &str, name: &str, combo: &str) {
+        self.shortcut_text = combo.to_string();
+        self.active_preset_label = format!("Preset: {app} — {name}");
+        self.preset_dropdown_open = false;
+    }
+
+    /// Atualiza manualmente o campo de atalho e limpa o indicador de preset ativo.
+    pub fn set_manual_shortcut(&mut self, value: String) {
+        if self.shortcut_text != value {
+            self.shortcut_text = value;
+            self.active_preset_label.clear();
+        }
     }
 
     pub fn add_macro_key_step(&mut self, raw_combo: &str) -> Result<(), KnobError> {
@@ -253,6 +276,7 @@ impl ActionEditorState {
         }
         rebuilt.extend(others);
         self.shortcut_text = rebuilt.join("+");
+        self.active_preset_label.clear();
     }
 
     /// Retorna as teclas individuais do atalho atual para renderização como keycaps visuais.
@@ -566,5 +590,23 @@ mod tests {
             MacroStep::Keys(vec!["Ctrl".into(), "C".into()])
         );
         assert_eq!(st.live_preview_summary(&[]), "Macro • 3 passos");
+    }
+
+    #[test]
+    fn named_preset_sets_indicator_and_clears_on_manual_edit() {
+        let mut st = ActionEditorState::default();
+        st.open(ControlSlot::Key1, &ActionType::None);
+        st.select_type(0);
+        st.preset_dropdown_open = true;
+
+        st.apply_named_preset("Firefox", "Nova aba", "Ctrl+T");
+        assert_eq!(st.shortcut_text, "Ctrl+T");
+        assert_eq!(st.active_preset_label, "Preset: Firefox — Nova aba");
+        assert!(!st.preset_dropdown_open);
+
+        // Editar manualmente limpa o indicador de preset
+        st.set_manual_shortcut("Ctrl+Shift+T".to_string());
+        assert_eq!(st.shortcut_text, "Ctrl+Shift+T");
+        assert!(st.active_preset_label.is_empty());
     }
 }

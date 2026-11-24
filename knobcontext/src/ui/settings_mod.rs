@@ -1,3 +1,6 @@
+use crate::action_presets::{
+    apps as shortcut_preset_apps, presets_for_app as shortcut_presets_for_app, suggested_app_index,
+};
 use crate::actions_catalog::{
     action_summary, action_type_index, action_type_title, list_desktop_apps, ActionType, DesktopApp,
 };
@@ -664,6 +667,7 @@ impl SettingsController {
                     .unwrap_or_else(|| (String::new(), String::new(), ActionType::None));
                 d.editor_target = Some(EditorTarget::ProfileSlot(slot));
                 d.editor.open(slot, &current_action);
+                d.editor.preset_app_index = suggested_app_index(&profile_name);
                 win.set_editor_profile_context_label(SharedString::from(profile_name));
                 win.set_editor_inherited_hint(SharedString::from(inherited_hint));
                 win.set_editor_error_message(SharedString::from(""));
@@ -768,7 +772,7 @@ impl SettingsController {
                             return;
                         };
                         let mut d = draft_inner.borrow_mut();
-                        d.editor.shortcut_text = combo;
+                        d.editor.set_manual_shortcut(combo);
                         d.editor.capturing_shortcut = false;
                         w.set_editor_error_message(SharedString::from(""));
                         sync_editor_to_ui(&w, &d.editor, &d.desktop_apps);
@@ -1463,7 +1467,7 @@ fn wire_action_editor_callbacks(
         window.on_editor_shortcut_text_edited(move |val| {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
-            d.editor.shortcut_text = val.to_string();
+            d.editor.set_manual_shortcut(val.to_string());
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
         });
     }
@@ -1487,9 +1491,51 @@ fn wire_action_editor_callbacks(
         window.on_editor_apply_shortcut_preset(move |preset| {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
-            d.editor.shortcut_text = preset.to_string();
+            d.editor.set_manual_shortcut(preset.to_string());
             win.set_editor_error_message(SharedString::from(""));
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_toggle_preset_dropdown(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.editor.preset_dropdown_open = !d.editor.preset_dropdown_open;
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_select_preset_app(move |app_idx| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            let max_idx = shortcut_preset_apps().len().saturating_sub(1);
+            d.editor.preset_app_index = (app_idx.max(0) as usize).min(max_idx);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_select_preset_item(move |preset_idx| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            let apps = shortcut_preset_apps();
+            if let Some(app_name) = apps.get(d.editor.preset_app_index) {
+                let items = shortcut_presets_for_app(app_name);
+                if let Some(preset) = items.get(preset_idx.max(0) as usize) {
+                    d.editor
+                        .apply_named_preset(preset.app, preset.name, preset.combo);
+                    win.set_editor_error_message(SharedString::from(""));
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                }
+            }
         });
     }
 
@@ -1500,6 +1546,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.shortcut_text.clear();
+            d.editor.active_preset_label.clear();
             win.set_editor_error_message(SharedString::from(""));
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
         });

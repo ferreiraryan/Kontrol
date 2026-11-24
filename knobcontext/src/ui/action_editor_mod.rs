@@ -1,6 +1,7 @@
+use crate::action_presets::{apps as preset_apps, presets_for_app};
 use crate::actions_catalog::{DesktopApp, MacroStep};
 use crate::ui::action_editor_state::ActionEditorState;
-use crate::ui::{AppListItem, MacroStepItem, SettingsWindow};
+use crate::ui::{AppListItem, MacroStepItem, PresetListItem, SettingsWindow};
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -117,6 +118,30 @@ pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps:
         .map(SharedString::from)
         .collect();
     win.set_editor_shortcut_parts(ModelRc::from(Rc::new(VecModel::from(keycap_parts))));
+    win.set_editor_active_preset_label(SharedString::from(editor.active_preset_label.as_str()));
+    win.set_editor_preset_dropdown_open(editor.preset_dropdown_open);
+
+    let apps_list = preset_apps();
+    let app_idx = editor
+        .preset_app_index
+        .min(apps_list.len().saturating_sub(1));
+    let app_labels: Vec<SharedString> = apps_list.iter().map(|a| SharedString::from(*a)).collect();
+    win.set_editor_preset_apps(ModelRc::from(Rc::new(VecModel::from(app_labels))));
+    win.set_editor_preset_app_index(app_idx as i32);
+
+    let preset_items: Vec<PresetListItem> = apps_list
+        .get(app_idx)
+        .map(|app_name| {
+            presets_for_app(app_name)
+                .into_iter()
+                .map(|p| PresetListItem {
+                    name: SharedString::from(p.name),
+                    combo: SharedString::from(p.combo),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    win.set_editor_preset_items(ModelRc::from(Rc::new(VecModel::from(preset_items))));
 
     win.set_editor_media_index(editor.media_index as i32);
     win.set_editor_app_search(SharedString::from(editor.app_search.as_str()));
