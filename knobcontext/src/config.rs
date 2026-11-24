@@ -67,6 +67,8 @@ pub struct CustomGroupSlider {
     #[serde(default = "default_slider_step")]
     pub step: i32,
     #[serde(default)]
+    pub infinite: bool,
+    #[serde(default)]
     pub up_action: ActionConfig,
     #[serde(default)]
     pub down_action: ActionConfig,
@@ -139,6 +141,8 @@ pub enum OverlayItemKind {
     CustomSlider {
         #[serde(default = "default_slider_step")]
         step: i32,
+        #[serde(default)]
+        infinite: bool,
         #[serde(default)]
         up_action: Box<ActionConfig>,
         #[serde(default)]
@@ -1854,6 +1858,7 @@ knob_cw = "VolumeUp"
                         action: ActionConfig::None,
                         slider: Some(CustomGroupSlider {
                             step: 10,
+                            infinite: true,
                             up_action: ActionConfig::Shortcut {
                                 keys: vec!["Ctrl".into(), "Plus".into()],
                             },
@@ -1868,7 +1873,7 @@ knob_cw = "VolumeUp"
                             toggle_command: None,
                             read_command: Some("echo 40".to_string()),
                         }),
-                        icon: None,
+                        icon: Some("/tmp/zoom_icon.png".to_string()),
                     },
                 ],
             },
@@ -1880,6 +1885,7 @@ knob_cw = "VolumeUp"
             icon: None,
             kind: OverlayItemKind::CustomSlider {
                 step: 5,
+                infinite: false,
                 up_action: Box::new(ActionConfig::Exec {
                     command: "hyprctl keyword cursor:zoom_factor 2".to_string(),
                 }),

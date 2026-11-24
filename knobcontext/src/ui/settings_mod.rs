@@ -1166,6 +1166,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 icon: None,
                 kind: OverlayItemKind::CustomSlider {
                     step: 5,
+                    infinite: false,
                     up_action: Box::new(ActionConfig::None),
                     down_action: Box::new(ActionConfig::None),
                     toggle_action: Box::new(ActionConfig::None),
@@ -1384,6 +1385,107 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
         });
     }
 
+    // Modo do Slider Customizado (Porcentagem vs. Infinito)
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_set_slider_infinite(move |is_inf| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            apply_hub_fields_to_draft(&win, &mut d);
+            let idx = d.hub_selected_index;
+            if let Some(OverlayItemConfig {
+                kind: OverlayItemKind::CustomSlider { infinite, .. },
+                ..
+            }) = d.base_config.overlay.items.get_mut(idx)
+            {
+                if *infinite != is_inf {
+                    *infinite = is_inf;
+                    d.dirty = true;
+                }
+            }
+            sync_all_to_ui(&win, &d);
+        });
+    }
+
+    // Modo de um Slider dentro de CustomGroup (Porcentagem vs. Infinito)
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_group_set_slider_infinite(move |is_inf| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            apply_hub_fields_to_draft(&win, &mut d);
+            let idx = d.hub_selected_index;
+            let eidx = d.hub_group_selected_entry;
+            if let Some(OverlayItemConfig {
+                kind: OverlayItemKind::CustomGroup { entries },
+                ..
+            }) = d.base_config.overlay.items.get_mut(idx)
+            {
+                if let Some(sl) = entries.get_mut(eidx).and_then(|e| e.slider.as_mut()) {
+                    if sl.infinite != is_inf {
+                        sl.infinite = is_inf;
+                        d.dirty = true;
+                    }
+                }
+            }
+            sync_all_to_ui(&win, &d);
+        });
+    }
+
+    // Imagem opcional para a entrada selecionada de CustomGroup (Ação ou Slider)
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_group_pick_entry_icon(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "svg"])
+                .pick_file()
+            {
+                let mut d = draft_ref.borrow_mut();
+                apply_hub_fields_to_draft(&win, &mut d);
+                let idx = d.hub_selected_index;
+                let eidx = d.hub_group_selected_entry;
+                if let Some(OverlayItemConfig {
+                    kind: OverlayItemKind::CustomGroup { entries },
+                    ..
+                }) = d.base_config.overlay.items.get_mut(idx)
+                {
+                    if let Some(entry) = entries.get_mut(eidx) {
+                        entry.icon = Some(path.to_string_lossy().into_owned());
+                        d.dirty = true;
+                    }
+                }
+                sync_all_to_ui(&win, &d);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_group_clear_entry_icon(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            apply_hub_fields_to_draft(&win, &mut d);
+            let idx = d.hub_selected_index;
+            let eidx = d.hub_group_selected_entry;
+            if let Some(OverlayItemConfig {
+                kind: OverlayItemKind::CustomGroup { entries },
+                ..
+            }) = d.base_config.overlay.items.get_mut(idx)
+            {
+                if let Some(entry) = entries.get_mut(eidx) {
+                    if entry.icon.take().is_some() {
+                        d.dirty = true;
+                    }
+                }
+            }
+            sync_all_to_ui(&win, &d);
+        });
+    }
+
     // Passo do Slider Customizado
     {
         let weak = window.as_weak();
@@ -1466,6 +1568,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                     action: ActionConfig::None,
                     slider: Some(CustomGroupSlider {
                         step: 5,
+                        infinite: false,
                         up_action: ActionConfig::None,
                         down_action: ActionConfig::None,
                         toggle_action: ActionConfig::None,
@@ -2770,6 +2873,7 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
             }
             OverlayItemKind::CustomSlider {
                 step,
+                infinite,
                 up_action,
                 down_action,
                 toggle_action,
@@ -2780,6 +2884,7 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
             } => {
                 win.set_hub_item_editor_mode(2);
                 win.set_hub_slider_step(*step);
+                win.set_hub_slider_infinite(*infinite);
                 let up_eff = resolve_slider_action(up_action, up_command);
                 let down_eff = resolve_slider_action(down_action, down_command);
                 let toggle_eff =
@@ -2795,7 +2900,12 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
                     .iter()
                     .map(|e| {
                         if let Some(ref sl) = e.slider {
-                            SharedString::from(format!("━ {} — Slider ({}%)", e.label, sl.step))
+                            let mode_txt = if sl.infinite {
+                                "∞".to_string()
+                            } else {
+                                format!("{}%", sl.step)
+                            };
+                            SharedString::from(format!("━ {} — Slider ({mode_txt})", e.label))
                         } else {
                             SharedString::from(format!(
                                 "▶ {} — {}",
@@ -2812,9 +2922,17 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
                 win.set_hub_group_selected_entry(eidx as i32);
                 if let Some(entry) = entries.get(eidx) {
                     win.set_hub_group_entry_name(SharedString::from(entry.label.as_str()));
+                    let eicon = entry
+                        .icon
+                        .as_deref()
+                        .and_then(|p| std::path::Path::new(p).file_name().and_then(|n| n.to_str()))
+                        .or(entry.icon.as_deref())
+                        .unwrap_or("Automático / nenhuma");
+                    win.set_hub_group_entry_icon_label(SharedString::from(eicon));
                     if let Some(ref sl) = entry.slider {
                         win.set_hub_group_entry_is_slider(true);
                         win.set_hub_group_slider_step(sl.step);
+                        win.set_hub_group_slider_infinite(sl.infinite);
                         win.set_hub_group_slider_up_summary(format_summary(
                             &sl.effective_up_action(),
                             &draft.desktop_apps,
@@ -2833,6 +2951,7 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
                         win.set_hub_group_entry_action_summary(SharedString::from("Slider"));
                     } else {
                         win.set_hub_group_entry_is_slider(false);
+                        win.set_hub_group_slider_infinite(false);
                         win.set_hub_group_entry_action_summary(format_summary(
                             &entry.action,
                             &draft.desktop_apps,
@@ -2840,7 +2959,9 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
                     }
                 } else {
                     win.set_hub_group_entry_name(SharedString::from(""));
+                    win.set_hub_group_entry_icon_label(SharedString::from("Automático / nenhuma"));
                     win.set_hub_group_entry_is_slider(false);
+                    win.set_hub_group_slider_infinite(false);
                     win.set_hub_group_entry_action_summary(SharedString::from("Nenhuma"));
                 }
             }

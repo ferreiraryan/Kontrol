@@ -308,6 +308,16 @@ fn group_slider_key(item_id: &str, entry_idx: usize) -> String {
     format!("{item_id}::{entry_idx}")
 }
 
+fn format_infinite_badge(steps: i32) -> String {
+    if steps > 0 {
+        format!("+{steps}")
+    } else if steps < 0 {
+        format!("{steps}")
+    } else {
+        "∞".to_string()
+    }
+}
+
 /// Janela pós-fechamento (ms) durante a qual a mesma tecla usada para fechar o Hub
 /// (`Key1` ou `Key3`) é suprimida para não vazar como ação do perfil no app em foco.
 const POST_CLOSE_SUPPRESS_MS: u64 = 350;
@@ -753,6 +763,7 @@ impl HubController {
                     kind:
                         OverlayItemKind::CustomSlider {
                             step,
+                            infinite,
                             up_action,
                             down_action,
                             up_command,
@@ -762,13 +773,23 @@ impl HubController {
                     ..
                 }) = self.active_modules.iter().find(|i| i.id == id_clone)
                 {
-                    let cur = self
-                        .custom_slider_values
-                        .get(&id_clone)
-                        .copied()
-                        .unwrap_or(50);
-                    let next = (cur + dir * (*step).max(1)).clamp(0, 100);
-                    self.custom_slider_values.insert(id_clone, next);
+                    if *infinite {
+                        let cur = self
+                            .custom_slider_values
+                            .get(&id_clone)
+                            .copied()
+                            .unwrap_or(0);
+                        self.custom_slider_values
+                            .insert(id_clone, cur.saturating_add(dir));
+                    } else {
+                        let cur = self
+                            .custom_slider_values
+                            .get(&id_clone)
+                            .copied()
+                            .unwrap_or(50);
+                        let next = (cur + dir * (*step).max(1)).clamp(0, 100);
+                        self.custom_slider_values.insert(id_clone, next);
+                    }
                     let act = if dir > 0 {
                         resolve_slider_action(up_action, up_command)
                     } else {
@@ -794,9 +815,15 @@ impl HubController {
                     });
                 if let Some(sl) = slider_cfg {
                     let key = group_slider_key(&id_clone, entry_idx);
-                    let cur = self.custom_slider_values.get(&key).copied().unwrap_or(50);
-                    let next = (cur + dir * sl.step.max(1)).clamp(0, 100);
-                    self.custom_slider_values.insert(key, next);
+                    if sl.infinite {
+                        let cur = self.custom_slider_values.get(&key).copied().unwrap_or(0);
+                        self.custom_slider_values
+                            .insert(key, cur.saturating_add(dir));
+                    } else {
+                        let cur = self.custom_slider_values.get(&key).copied().unwrap_or(50);
+                        let next = (cur + dir * sl.step.max(1)).clamp(0, 100);
+                        self.custom_slider_values.insert(key, next);
+                    }
                     let act = if dir > 0 {
                         sl.effective_up_action()
                     } else {
@@ -1209,16 +1236,18 @@ impl HubController {
             OverlayItemKind::CustomGroup { entries } => {
                 let item_id = item.id;
                 for (eidx, entry) in entries.iter().enumerate() {
-                    if let Some(cmd) = entry
-                        .slider
-                        .as_ref()
-                        .and_then(|sl| sl.read_command.as_deref())
-                        .filter(|s| !s.trim().is_empty())
-                    {
-                        effects.push(HubEffect::System(SystemRequest::ReadCustomSlider {
-                            item_id: group_slider_key(&item_id, eidx),
-                            read_command: cmd.to_string(),
-                        }));
+                    if let Some(sl) = entry.slider.as_ref() {
+                        if sl.infinite {
+                            self.custom_slider_values
+                                .insert(group_slider_key(&item_id, eidx), 0);
+                        } else if let Some(cmd) =
+                            sl.read_command.as_deref().filter(|s| !s.trim().is_empty())
+                        {
+                            effects.push(HubEffect::System(SystemRequest::ReadCustomSlider {
+                                item_id: group_slider_key(&item_id, eidx),
+                                read_command: cmd.to_string(),
+                            }));
+                        }
                     }
                 }
                 self.screen = HubScreen::CustomGroup {
@@ -1227,14 +1256,20 @@ impl HubController {
                 };
                 self.loading = false;
             }
-            OverlayItemKind::CustomSlider { read_command, .. } => {
+            OverlayItemKind::CustomSlider {
+                infinite,
+                read_command,
+                ..
+            } => {
                 self.screen = HubScreen::CustomSlider {
                     item_id: item.id.clone(),
                     title: item.title,
                 };
                 self.interaction = InteractionMode::Adjusting;
                 self.loading = false;
-                if let Some(cmd) = read_command.filter(|s| !s.trim().is_empty()) {
+                if infinite {
+                    self.custom_slider_values.insert(item.id, 0);
+                } else if let Some(cmd) = read_command.filter(|s| !s.trim().is_empty()) {
                     effects.push(HubEffect::System(SystemRequest::ReadCustomSlider {
                         item_id: item.id,
                         read_command: cmd,
@@ -1678,25 +1713,6 @@ impl HubController {
                     .is_some_and(|e| e.slider.is_some());
                 let mut cards = Vec::with_capacity(entries.len());
                 for (eidx, e) in entries.into_iter().enumerate() {
-                    if e.slider.is_some() {
-                        let key = group_slider_key(&item_id, eidx);
-                        let val = self.custom_slider_values.get(&key).copied().unwrap_or(50);
-                        cards.push(HubCardView {
-                            is_empty_slot: false,
-                            title: e.label,
-                            subtitle: "Slider • pressione para ajustar".to_string(),
-                            badge: format!("{val}%"),
-                            glyph: "━".to_string(),
-                            image_path: None,
-                            image_is_cover: false,
-                            value_percent: val,
-                            max_percent: 100,
-                            is_slider: true,
-                            is_active: true,
-                            is_muted: false,
-                        });
-                        continue;
-                    }
                     let auto_hint = match &e.action {
                         ActionConfig::Launch { desktop_file } => Some(desktop_file.clone()),
                         _ => None,
@@ -1714,6 +1730,45 @@ impl HubController {
                         None
                     };
                     let image_is_cover = e.icon.is_some() && image_path.is_some();
+
+                    if let Some(ref sl) = e.slider {
+                        let key = group_slider_key(&item_id, eidx);
+                        if sl.infinite {
+                            let steps = self.custom_slider_values.get(&key).copied().unwrap_or(0);
+                            let badge = format_infinite_badge(steps);
+                            cards.push(HubCardView {
+                                is_empty_slot: false,
+                                title: e.label,
+                                subtitle: "Giro infinito • pressione para ajustar".to_string(),
+                                badge,
+                                glyph: "∞".to_string(),
+                                image_path,
+                                image_is_cover,
+                                value_percent: -1,
+                                max_percent: 100,
+                                is_slider: false,
+                                is_active: true,
+                                is_muted: false,
+                            });
+                        } else {
+                            let val = self.custom_slider_values.get(&key).copied().unwrap_or(50);
+                            cards.push(HubCardView {
+                                is_empty_slot: false,
+                                title: e.label,
+                                subtitle: "Slider • pressione para ajustar".to_string(),
+                                badge: format!("{val}%"),
+                                glyph: "━".to_string(),
+                                image_path,
+                                image_is_cover,
+                                value_percent: val,
+                                max_percent: 100,
+                                is_slider: true,
+                                is_active: true,
+                                is_muted: false,
+                            });
+                        }
+                        continue;
+                    }
                     cards.push(HubCardView {
                         is_empty_slot: false,
                         title: e.label,
@@ -1746,25 +1801,62 @@ impl HubController {
                 )
             }
             HubScreen::CustomSlider { item_id, title } => {
-                let val = self
-                    .custom_slider_values
-                    .get(&item_id)
-                    .copied()
-                    .unwrap_or(50);
-                let cards = vec![HubCardView {
-                    is_empty_slot: false,
-                    title: title.clone(),
-                    subtitle: "Gire o knob para ajustar".to_string(),
-                    badge: format!("{val}%"),
-                    glyph: "━".to_string(),
-                    image_path: None,
-                    image_is_cover: false,
-                    value_percent: val,
-                    max_percent: 100,
-                    is_slider: true,
-                    is_active: true,
-                    is_muted: false,
-                }];
+                let item_ref = self.active_modules.iter().find(|i| i.id == item_id);
+                let is_infinite = item_ref.is_some_and(|i| {
+                    matches!(i.kind, OverlayItemKind::CustomSlider { infinite: true, .. })
+                });
+                let icon_opt = item_ref.and_then(|i| i.icon.clone());
+                let image_path = if show_images {
+                    icon_opt
+                        .as_deref()
+                        .and_then(|p| self.resolve_icon_cached(p))
+                } else {
+                    None
+                };
+                let image_is_cover = icon_opt.is_some() && image_path.is_some();
+
+                let card = if is_infinite {
+                    let steps = self
+                        .custom_slider_values
+                        .get(&item_id)
+                        .copied()
+                        .unwrap_or(0);
+                    HubCardView {
+                        is_empty_slot: false,
+                        title: title.clone(),
+                        subtitle: "Giro infinito (sem limites)".to_string(),
+                        badge: format_infinite_badge(steps),
+                        glyph: "∞".to_string(),
+                        image_path,
+                        image_is_cover,
+                        value_percent: -1,
+                        max_percent: 100,
+                        is_slider: false,
+                        is_active: true,
+                        is_muted: false,
+                    }
+                } else {
+                    let val = self
+                        .custom_slider_values
+                        .get(&item_id)
+                        .copied()
+                        .unwrap_or(50);
+                    HubCardView {
+                        is_empty_slot: false,
+                        title: title.clone(),
+                        subtitle: "Gire o knob para ajustar".to_string(),
+                        badge: format!("{val}%"),
+                        glyph: "━".to_string(),
+                        image_path,
+                        image_is_cover,
+                        value_percent: val,
+                        max_percent: 100,
+                        is_slider: true,
+                        is_active: true,
+                        is_muted: false,
+                    }
+                };
+                let cards = vec![card];
                 let hint = if self.interaction == InteractionMode::Adjusting {
                     "Girar: Ajustar • Knob/K3/K1: Soltar • K2: Toggle".to_string()
                 } else {
@@ -2398,6 +2490,7 @@ mod tests {
                         action: ActionConfig::None,
                         slider: Some(CustomGroupSlider {
                             step: 10,
+                            infinite: false,
                             up_action: ActionConfig::Shortcut {
                                 keys: vec!["Ctrl".into(), "Plus".into()],
                             },
@@ -2533,5 +2626,83 @@ mod tests {
                 HubEffect::CloseOverlay,
             ]
         );
+    }
+
+    #[test]
+    fn infinite_slider_never_clamps_and_displays_infinity_or_step_delta() {
+        use crate::config::{ActionConfig, OverlayItemConfig, OverlayItemKind};
+
+        let mut cfg = Config::default();
+        cfg.overlay.items = vec![OverlayItemConfig {
+            id: "scroll_inf".to_string(),
+            title: "Scroll Infinito".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::CustomSlider {
+                step: 5,
+                infinite: true,
+                up_action: Box::new(ActionConfig::Scroll {
+                    delta: -1,
+                    horizontal: false,
+                }),
+                down_action: Box::new(ActionConfig::Scroll {
+                    delta: 1,
+                    horizontal: false,
+                }),
+                toggle_action: Box::new(ActionConfig::None),
+                up_command: String::new(),
+                down_command: String::new(),
+                toggle_command: None,
+                read_command: Some("echo 50".to_string()),
+            },
+        }];
+        let mode = ProfileMode::Auto;
+        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let t0 = Instant::now();
+
+        // Entrar no slider infinito NÃO envia ReadCustomSlider e exibe "∞" sem barra de progresso
+        let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
+        let fx_enter = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(20),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(!fx_enter
+            .iter()
+            .any(|f| matches!(f, HubEffect::System(SystemRequest::ReadCustomSlider { .. }))));
+        let Some(HubEffect::RenderOverlay(vm0)) = fx_enter.last() else {
+            panic!("esperava RenderOverlay");
+        };
+        assert!(!vm0.cards[3].is_slider);
+        assert_eq!(vm0.cards[3].glyph, "∞");
+        assert_eq!(vm0.cards[3].badge, "∞");
+
+        // Girar 150 vezes seguidas para cima continua executando sem travar em 100%
+        for i in 1..=150 {
+            let fx = hub.handle_event(
+                KnobEvent::RotateCw,
+                t0 + Duration::from_millis(20 + i),
+                &cfg,
+                &mode,
+                "global",
+            );
+            assert!(fx.contains(&HubEffect::ExecuteAction(ActionConfig::Scroll {
+                delta: -1,
+                horizontal: false,
+            })));
+        }
+        let fx_last = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(200),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let Some(HubEffect::RenderOverlay(vm_last)) = fx_last.last() else {
+            panic!("esperava RenderOverlay");
+        };
+        assert_eq!(vm_last.cards[3].badge, "+151");
     }
 }

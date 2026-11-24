@@ -332,9 +332,11 @@ export component SettingsWindow inherits Window {
     in property <string> hub-slider-toggle-summary: "Nenhuma";
     in-out property <string> hub-slider-read: "";
     in property <int> hub-slider-step: 5;
+    in property <bool> hub-slider-infinite: false;
     in property <[string]> hub-group-entry-labels: [];
     in property <int> hub-group-selected-entry: 0;
     in-out property <string> hub-group-entry-name: "";
+    in property <string> hub-group-entry-icon-label: "Automático / nenhuma";
     in property <bool> hub-group-entry-is-slider: false;
     in property <string> hub-group-entry-action-summary: "Nenhuma";
     in property <string> hub-group-slider-up-summary: "Nenhuma";
@@ -342,6 +344,7 @@ export component SettingsWindow inherits Window {
     in property <string> hub-group-slider-toggle-summary: "Nenhuma";
     in-out property <string> hub-group-slider-read: "";
     in property <int> hub-group-slider-step: 5;
+    in property <bool> hub-group-slider-infinite: false;
     in property <int> hub-volume-step: 5;
     in property <int> hub-brightness-step: 5;
     in property <int> hub-browse-timeout-sec: 5;
@@ -444,13 +447,17 @@ export component SettingsWindow inherits Window {
     callback hub-reset-defaults();
     callback hub-edit-quick-action();
     callback hub-edit-slider-action(int);
+    callback hub-set-slider-infinite(bool);
     callback hub-change-slider-step(int);
     callback hub-group-select-entry(int);
     callback hub-group-add-entry();
     callback hub-group-add-slider();
     callback hub-group-remove-entry();
+    callback hub-group-pick-entry-icon();
+    callback hub-group-clear-entry-icon();
     callback hub-group-edit-entry-action();
     callback hub-group-edit-slider-action(int);
+    callback hub-group-set-slider-infinite(bool);
     callback hub-group-change-slider-step(int);
     callback hub-change-volume-step(int);
     callback hub-change-brightness-step(int);
@@ -1498,6 +1505,13 @@ export component SettingsWindow inherits Window {
                             vertical-stretch: 1;
                             spacing: 8px;
 
+                            SegmentedTwo {
+                                first-label: "Porcentagem (0–100%)";
+                                second-label: "Girar Infinito (∞)";
+                                selected-index: root.hub-slider-infinite ? 1 : 0;
+                                selected(i) => { root.hub-set-slider-infinite(i == 1); }
+                            }
+
                             SimpleActionRow {
                                 control-label: "↻ Girar horário (+)";
                                 action-summary: root.hub-slider-up-summary;
@@ -1513,7 +1527,7 @@ export component SettingsWindow inherits Window {
                                 action-summary: root.hub-slider-toggle-summary;
                                 edit-clicked => { root.hub-edit-slider-action(2); }
                             }
-                            HorizontalLayout {
+                            if !root.hub-slider-infinite: HorizontalLayout {
                                 spacing: 10px;
                                 AppField {
                                     horizontal-stretch: 1;
@@ -1616,7 +1630,7 @@ export component SettingsWindow inherits Window {
                             }
 
                             if root.hub-group-entry-labels.length > 0: VerticalLayout {
-                                spacing: 7px;
+                                spacing: 6px;
 
                                 HorizontalLayout {
                                     spacing: 10px;
@@ -1632,7 +1646,7 @@ export component SettingsWindow inherits Window {
                                         value <=> root.hub-group-entry-name;
                                     }
 
-                                    if root.hub-group-entry-is-slider: VerticalLayout {
+                                    if root.hub-group-entry-is-slider && !root.hub-group-slider-infinite: VerticalLayout {
                                         spacing: 4px;
                                         Text {
                                             text: "Passo";
@@ -1649,6 +1663,51 @@ export component SettingsWindow inherits Window {
                                     }
                                 }
 
+                                // Imagem opcional para a entrada selecionada (Ação ou Slider)
+                                Rectangle {
+                                    height: 34px;
+                                    border-radius: 7px;
+                                    background: Theme.bg-card;
+                                    border-width: 1px;
+                                    border-color: Theme.border-subtle;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 8px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            text: "Imagem:";
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: root.hub-group-entry-icon-label;
+                                            color: Theme.text-secondary;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        AppButton {
+                                            y: 5px;
+                                            height: 24px;
+                                            font-size: 11px;
+                                            text: "Escolher...";
+                                            clicked => { root.hub-group-pick-entry-icon(); }
+                                        }
+                                        AppButton {
+                                            y: 5px;
+                                            height: 24px;
+                                            font-size: 11px;
+                                            ghost: true;
+                                            text: "Limpar";
+                                            clicked => { root.hub-group-clear-entry-icon(); }
+                                        }
+                                    }
+                                }
+
                                 if !root.hub-group-entry-is-slider: SimpleActionRow {
                                     control-label: "Ação da entrada";
                                     action-summary: root.hub-group-entry-action-summary;
@@ -1656,7 +1715,15 @@ export component SettingsWindow inherits Window {
                                 }
 
                                 if root.hub-group-entry-is-slider: VerticalLayout {
-                                    spacing: 6px;
+                                    spacing: 5px;
+
+                                    SegmentedTwo {
+                                        height: 28px;
+                                        first-label: "Porcentagem (0–100%)";
+                                        second-label: "Girar Infinito (∞)";
+                                        selected-index: root.hub-group-slider-infinite ? 1 : 0;
+                                        selected(i) => { root.hub-group-set-slider-infinite(i == 1); }
+                                    }
 
                                     SimpleActionRow {
                                         control-label: "↻ Girar horário (+)";
@@ -1673,7 +1740,7 @@ export component SettingsWindow inherits Window {
                                         action-summary: root.hub-group-slider-toggle-summary;
                                         edit-clicked => { root.hub-group-edit-slider-action(2); }
                                     }
-                                    AppField {
+                                    if !root.hub-group-slider-infinite: AppField {
                                         label: "Leitura 0-100 (comando shell opcional)";
                                         placeholder: "ex: echo 50";
                                         value <=> root.hub-group-slider-read;
