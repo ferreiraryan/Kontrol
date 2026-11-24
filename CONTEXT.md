@@ -19,7 +19,7 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-**v2 (Fases A, B, C e D)** concluída e validada: Modo Automático Adaptativo por contexto (`class` + `title` + `fullscreen` + `priority` + `inherits` + captura de janela + presets), Hub Interativo Hierárquico no overlay com modo `Adjusting` travado, `SystemWorker` assíncrono com coalescing, módulos nativos de **Áudio (Global + por App)**, **Saída de Som**, **Workspaces Hyprland**, **Brilho (Caelestia IPC + fallback `brightnessctl`)**, **Wallpapers & Controles Caelestia**, e aba **Overlay / Hub** totalmente customizável nas Configurações.
+**Fase 6 (Fechar o ciclo de usabilidade)** concluída e validada: Mini-HUD de 500ms ao girar fora do Hub, editor visual de `inherits` com cadeia clicável e validação anti-ciclo, serviço `systemd --user` adaptado ao Hyprland (`WantedBy=default.target`), `install.sh` completo (checagem do grupo `input`, udev `evdev` + `hidraw`, cópia para `~/.local/bin/knobcontext` e habilitação do serviço), e `KnobContext-x86_64.AppImage` (12 MB, RSS ~19.5 MB em execução) gerado e validado.
 
 ## Concluído
 - **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
@@ -48,6 +48,12 @@
   - Pipeline assíncrono leve de imagens/ícones opcionais: `system/icons.rs` (resolução `.desktop` → tema de ícones Linux), `system/thumbs.rs` (`image 0.25` redimensionando para `240×140` / `96×96` + cache em disco `~/.cache/knobcontext/thumbs/`), e cache LRU em RAM (`ui/mod.rs`, máx. 32 imagens ≈ ~4 MB) + pre-fetch dos vizinhos do carrossel.
 - **v2.2 — Animações Suaves 60fps no Overlay (`ui/animator.rs`)**:
   - Carrossel contínuo de **7 slots** (centro fixo em `3`, bordas `0` e `6` entrando/saindo via `clip: true` com espaçamento constante de `12px`), `CarouselAnimator` exponencial (`~175ms` scroll com acúmulo de inércia em rajadas, `~155ms` entrada do dock, `~140ms` troca de tela, `animate width` nos sliders), `slint::Timer` 16ms sob demanda (0% CPU em repouso) e toggle `overlay.animations_enabled` nas Configurações.
+- **Fase 6 — Fechar o ciclo de usabilidade**:
+  - **Mini-HUD (`ui/hud.slint`, `ui/hud_mod.rs`)**: janela independente `236×64px` no canto inferior direito (`KnobContext HUD`, `no_initial_focus = true` via Hyprland Lua IPC), exibida por `500ms` ao girar o knob fora do Hub, acumulando giros consecutivos, sincronizando volume real via `SystemWorker` e exibindo ícone + ação para atalhos sem barra.
+  - **Editor visual de `inherits` (`ui/settings.slint`, `ui/settings_mod.rs`)**: seletor `"Herda de:"` (com `"Nenhum"` padrão e exclusão do próprio perfil), validação de ciclo imediata na UI sem salvar, cadeia de herança clicável (`global → base → firefox`) e limpeza/atualização automática ao renomear ou remover perfis.
+  - **Serviço `systemd --user` (`packaging/systemd/knobcontext.service`)**: `WantedBy=default.target` + `After=graphical-session.target hyprland-session.target` + `ExecStartPre=/bin/sleep 2` (confirmado no ambiente que apenas `default.target` está ativo, enquanto `WAYLAND_DISPLAY` e `HYPRLAND_INSTANCE_SIGNATURE` são importados pelo Hyprland).
+  - **AppImage validado (`KnobContext-x86_64.AppImage`, 12 MB)**: gerado com `appimagetool` (`~/.local/bin/appimagetool`) + `fuse2`, validado em execução real (RSS ~19.5 MB, warning udev ausente, conexão Hyprland, registro Tray SNI e `ungrab()` gracioso). `install.sh` aprimorado com verificação do grupo `input`, regra udev (`evdev` + `hidraw`), instalação em `~/.local/bin/knobcontext` e habilitação do `systemd --user`.
+  - Validação: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (64/64).
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
@@ -70,6 +76,5 @@
   - `/dev/hidraw*`: `root:root` (`0600`).
 
 ## Próximos Passos
-1. Instalar `appimagetool` (ou `linuxdeploy`) e rodar `./packaging/build-appimage.sh` para gerar o `KnobContext-x86_64.AppImage`.
-2. Validar manualmente o ícone no tray do Caelestia dots, a persistência de `mode = "manual:global"` entre reinicializações e o script `packaging/appimage/install.sh`.
-3. *(Versões futuras)* Serviço `systemd --user`, suporte multiplataforma Windows/X11 (`focus-tracker` + `hidapi`) e (opcional) escrita de firmware pela Interface 1 (`EP 2 OUT`).
+1. Rodar `./packaging/appimage/install.sh` (requer `sudo` interativo) para instalar `/etc/udev/rules.d/99-knobcontext.rules`, copiar `KnobContext-x86_64.AppImage` para `~/.local/bin/knobcontext` e habilitar `knobcontext.service` no `systemd --user`; reconectar o knob e validar após reboot.
+2. *(Versões futuras)* Suporte multiplataforma Windows/X11 (`focus-tracker` + `hidapi`) e (opcional) escrita de firmware pela Interface 1 (`EP 2 OUT`, cuja permissão `hidraw` já está incluída em `99-knobcontext.rules`).

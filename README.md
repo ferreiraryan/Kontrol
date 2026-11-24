@@ -13,6 +13,8 @@ Mapeador global leve em Rust para dispositivos knob USB (3 teclas + botão rotat
   - **Navegação pelo hardware**: girar navega, **`KnobPress` ou `Key3`** entra/confirma/trava ajuste (`AJUSTANDO`), **`Key1`** volta/solta/fecha e **`Key2`** dispara a ação secundária contextual (*Mudo* no áudio, *Wallpaper aleatório* no Caelestia, *Sincronizar monitores* no brilho, *Special Workspace* nos workspaces).
   - **Módulos nativos**: **Perfis**, **Sons & Apps** (volume global + individual por aplicativo via `pactl`), **Saída de Som** (troca sink padrão + migra streams), **Workspaces** (Hyprland `.socket.sock`), **Brilho por Monitor** (Caelestia IPC + fallback `brightnessctl`), **Wallpapers** (Caelestia IPC, aplicado ao confirmar + aleatório) e **Controles Caelestia** (DND, Game Mode, Inibir Idle).
   - **Customizável pela UI**: aba **Overlay / Hub** na janela de Configurações para reordenar/ocultar módulos e criar **Ações Rápidas**, **Sliders Customizados** e **Submenus Customizados**.
+- **Mini-HUD ao girar fora do Hub**:
+  - Ao girar o knob com o Hub fechado, exibe um Mini-HUD discreto (`236×64px`) no canto inferior direito por `500ms`, sem roubar foco, mostrando o valor atual (ex.: `Volume 45%` + barra fina) ou o atalho executado (acumulando giros consecutivos).
 - **Simulação de entrada nativa no Wayland** via `enigo` (backend `wayland`) com proteção RAII contra tecla presa.
 - **Ícone no tray via StatusNotifierItem (SNI)**:
   - Exposto via D-Bus (`org.kde.StatusNotifierItem` com `ksni`) — compatível nativamente com **Caelestia dots** (Quickshell), Waybar (`tray` module) e outros hosts SNI no Wayland.
@@ -43,6 +45,14 @@ windowrulev2 = move (monitor_w-window_w)/2 (monitor_h-window_h-20), title:^(Knob
 windowrulev2 = nofocus, title:^(KnobContext Overlay)$
 windowrulev2 = noborder, title:^(KnobContext Overlay)$
 windowrulev2 = noshadow, title:^(KnobContext Overlay)$
+
+# KnobContext Mini-HUD (canto inferior direito)
+windowrulev2 = float, title:^(KnobContext HUD)$
+windowrulev2 = pin, title:^(KnobContext HUD)$
+windowrulev2 = move (monitor_w-window_w-20) (monitor_h-window_h-20), title:^(KnobContext HUD)$
+windowrulev2 = nofocus, title:^(KnobContext HUD)$
+windowrulev2 = noborder, title:^(KnobContext HUD)$
+windowrulev2 = noshadow, title:^(KnobContext HUD)$
 ```
 
 **Ou em `~/.config/caelestia/hypr-user.lua` (setup Caelestia em Lua — também aplicado automaticamente no startup do KnobContext):**
@@ -59,31 +69,67 @@ hl.window_rule({
   no_shadow = true,
   opacity = "1 override",
 })
+
+hl.window_rule({
+  name = "knobcontext-hud",
+  match = { title = "^(KnobContext HUD)$" },
+  float = true,
+  pin = true,
+  center = false,
+  move = "(monitor_w-window_w-20) (monitor_h-window_h-20)",
+  no_initial_focus = true,
+  border_size = 0,
+  no_shadow = true,
+  opacity = "1 override",
+})
 ```
 
 > **Transparência**: o overlay utiliza `background: transparent` no Slint (`renderer-software`) com cartão interno em `rgba(20, 20, 20, 0.85)` e cantos arredondados de `12px`. No Hyprland, a transparência RGBA funciona nativamente sem configuração adicional; se desejar desfoque de fundo, adicione `windowrulev2 = blur, title:^(KnobContext Overlay)$` ou regra de layer/opacity conforme sua versão do Hyprland.
 
-## Instalação via AppImage (Arch Linux)
+## Instalação via AppImage e Serviço `systemd --user` (Arch Linux)
+
+> **Importante**: o AppImage **não** instala a regra `udev` nem o serviço `systemd` sozinho (regras em `/etc/udev/rules.d/` exigem `sudo` uma única vez). Use o script `install.sh` incluso.
 
 1. Instale `fuse2` (necessário no Arch para executar AppImages):
    ```bash
    sudo pacman -S fuse2
    ```
-2. Garanta que seu usuário pertence ao grupo `input` (e faça logout/login):
+2. Garanta que seu usuário pertence ao grupo `input` (e faça logout/login se adicionou agora):
    ```bash
    sudo usermod -aG input "$USER"
    ```
-3. Instale a regra `udev` **uma única vez** (usando o `install.sh` incluso em `packaging/appimage/`):
-   ```bash
-   ./packaging/appimage/install.sh
-   ```
-   *(Reconecte o dispositivo knob após rodar o script.)*
-4. Para gerar o AppImage localmente (requer `appimagetool` ou `linuxdeploy` no `PATH`):
+3. Gere o AppImage (caso ainda não tenha o `KnobContext-x86_64.AppImage`; usa `appimagetool` em `~/.local/bin/` ou no `PATH`):
    ```bash
    ./packaging/build-appimage.sh
    chmod +x KnobContext-x86_64.AppImage
-   ./KnobContext-x86_64.AppImage
    ```
+4. Execute o `install.sh` **uma única vez**:
+   ```bash
+   ./packaging/appimage/install.sh
+   ```
+   O script:
+   - Verifica se o usuário pertence ao grupo `input`.
+   - Instala `/etc/udev/rules.d/99-knobcontext.rules` (cobrindo `evdev` e `hidraw`) e recarrega o `udev`.
+   - Copia `KnobContext-x86_64.AppImage` para `~/.local/bin/knobcontext`.
+   - Instala `~/.config/systemd/user/knobcontext.service`, executa `systemctl --user daemon-reload` e `systemctl --user enable --now knobcontext.service`.
+5. **Reconecte o dispositivo knob** após a primeira instalação da regra `udev`.
+
+### Gerenciando o serviço `systemd --user`
+
+```bash
+# Ver status do serviço
+systemctl --user status knobcontext.service
+
+# Acompanhar logs em tempo real
+journalctl --user -u knobcontext.service -f
+
+# Reiniciar / parar / desabilitar início automático
+systemctl --user restart knobcontext.service
+systemctl --user stop knobcontext.service
+systemctl --user disable knobcontext.service
+```
+
+> **Nota sobre Hyprland e `systemd --user`**: em sessões Hyprland iniciadas sem `uwsm`, o alvo `graphical-session.target` pode não existir (`systemctl --user list-units --type=target` mostra apenas `default.target`). Por isso, `knobcontext.service` usa `WantedBy=default.target` com `After=graphical-session.target hyprland-session.target` e `ExecStartPre=/bin/sleep 2` para aguardar o Hyprland exportar `WAYLAND_DISPLAY` e `HYPRLAND_INSTANCE_SIGNATURE` via `systemctl --user import-environment`. Se quiser sincronia imediata no login, você também pode adicionar `systemctl --user restart knobcontext.service` logo após `import-environment` na config do Hyprland.
 
 > **Requisito de Tray (SNI)**: o ícone na barra requer um host `StatusNotifierItem` ativo (como **Caelestia dots**, Waybar com módulo `tray`, ou Quickshell). Se nenhum host SNI estiver rodando, o KnobContext registra um aviso e continua funcionando normalmente.
 

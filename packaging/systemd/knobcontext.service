@@ -8,7 +8,7 @@ ExecStartPre=/bin/sleep 2
 ExecStart=%h/.local/bin/knobcontext
 Restart=on-failure
 RestartSec=3
-Environment=RUST_LOG=info
+Environment=RUST_LOG=warn,knobcontext=info
 
 [Install]
 WantedBy=default.target
