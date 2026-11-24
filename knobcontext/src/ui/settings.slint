@@ -149,7 +149,10 @@ export component SettingsWindow inherits Window {
     in-out property <string> field-name;
     in-out property <string> field-window-class;
     in-out property <string> field-window-title;
-    in-out property <string> field-inherits;
+    in property <string> field-inherits-label: "Nenhum";
+    in property <[string]> inherits-options: ["Nenhum"];
+    in property <bool> inherits-picker-open: false;
+    in property <[string]> inherits-chain: [];
     in property <int> field-priority: 0;
     in property <bool> field-fullscreen-only: false;
     in property <string> captured-window-hint: "";
@@ -220,6 +223,9 @@ export component SettingsWindow inherits Window {
     callback add-preset(int);
     callback remove-profile();
     callback capture-active-window();
+    callback toggle-inherits-picker();
+    callback select-inherits-option(int);
+    callback navigate-inherits-chain(string);
     callback change-priority(int);
     callback toggle-fullscreen-only();
     callback open-action-editor(int);
@@ -444,11 +450,73 @@ export component SettingsWindow inherits Window {
                             value <=> root.field-window-title;
                         }
 
-                        DarkField {
+                        VerticalLayout {
                             horizontal-stretch: 1;
-                            label: "Herdar de (opcional)";
-                            placeholder: "ex: global";
-                            value <=> root.field-inherits;
+                            spacing: 4px;
+                            Text {
+                                text: "Herda de:";
+                                color: #a1a1aa;
+                                font-size: 11px;
+                                font-weight: 500;
+                            }
+                            DarkButton {
+                                height: 32px;
+                                primary: root.field-inherits-label != "Nenhum";
+                                text: root.field-inherits-label + " ▾";
+                                clicked => { root.toggle-inherits-picker(); }
+                            }
+                        }
+                    }
+
+                    // Cadeia de herança clicável (ex.: global → base → firefox)
+                    if root.inherits-chain.length > 1: HorizontalLayout {
+                        spacing: 5px;
+                        alignment: start;
+
+                        Text {
+                            text: "Cadeia:";
+                            color: #a1a1aa;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+
+                        for cname[cidx] in root.inherits-chain: HorizontalLayout {
+                            spacing: 5px;
+
+                            if cidx > 0: Text {
+                                text: "→";
+                                color: #64748b;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                height: 22px;
+                                border-radius: 6px;
+                                background: cidx == root.inherits-chain.length - 1
+                                    ? rgba(59, 130, 246, 0.25)
+                                    : (chain-touch.has-hover ? rgba(255, 255, 255, 0.16) : rgba(255, 255, 255, 0.08));
+                                border-width: 1px;
+                                border-color: cidx == root.inherits-chain.length - 1
+                                    ? rgba(96, 165, 250, 0.55)
+                                    : rgba(255, 255, 255, 0.12);
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: cname;
+                                        color: cidx == root.inherits-chain.length - 1 ? #bfdbfe : #e4e4e7;
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                chain-touch := TouchArea {
+                                    clicked => { root.navigate-inherits-chain(cname); }
+                                }
+                            }
                         }
                     }
 
@@ -994,6 +1062,71 @@ export component SettingsWindow inherits Window {
                 text: "Salvar";
                 primary: true;
                 clicked => { root.save-requested(); }
+            }
+        }
+    }
+
+    if root.inherits-picker-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.58);
+
+        TouchArea {
+            clicked => { root.toggle-inherits-picker(); }
+        }
+
+        Rectangle {
+            width: 340px;
+            height: 320px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 12px;
+            background: rgba(24, 24, 27, 0.98);
+            border-width: 1px;
+            border-color: rgba(255, 255, 255, 0.16);
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+
+                Text {
+                    text: "Herda de:";
+                    color: #f5f5f7;
+                    font-size: 15px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Ações definidas como 'Nenhuma' serão herdadas do perfil escolhido:";
+                    color: #a1a1aa;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                Flickable {
+                    vertical-stretch: 1;
+                    content-height: root.inherits-options.length * 38px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        alignment: start;
+
+                        for opt[oidx] in root.inherits-options: DarkButton {
+                            height: 32px;
+                            primary: opt == root.field-inherits-label;
+                            text: opt;
+                            clicked => { root.select-inherits-option(oidx); }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    DarkButton {
+                        text: "Fechar";
+                        clicked => { root.toggle-inherits-picker(); }
+                    }
+                }
             }
         }
     }

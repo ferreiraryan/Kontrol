@@ -30,6 +30,7 @@ struct SettingsDraft {
     hub_group_selected_entry: usize,
     dirty: bool,
     preset_picker_open: bool,
+    inherits_picker_open: bool,
     editor: ActionEditorState,
     editor_target: Option<EditorTarget>,
     desktop_apps: Vec<DesktopApp>,
@@ -69,6 +70,7 @@ impl SettingsController {
             hub_group_selected_entry: 0,
             dirty: false,
             preset_picker_open: false,
+            inherits_picker_open: false,
             editor: ActionEditorState::default(),
             editor_target: None,
             desktop_apps: list_desktop_apps(),
@@ -255,6 +257,78 @@ impl SettingsController {
             });
         }
 
+        // Abrir/fechar seletor de herança (`Herda de:`)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_toggle_inherits_picker(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                if !d.inherits_picker_open {
+                    if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                        win.set_error_message(SharedString::from(err.to_string()));
+                        return;
+                    }
+                }
+                d.inherits_picker_open = !d.inherits_picker_open;
+                win.set_inherits_picker_open(d.inherits_picker_open);
+                if d.inherits_picker_open {
+                    sync_all_to_ui(&win, &d);
+                }
+            });
+        }
+
+        // Selecionar opção no seletor de herança (com validação de ciclo imediata)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_select_inherits_option(move |opt_idx| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                let sel = d.selected_index;
+                match apply_inherits_selection(&mut d.base_config, sel, opt_idx.max(0) as usize) {
+                    Ok(changed) => {
+                        if changed {
+                            d.dirty = true;
+                        }
+                        d.inherits_picker_open = false;
+                        win.set_inherits_picker_open(false);
+                        win.set_error_message(SharedString::from(""));
+                        sync_all_to_ui(&win, &d);
+                    }
+                    Err(err) => {
+                        d.inherits_picker_open = false;
+                        win.set_inherits_picker_open(false);
+                        win.set_error_message(SharedString::from(err.to_string()));
+                    }
+                }
+            });
+        }
+
+        // Navegar clicando em um perfil na cadeia de herança (ex.: global → base → firefox)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_navigate_inherits_chain(move |target_name| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                    win.set_error_message(SharedString::from(err.to_string()));
+                    return;
+                }
+                if let Some(pos) = d
+                    .base_config
+                    .profiles
+                    .iter()
+                    .position(|p| p.name.eq_ignore_ascii_case(target_name.as_str()))
+                {
+                    d.selected_index = pos;
+                    win.set_error_message(SharedString::from(""));
+                    sync_all_to_ui(&win, &d);
+                }
+            });
+        }
+
         // Alterar prioridade do perfil selecionado
         {
             let weak = window.as_weak();
@@ -315,7 +389,16 @@ impl SettingsController {
                     return;
                 }
                 let idx = d.selected_index;
-                d.base_config.profiles.remove(idx);
+                let removed_name = d.base_config.profiles.remove(idx).name;
+                // Limpa referências `inherits` que apontavam para o perfil removido
+                for p in &mut d.base_config.profiles {
+                    if p.inherits
+                        .as_deref()
+                        .is_some_and(|parent| parent.eq_ignore_ascii_case(&removed_name))
+                    {
+                        p.inherits = None;
+                    }
+                }
                 if d.selected_index >= d.base_config.profiles.len() {
                     d.selected_index = d.base_config.profiles.len() - 1;
                 }
@@ -461,12 +544,14 @@ impl SettingsController {
             d.hub_group_selected_entry = 0;
             d.dirty = false;
             d.preset_picker_open = false;
+            d.inherits_picker_open = false;
             d.editor.cancel();
             d.editor_target = None;
             sync_all_to_ui(&window, &d);
             sync_editor_to_ui(&window, &d.editor, &d.desktop_apps);
         }
         window.set_preset_picker_open(false);
+        window.set_inherits_picker_open(false);
         window.set_captured_window_hint(SharedString::from(""));
         window.set_error_message(SharedString::from(""));
         *self.is_open.borrow_mut() = true;
@@ -1295,6 +1380,87 @@ fn sync_all_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     sync_hub_tab_to_ui(win, draft);
 }
 
+const INHERITS_NONE_LABEL: &str = "Nenhum";
+
+/// Retorna as opções do seletor `Herda de:`: `"Nenhum"` na posição 0, seguido pelos demais
+/// perfis configurados (excluindo o próprio perfil selecionado para evitar auto-herança).
+pub fn inherits_options_for_profile(
+    profiles: &[ProfileConfig],
+    selected_idx: usize,
+) -> Vec<String> {
+    let mut options = Vec::with_capacity(profiles.len());
+    options.push(INHERITS_NONE_LABEL.to_string());
+    for (idx, profile) in profiles.iter().enumerate() {
+        if idx != selected_idx {
+            options.push(profile.name.clone());
+        }
+    }
+    options
+}
+
+/// Constrói a cadeia de herança em ordem ancestral -> perfil atual (ex.: `["global", "base", "firefox"]`).
+/// Protegida contra ciclos.
+pub fn compute_inheritance_chain(profiles: &[ProfileConfig], selected_idx: usize) -> Vec<String> {
+    let Some(start) = profiles.get(selected_idx) else {
+        return Vec::new();
+    };
+    let mut chain_rev = Vec::new();
+    let mut visited = Vec::new();
+    let mut current: Option<&ProfileConfig> = Some(start);
+
+    while let Some(prof) = current {
+        let key = prof.name.to_ascii_lowercase();
+        if visited.contains(&key) {
+            break;
+        }
+        visited.push(key);
+        chain_rev.push(prof.name.clone());
+        current = prof.inherits.as_deref().and_then(|parent_name| {
+            profiles
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(parent_name.trim()))
+        });
+    }
+
+    chain_rev.reverse();
+    chain_rev
+}
+
+/// Aplica a escolha do seletor `Herda de:` validando contra ciclos via `Config::validate()`.
+/// Em caso de ciclo, restaura o valor anterior e retorna erro claro sem corromper a configuração.
+pub fn apply_inherits_selection(
+    config: &mut Config,
+    selected_idx: usize,
+    option_idx: usize,
+) -> Result<bool, KnobError> {
+    let options = inherits_options_for_profile(&config.profiles, selected_idx);
+    let Some(chosen) = options.get(option_idx) else {
+        return Ok(false);
+    };
+    let new_inherits = if option_idx == 0 || chosen == INHERITS_NONE_LABEL {
+        None
+    } else {
+        Some(chosen.clone())
+    };
+
+    let Some(profile) = config.profiles.get_mut(selected_idx) else {
+        return Ok(false);
+    };
+    if profile.inherits == new_inherits {
+        return Ok(false);
+    }
+
+    let previous = profile.inherits.clone();
+    profile.inherits = new_inherits;
+    if let Err(err) = config.validate() {
+        if let Some(p) = config.profiles.get_mut(selected_idx) {
+            p.inherits = previous;
+        }
+        return Err(err);
+    }
+    Ok(true)
+}
+
 fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     let names: Vec<SharedString> = draft
         .base_config
@@ -1305,6 +1471,20 @@ fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     win.set_profile_names(ModelRc::from(Rc::new(VecModel::from(names))));
     win.set_selected_index(draft.selected_index as i32);
 
+    let options: Vec<SharedString> =
+        inherits_options_for_profile(&draft.base_config.profiles, draft.selected_index)
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+    win.set_inherits_options(ModelRc::from(Rc::new(VecModel::from(options))));
+
+    let chain: Vec<SharedString> =
+        compute_inheritance_chain(&draft.base_config.profiles, draft.selected_index)
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+    win.set_inherits_chain(ModelRc::from(Rc::new(VecModel::from(chain))));
+
     if let Some(profile) = draft.base_config.profiles.get(draft.selected_index) {
         win.set_field_name(SharedString::from(profile.name.as_str()));
         win.set_field_window_class(SharedString::from(
@@ -1313,8 +1493,12 @@ fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         win.set_field_window_title(SharedString::from(
             profile.window_title.as_deref().unwrap_or(""),
         ));
-        win.set_field_inherits(SharedString::from(
-            profile.inherits.as_deref().unwrap_or(""),
+        win.set_field_inherits_label(SharedString::from(
+            profile
+                .inherits
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(INHERITS_NONE_LABEL),
         ));
         win.set_field_priority(profile.priority);
         win.set_field_fullscreen_only(profile.fullscreen == Some(true));
@@ -1419,7 +1603,8 @@ fn apply_profile_header_to_draft(
     win: &SettingsWindow,
     draft: &mut SettingsDraft,
 ) -> Result<(), KnobError> {
-    let Some(profile) = draft.base_config.profiles.get_mut(draft.selected_index) else {
+    let idx = draft.selected_index;
+    let Some(old_name) = draft.base_config.profiles.get(idx).map(|p| p.name.clone()) else {
         return Ok(());
     };
 
@@ -1432,18 +1617,31 @@ fn apply_profile_header_to_draft(
 
     let window_class = normalize_optional_field(win.get_field_window_class().as_str());
     let window_title = normalize_optional_field(win.get_field_window_title().as_str());
-    let inherits = normalize_optional_field(win.get_field_inherits().as_str());
 
-    if profile.name != name
-        || profile.window_class != window_class
-        || profile.window_title != window_title
-        || profile.inherits != inherits
-    {
-        profile.name = name;
-        profile.window_class = window_class;
-        profile.window_title = window_title;
-        profile.inherits = inherits;
-        draft.dirty = true;
+    let mut renamed = false;
+    if let Some(profile) = draft.base_config.profiles.get_mut(idx) {
+        if profile.name != name
+            || profile.window_class != window_class
+            || profile.window_title != window_title
+        {
+            renamed = profile.name != name;
+            profile.name = name.clone();
+            profile.window_class = window_class;
+            profile.window_title = window_title;
+            draft.dirty = true;
+        }
+    }
+
+    // Atualiza referências `inherits` caso o perfil tenha sido renomeado.
+    if renamed {
+        for p in &mut draft.base_config.profiles {
+            if p.inherits
+                .as_deref()
+                .is_some_and(|parent| parent.eq_ignore_ascii_case(&old_name))
+            {
+                p.inherits = Some(name.clone());
+            }
+        }
     }
 
     Ok(())
@@ -1505,5 +1703,69 @@ fn normalize_optional_field(raw: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        apply_inherits_selection, compute_inheritance_chain, inherits_options_for_profile,
+        INHERITS_NONE_LABEL,
+    };
+    use crate::config::{ActionConfig, Config, ProfileConfig};
+    use crate::error::KnobError;
+
+    #[test]
+    fn inherits_editor_validates_chain_rejects_cycles_and_clears_on_none() {
+        let mut cfg = Config::default();
+        // Adiciona perfil intermediário "base" herdando de "global"
+        cfg.profiles.push(ProfileConfig {
+            name: "base".to_string(),
+            window_class: None,
+            window_title: None,
+            fullscreen: None,
+            priority: 0,
+            inherits: Some("global".to_string()),
+            knob_cw: ActionConfig::VolumeUp,
+            knob_ccw: ActionConfig::VolumeDown,
+            knob_press: None,
+            key1: ActionConfig::None,
+            key2: ActionConfig::None,
+            key3: ActionConfig::None,
+        });
+
+        // Opções para "firefox" (índice 1): exclui o próprio "firefox" e inicia com "Nenhum"
+        let opts = inherits_options_for_profile(&cfg.profiles, 1);
+        assert_eq!(opts[0], INHERITS_NONE_LABEL);
+        assert!(!opts.iter().any(|o| o == "firefox"));
+        assert!(opts.iter().any(|o| o == "base"));
+
+        // Seleciona "base" como pai de "firefox" -> cadeia global -> base -> firefox
+        let base_opt_idx = opts.iter().position(|o| o == "base").expect("opção base");
+        assert_eq!(
+            apply_inherits_selection(&mut cfg, 1, base_opt_idx).ok(),
+            Some(true)
+        );
+        assert_eq!(cfg.profiles[1].inherits.as_deref(), Some("base"));
+        assert_eq!(
+            compute_inheritance_chain(&cfg.profiles, 1),
+            vec!["global", "base", "firefox"]
+        );
+
+        // Tentar fazer "base" (índice 3) herdar de "firefox" criaria ciclo -> deve rejeitar sem alterar!
+        let base_opts = inherits_options_for_profile(&cfg.profiles, 3);
+        let firefox_opt_idx = base_opts
+            .iter()
+            .position(|o| o == "firefox")
+            .expect("opção firefox");
+        let err = apply_inherits_selection(&mut cfg, 3, firefox_opt_idx)
+            .expect_err("ciclo deve ser rejeitado");
+        assert!(matches!(err, KnobError::ConfigValidation(_)));
+        assert_eq!(cfg.profiles[3].inherits.as_deref(), Some("global"));
+
+        // Selecionar "Nenhum" (índice 0) remove herança de "firefox"
+        assert_eq!(apply_inherits_selection(&mut cfg, 1, 0).ok(), Some(true));
+        assert_eq!(cfg.profiles[1].inherits, None);
+        assert_eq!(compute_inheritance_chain(&cfg.profiles, 1), vec!["firefox"]);
     }
 }
