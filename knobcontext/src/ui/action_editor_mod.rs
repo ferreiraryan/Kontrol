@@ -1,6 +1,6 @@
-use crate::actions_catalog::DesktopApp;
+use crate::actions_catalog::{DesktopApp, MacroStep};
 use crate::ui::action_editor_state::ActionEditorState;
-use crate::ui::SettingsWindow;
+use crate::ui::{AppListItem, MacroStepItem, SettingsWindow};
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -110,22 +110,41 @@ pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps:
     }
     win.set_editor_type_index(editor.selected_type_index as i32);
     win.set_editor_shortcut_text(SharedString::from(editor.shortcut_text.as_str()));
-    win.set_editor_capturing_shortcut(editor.capturing_shortcut);
+
+    let keycap_parts: Vec<SharedString> = editor
+        .shortcut_keycap_parts()
+        .into_iter()
+        .map(SharedString::from)
+        .collect();
+    win.set_editor_shortcut_parts(ModelRc::from(Rc::new(VecModel::from(keycap_parts))));
+
     win.set_editor_media_index(editor.media_index as i32);
     win.set_editor_app_search(SharedString::from(editor.app_search.as_str()));
 
     let filtered = editor.filtered_apps(apps);
-    let app_labels: Vec<SharedString> = filtered
+    let app_items: Vec<AppListItem> = filtered
         .iter()
-        .map(|app| SharedString::from(format!("{} ({})", app.name, app.desktop_file)))
+        .map(|app| AppListItem {
+            name: SharedString::from(app.name.as_str()),
+            desktop_file: SharedString::from(app.desktop_file.as_str()),
+        })
         .collect();
     let selected_app_idx = filtered
         .iter()
         .position(|app| app.desktop_file == editor.selected_desktop_file)
         .map(|i| i as i32)
         .unwrap_or(-1);
-    win.set_editor_filtered_apps(ModelRc::from(Rc::new(VecModel::from(app_labels))));
+    let selected_app_label = if editor.selected_desktop_file.trim().is_empty() {
+        String::new()
+    } else {
+        apps.iter()
+            .find(|a| a.desktop_file == editor.selected_desktop_file)
+            .map(|a| format!("{} ({})", a.name, a.desktop_file))
+            .unwrap_or_else(|| editor.selected_desktop_file.clone())
+    };
+    win.set_editor_filtered_apps(ModelRc::from(Rc::new(VecModel::from(app_items))));
     win.set_editor_selected_app_index(selected_app_idx);
+    win.set_editor_selected_app_label(SharedString::from(selected_app_label));
 
     win.set_editor_url_text(SharedString::from(editor.url_text.as_str()));
     win.set_editor_file_text(SharedString::from(editor.file_uri.as_str()));
@@ -133,15 +152,24 @@ pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps:
     win.set_editor_scroll_direction(editor.scroll_direction_index as i32);
     win.set_editor_scroll_amount(i32::from(editor.scroll_amount));
 
-    let step_labels: Vec<SharedString> = editor
+    let step_items: Vec<MacroStepItem> = editor
         .macro_steps
         .iter()
-        .map(|step| SharedString::from(step.to_token()))
+        .map(|step| match step {
+            MacroStep::Keys(keys) => MacroStepItem {
+                label: SharedString::from(keys.join("+")),
+                is_wait: false,
+            },
+            MacroStep::WaitMs(ms) => MacroStepItem {
+                label: SharedString::from(format!("{ms} ms")),
+                is_wait: true,
+            },
+        })
         .collect();
-    win.set_editor_macro_steps(ModelRc::from(Rc::new(VecModel::from(step_labels))));
+    win.set_editor_macro_steps(ModelRc::from(Rc::new(VecModel::from(step_items))));
     win.set_editor_macro_key_text(SharedString::from(editor.macro_key_input.as_str()));
     win.set_editor_macro_wait_text(SharedString::from(editor.macro_wait_ms_input.as_str()));
-    win.set_editor_capturing_macro(editor.capturing_macro_key);
+    win.set_editor_preview_text(SharedString::from(editor.live_preview_summary(apps)));
 }
 
 /// Abre o diálogo nativo de seleção de arquivo (Wayland via XDG Portal usando `rfd`).

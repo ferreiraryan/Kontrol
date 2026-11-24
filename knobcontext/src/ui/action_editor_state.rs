@@ -183,6 +183,170 @@ impl ActionEditorState {
         }
     }
 
+    pub fn move_macro_step(&mut self, index: usize, delta: isize) {
+        let len = self.macro_steps.len();
+        if index >= len {
+            return;
+        }
+        let target = if delta < 0 {
+            index.saturating_sub(delta.unsigned_abs())
+        } else {
+            (index + delta as usize).min(len.saturating_sub(1))
+        };
+        if target != index {
+            self.macro_steps.swap(index, target);
+        }
+    }
+
+    /// Alterna um modificador (`Ctrl`, `Alt`, `Shift`, `Super`) no campo `shortcut_text`,
+    /// mantendo ordem canônica `Ctrl+Alt+Shift+Super+<Tecla(s)>`.
+    pub fn toggle_shortcut_modifier(&mut self, modifier: &str) {
+        let canonical = match modifier.trim().to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => "Ctrl",
+            "alt" => "Alt",
+            "shift" => "Shift",
+            "super" | "meta" | "win" => "Super",
+            _ => return,
+        };
+
+        let mut has_ctrl = false;
+        let mut has_alt = false;
+        let mut has_shift = false;
+        let mut has_super = false;
+        let mut others: Vec<String> = Vec::new();
+
+        for part in self
+            .shortcut_text
+            .split('+')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            match part.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => has_ctrl = true,
+                "alt" => has_alt = true,
+                "shift" => has_shift = true,
+                "super" | "meta" | "win" => has_super = true,
+                _ => others.push(part.to_string()),
+            }
+        }
+
+        match canonical {
+            "Ctrl" => has_ctrl = !has_ctrl,
+            "Alt" => has_alt = !has_alt,
+            "Shift" => has_shift = !has_shift,
+            "Super" => has_super = !has_super,
+            _ => {}
+        }
+
+        let mut rebuilt = Vec::new();
+        if has_ctrl {
+            rebuilt.push("Ctrl".to_string());
+        }
+        if has_alt {
+            rebuilt.push("Alt".to_string());
+        }
+        if has_shift {
+            rebuilt.push("Shift".to_string());
+        }
+        if has_super {
+            rebuilt.push("Super".to_string());
+        }
+        rebuilt.extend(others);
+        self.shortcut_text = rebuilt.join("+");
+    }
+
+    /// Retorna as teclas individuais do atalho atual para renderização como keycaps visuais.
+    pub fn shortcut_keycap_parts(&self) -> Vec<String> {
+        self.shortcut_text
+            .split('+')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    /// Gera um resumo legível em tempo real para o rodapé do Seletor de Ações.
+    pub fn live_preview_summary(&self, apps: &[DesktopApp]) -> String {
+        match self.selected_type_index {
+            0 => {
+                let trimmed = self.shortcut_text.trim();
+                if trimmed.is_empty() {
+                    "Atalho • nenhum definido".to_string()
+                } else {
+                    format!("Atalho • {trimmed}")
+                }
+            }
+            1 => {
+                let label = MediaAction::ALL
+                    .get(self.media_index)
+                    .copied()
+                    .unwrap_or(MediaAction::VolumeUp)
+                    .friendly_label();
+                format!("Mídia • {label}")
+            }
+            2 => {
+                if self.selected_desktop_file.trim().is_empty() {
+                    "Aplicativo • selecione na lista".to_string()
+                } else {
+                    let name = apps
+                        .iter()
+                        .find(|a| a.desktop_file == self.selected_desktop_file)
+                        .map(|a| a.name.as_str())
+                        .unwrap_or(self.selected_desktop_file.as_str());
+                    format!("Aplicativo • {name}")
+                }
+            }
+            3 => {
+                let u = self.url_text.trim();
+                if u.is_empty() {
+                    "URL • informe um endereço".to_string()
+                } else {
+                    format!("URL • {u}")
+                }
+            }
+            4 => {
+                let f = self.file_uri.trim();
+                if f.is_empty() {
+                    "Arquivo • selecione um arquivo".to_string()
+                } else {
+                    let clean = f.strip_prefix("file://").unwrap_or(f);
+                    let fname = std::path::Path::new(clean)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(clean);
+                    format!("Arquivo • {fname}")
+                }
+            }
+            5 => {
+                let cmd = self.exec_command.trim();
+                if cmd.is_empty() {
+                    "Comando • informe um comando shell".to_string()
+                } else {
+                    format!("Comando • $ {cmd}")
+                }
+            }
+            6 => {
+                let dir = ScrollDirection::ALL
+                    .get(self.scroll_direction_index)
+                    .copied()
+                    .unwrap_or(ScrollDirection::Up)
+                    .friendly_label();
+                format!("Scroll • {dir} ×{}", self.scroll_amount)
+            }
+            7 => {
+                let n = self.macro_steps.len();
+                if n == 0 {
+                    "Macro • nenhum passo".to_string()
+                } else if n == 1 {
+                    "Macro • 1 passo".to_string()
+                } else {
+                    format!("Macro • {n} passos")
+                }
+            }
+            _ => "Nenhuma ação (herda do pai se houver)".to_string(),
+        }
+    }
+
     pub fn filtered_apps<'a>(&self, all_apps: &'a [DesktopApp]) -> Vec<&'a DesktopApp> {
         let query = self.app_search.trim().to_ascii_lowercase();
         if query.is_empty() {
@@ -367,5 +531,40 @@ mod tests {
         let res = st.filtered_apps(&apps);
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].desktop_file, "firefox.desktop");
+    }
+
+    #[test]
+    fn toggles_shortcut_modifiers_in_canonical_order_and_reorders_macro() {
+        let mut st = ActionEditorState::default();
+        st.open(ControlSlot::Key1, &ActionType::Shortcut(vec!["T".into()]));
+        st.toggle_shortcut_modifier("Shift");
+        st.toggle_shortcut_modifier("Ctrl");
+        st.toggle_shortcut_modifier("Super");
+        assert_eq!(st.shortcut_text, "Ctrl+Shift+Super+T");
+        assert_eq!(
+            st.shortcut_keycap_parts(),
+            vec!["Ctrl", "Shift", "Super", "T"]
+        );
+
+        // Remover Shift preserva o resto em ordem canônica
+        st.toggle_shortcut_modifier("Shift");
+        assert_eq!(st.shortcut_text, "Ctrl+Super+T");
+
+        // Reordenação de macro respeita limites
+        st.select_type(7);
+        st.add_macro_key_step("Ctrl+C").expect("p1");
+        st.add_macro_wait_step("100").expect("p2");
+        st.add_macro_key_step("Ctrl+V").expect("p3");
+        st.move_macro_step(2, -1);
+        assert_eq!(
+            st.macro_steps[1],
+            MacroStep::Keys(vec!["Ctrl".into(), "V".into()])
+        );
+        st.move_macro_step(0, -1); // no-op no início
+        assert_eq!(
+            st.macro_steps[0],
+            MacroStep::Keys(vec!["Ctrl".into(), "C".into()])
+        );
+        assert_eq!(st.live_preview_summary(&[]), "Macro • 3 passos");
     }
 }

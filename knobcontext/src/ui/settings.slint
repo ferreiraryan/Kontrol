@@ -1,116 +1,247 @@
+import {
+    Theme,
+    AppButton,
+    AppField,
+    ToggleSwitch,
+    SegmentedTwo,
+    StepperControl,
+    ActionCategoryBadge,
+    ProfileListItem,
+    ControlSlotView,
+    AppListItem,
+    MacroStepItem,
+} from "theme.slint";
 import { ActionEditorPopover } from "action_editor.slint";
 
-component DarkField inherits Rectangle {
-    in property <string> label;
-    in property <string> placeholder;
-    in-out property <string> value;
+component RotaryControlCard inherits Rectangle {
+    in property <string> glyph;
+    in property <string> title;
+    in property <ControlSlotView> slot;
+    callback edit-clicked();
+    callback learn-clicked();
+    callback clear-clicked();
 
-    height: 54px;
-    background: transparent;
+    height: 92px;
+    border-radius: 10px;
+    background: card-touch.has-hover ? Theme.bg-elevated : Theme.bg-card;
+    border-width: 1px;
+    border-color: card-touch.has-hover ? Theme.border-hover : Theme.border-subtle;
+
+    animate background { duration: 110ms; easing: ease-out; }
+    animate border-color { duration: 110ms; easing: ease-out; }
+
+    card-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.edit-clicked(); }
+    }
 
     VerticalLayout {
-        spacing: 4px;
+        padding: 10px;
+        spacing: 7px;
 
-        Text {
-            text: root.label;
-            color: #a1a1aa;
-            font-size: 11px;
-            font-weight: 500;
-        }
-
-        Rectangle {
-            height: 32px;
-            border-radius: 6px;
-            background: rgba(18, 18, 18, 0.95);
-            border-width: 1px;
-            border-color: input.has-focus ? rgba(255, 255, 255, 0.45) : rgba(255, 255, 255, 0.12);
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: space-between;
 
             HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
-                alignment: stretch;
+                spacing: 6px;
+                alignment: start;
 
-                input := TextInput {
-                    text <=> root.value;
-                    color: #f5f5f7;
-                    font-size: 13px;
+                Text {
+                    text: root.glyph;
+                    color: Theme.accent-text;
+                    font-size: 14px;
+                    font-weight: 700;
                     vertical-alignment: center;
-                    single-line: true;
+                }
+
+                Text {
+                    text: root.title;
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
                 }
             }
 
-            if root.value == "" && !input.has-focus: Text {
-                x: 10px;
-                text: root.placeholder;
-                color: rgba(255, 255, 255, 0.28);
+            ActionCategoryBadge {
+                category: root.slot.category;
+                inherited: root.slot.is-inherited;
+            }
+        }
+
+        Text {
+            text: root.slot.is-inherited
+                ? ("Herdado de " + root.slot.inherited-from + ": " + root.slot.summary)
+                : root.slot.summary;
+            color: root.slot.is-inherited
+                ? Theme.text-muted
+                : (root.slot.category == 8 ? Theme.text-dim : Theme.text-primary);
+            font-size: 13px;
+            font-weight: root.slot.is-inherited ? 400 : 600;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+
+            AppButton {
+                height: 24px;
+                font-size: 11px;
+                text: "⌨ Aprender";
+                clicked => { root.learn-clicked(); }
+            }
+
+            AppButton {
+                height: 24px;
+                font-size: 11px;
+                text: "Editar";
+                clicked => { root.edit-clicked(); }
+            }
+
+            if root.slot.can-clear: AppButton {
+                width: 26px;
+                height: 24px;
                 font-size: 12px;
-                vertical-alignment: center;
+                ghost: true;
+                text: "×";
+                clicked => { root.clear-clicked(); }
             }
         }
     }
 }
 
-component DarkButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> primary: false;
-    in property <bool> danger: false;
-    callback clicked();
+component PhysicalKeyRow inherits Rectangle {
+    in property <string> key-code;
+    in property <string> key-label;
+    in property <ControlSlotView> slot;
+    callback edit-clicked();
+    callback learn-clicked();
+    callback clear-clicked();
 
-    height: 30px;
-    border-radius: 6px;
-    background: root.primary
-        ? (touch.has-hover ? #3b82f6 : #2563eb)
-        : (root.danger
-            ? (touch.has-hover ? rgba(220, 38, 38, 0.35) : rgba(220, 38, 38, 0.2))
-            : (touch.has-hover ? rgba(255, 255, 255, 0.14) : rgba(255, 255, 255, 0.08)));
+    height: 44px;
+    border-radius: 9px;
+    background: row-touch.has-hover ? Theme.bg-elevated : Theme.bg-card;
     border-width: 1px;
-    border-color: root.primary
-        ? rgba(147, 197, 253, 0.4)
-        : (root.danger ? rgba(248, 113, 113, 0.35) : rgba(255, 255, 255, 0.12));
+    border-color: row-touch.has-hover ? Theme.border-hover : Theme.border-subtle;
+
+    animate background { duration: 110ms; easing: ease-out; }
+    animate border-color { duration: 110ms; easing: ease-out; }
+
+    row-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.edit-clicked(); }
+    }
 
     HorizontalLayout {
         padding-left: 10px;
-        padding-right: 10px;
-        alignment: center;
+        padding-right: 8px;
+        spacing: 10px;
+        alignment: stretch;
+
+        // Keycap física (K1 / K2 / K3)
+        Rectangle {
+            width: 30px;
+            height: 26px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 6px;
+            background: Theme.bg-elevated;
+            border-width: 1px;
+            border-color: Theme.border-default;
+
+            Text {
+                text: root.key-code;
+                color: Theme.text-primary;
+                font-size: 11px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
 
         Text {
-            text: root.text;
-            color: #f5f5f7;
+            width: 68px;
+            text: root.key-label;
+            color: Theme.text-secondary;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
-            horizontal-alignment: center;
         }
-    }
 
-    touch := TouchArea {
-        clicked => { root.clicked(); }
+        ActionCategoryBadge {
+            y: (parent.height - self.height) / 2;
+            category: root.slot.category;
+            inherited: root.slot.is-inherited;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.slot.is-inherited
+                ? (root.slot.summary + " (" + root.slot.inherited-from + ")")
+                : root.slot.summary;
+            color: root.slot.is-inherited
+                ? Theme.text-muted
+                : (root.slot.category == 8 ? Theme.text-dim : Theme.text-primary);
+            font-size: 12px;
+            font-weight: root.slot.is-inherited ? 400 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        AppButton {
+            y: (parent.height - self.height) / 2;
+            height: 26px;
+            font-size: 11px;
+            text: "⌨ Aprender";
+            clicked => { root.learn-clicked(); }
+        }
+
+        AppButton {
+            y: (parent.height - self.height) / 2;
+            height: 26px;
+            font-size: 11px;
+            text: "Editar";
+            clicked => { root.edit-clicked(); }
+        }
+
+        if root.slot.can-clear: AppButton {
+            y: (parent.height - self.height) / 2;
+            width: 26px;
+            height: 26px;
+            font-size: 13px;
+            ghost: true;
+            text: "×";
+            clicked => { root.clear-clicked(); }
+        }
     }
 }
 
-component ActionRow inherits Rectangle {
+component SimpleActionRow inherits Rectangle {
     in property <string> control-label;
     in property <string> action-summary;
-    in property <bool> show-learn: false;
     callback edit-clicked();
-    callback learn-clicked();
 
-    height: 38px;
-    border-radius: 7px;
-    background: rgba(18, 18, 20, 0.85);
+    height: 40px;
+    border-radius: 8px;
+    background: r-touch.has-hover ? Theme.bg-elevated : Theme.bg-card;
     border-width: 1px;
-    border-color: rgba(255, 255, 255, 0.09);
+    border-color: r-touch.has-hover ? Theme.border-hover : Theme.border-subtle;
+
+    r-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.edit-clicked(); }
+    }
 
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 8px;
         spacing: 8px;
-        alignment: stretch;
 
         Text {
-            width: 150px;
+            width: 140px;
             text: root.control-label;
-            color: #d4d4d8;
+            color: Theme.text-secondary;
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
@@ -119,22 +250,16 @@ component ActionRow inherits Rectangle {
         Text {
             horizontal-stretch: 1;
             text: root.action-summary;
-            color: #f5f5f7;
+            color: Theme.text-primary;
             font-size: 12px;
             vertical-alignment: center;
             overflow: elide;
         }
 
-        if root.show-learn: DarkButton {
-            width: 82px;
-            height: 25px;
-            text: "Aprender";
-            clicked => { root.learn-clicked(); }
-        }
-
-        DarkButton {
-            width: 64px;
-            height: 25px;
+        AppButton {
+            y: (parent.height - self.height) / 2;
+            height: 26px;
+            font-size: 11px;
             text: "Editar";
             clicked => { root.edit-clicked(); }
         }
@@ -143,18 +268,23 @@ component ActionRow inherits Rectangle {
 
 export component SettingsWindow inherits Window {
     title: "KnobContext Settings";
-    width: 840px;
-    height: 650px;
-    background: rgba(20, 20, 20, 0.94);
+    width: 920px;
+    height: 680px;
+    background: Theme.bg-window;
 
-    // Aba ativa: 0 = Perfis & Contexto, 1 = Overlay / Hub
+    // Aba principal: 0 = Perfis & Contexto, 1 = Overlay / Hub
     in property <int> active-tab: 0;
+    // Sub-aba dentro de Overlay / Hub: 0 = Itens Padrão do Hub, 1 = Aparência e Comportamento
+    in property <int> hub-subtab: 0;
 
     // --- Aba 0: Perfis & Contexto ---
-    in property <[string]> profile-names: ["global"];
+    in property <[ProfileListItem]> profile-items: [];
     in property <[string]> preset-labels: [];
     in property <bool> preset-picker-open: false;
     in property <int> selected-index: 0;
+    in property <bool> selected-is-global: true;
+    in property <bool> context-rules-expanded: true;
+    in property <string> context-rules-summary: "";
     in-out property <string> field-name;
     in-out property <string> field-window-class;
     in-out property <string> field-window-title;
@@ -165,13 +295,16 @@ export component SettingsWindow inherits Window {
     in property <int> field-priority: 0;
     in property <bool> field-fullscreen-only: false;
     in property <string> captured-window-hint: "";
-    in property <string> summary-rotate-cw: "Nenhuma";
-    in property <string> summary-rotate-ccw: "Nenhuma";
-    in property <string> summary-key1: "Nenhuma";
-    in property <string> summary-key2: "Nenhuma";
-    in property <string> summary-key3: "Nenhuma";
+
+    in property <ControlSlotView> slot-rotate-cw;
+    in property <ControlSlotView> slot-rotate-ccw;
+    in property <ControlSlotView> slot-key1;
+    in property <ControlSlotView> slot-key2;
+    in property <ControlSlotView> slot-key3;
+
     // Sub-aba dentro de Perfis & Contexto: 0 = Ações do Knob, 1 = Módulos do Hub
     in property <int> profile-subtab: 0;
+    in property <string> profile-hub-subtab-label: "Módulos do Hub";
     in property <bool> profile-hub-is-inherited: true;
     in property <string> profile-hub-status-text: "Herdado de global";
     in property <[string]> profile-hub-module-labels: [];
@@ -182,6 +315,7 @@ export component SettingsWindow inherits Window {
 
     // --- Aba 1: Overlay / Hub ---
     in property <[string]> hub-item-labels: [];
+    in property <[bool]> hub-item-enabled-flags: [];
     in property <int> hub-selected-index: 0;
     in-out property <string> hub-item-title: "";
     in property <string> hub-item-kind-label: "";
@@ -214,28 +348,32 @@ export component SettingsWindow inherits Window {
     // --- Popover de edição de ação ---
     in property <bool> editor-open: false;
     in property <string> editor-control-title;
-    in property <[string]> editor-type-titles;
+    in property <string> editor-profile-context-label: "";
+    in property <string> editor-inherited-hint: "";
     in property <int> editor-type-index: 0;
+    in property <string> editor-preview-text: "";
     in-out property <string> editor-shortcut-text;
-    in property <bool> editor-capturing-shortcut: false;
+    in property <[string]> editor-shortcut-parts: [];
     in property <int> editor-media-index: 0;
     in-out property <string> editor-app-search;
-    in property <[string]> editor-filtered-apps;
+    in property <[AppListItem]> editor-filtered-apps;
     in property <int> editor-selected-app-index: -1;
+    in property <string> editor-selected-app-label: "";
     in-out property <string> editor-url-text;
     in-out property <string> editor-file-text;
     in-out property <string> editor-exec-text;
     in property <int> editor-scroll-direction: 0;
     in property <int> editor-scroll-amount: 1;
-    in property <[string]> editor-macro-steps;
+    in property <[MacroStepItem]> editor-macro-steps;
     in-out property <string> editor-macro-key-text;
     in-out property <string> editor-macro-wait-text: "100";
-    in property <bool> editor-capturing-macro: false;
     in property <string> editor-error-message;
 
     // Callbacks gerais e Aba 0
     callback select-tab(int);
+    callback select-hub-subtab(int);
     callback select-profile(int);
+    callback toggle-context-rules();
     callback add-profile();
     callback toggle-preset-picker();
     callback add-preset(int);
@@ -248,6 +386,7 @@ export component SettingsWindow inherits Window {
     callback toggle-fullscreen-only();
     callback open-action-editor(int);
     callback learn-action-slot(int);
+    callback clear-action-slot(int);
     callback select-profile-subtab(int);
     callback profile-hub-customize();
     callback profile-hub-reset-inherit();
@@ -286,57 +425,64 @@ export component SettingsWindow inherits Window {
 
     // Callbacks Popover
     callback editor-select-type(int);
-    callback editor-toggle-shortcut-capture();
-    callback editor-shortcut-key-captured(string, bool, bool, bool, bool);
     callback editor-open-learn-shortcut();
+    callback editor-shortcut-text-edited(string);
+    callback editor-toggle-shortcut-modifier(string);
+    callback editor-apply-shortcut-preset(string);
+    callback editor-clear-shortcut();
     callback editor-select-media(int);
     callback editor-app-search-changed(string);
     callback editor-select-app(int);
     callback editor-pick-file();
     callback editor-select-scroll-direction(int);
     callback editor-change-scroll-amount(int);
-    callback editor-toggle-macro-capture();
-    callback editor-macro-key-captured(string, bool, bool, bool, bool);
+    callback editor-set-scroll-amount(int);
+    callback editor-open-learn-macro();
     callback editor-add-macro-key();
     callback editor-add-macro-wait();
+    callback editor-add-macro-wait-preset(int);
+    callback editor-move-macro-step(int, int);
     callback editor-remove-macro-step(int);
     callback editor-save();
     callback editor-cancel();
 
     VerticalLayout {
-        padding: 14px;
+        padding: 16px;
         spacing: 12px;
 
-        // Barra superior de abas + indicador de alterações
+        // Barra superior: Navegação principal + indicador de alterações não salvas
         HorizontalLayout {
-            spacing: 8px;
-            alignment: stretch;
+            spacing: 10px;
+            alignment: space-between;
 
-            DarkButton {
-                width: 170px;
-                primary: root.active-tab == 0;
-                text: "Perfis & Contexto";
-                clicked => { root.select-tab(0); }
+            SegmentedTwo {
+                width: 360px;
+                height: 34px;
+                first-label: "Perfis & Contexto";
+                second-label: "Overlay / Hub";
+                selected-index: root.active-tab;
+                selected(i) => { root.select-tab(i); }
             }
 
-            DarkButton {
-                width: 170px;
-                primary: root.active-tab == 1;
-                text: "Overlay / Hub";
-                clicked => { root.select-tab(1); }
-            }
+            if root.has-unsaved-changes: Rectangle {
+                height: 26px;
+                y: 4px;
+                border-radius: 13px;
+                background: Theme.warning-soft;
+                border-width: 1px;
+                border-color: rgba(251, 191, 36, 0.35);
 
-            Rectangle {
-                horizontal-stretch: 1;
-                background: transparent;
-            }
-
-            if root.has-unsaved-changes: Text {
-                text: "• alterações não salvas";
-                color: #fbbf24;
-                font-size: 12px;
-                font-weight: 600;
-                vertical-alignment: center;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    Text {
+                        text: "• Alterações não salvas";
+                        color: Theme.warning;
+                        font-size: 11px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
 
@@ -345,78 +491,139 @@ export component SettingsWindow inherits Window {
             vertical-stretch: 1;
             spacing: 14px;
 
-            // Coluna esquerda: lista de perfis
+            // Coluna esquerda: lista de perfis enriquecida
             Rectangle {
-                width: 210px;
-                border-radius: 10px;
-                background: rgba(30, 30, 30, 0.9);
+                width: 224px;
+                border-radius: 12px;
+                background: Theme.bg-surface;
                 border-width: 1px;
-                border-color: rgba(255, 255, 255, 0.1);
+                border-color: Theme.border-subtle;
 
                 VerticalLayout {
                     padding: 12px;
                     spacing: 8px;
 
-                    Text {
-                        text: "Perfis";
-                        color: #f5f5f7;
-                        font-size: 15px;
-                        font-weight: 700;
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: "Perfis";
+                            color: Theme.text-primary;
+                            font-size: 14px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.profile-items.length + "";
+                            color: Theme.text-dim;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
                     }
 
                     Flickable {
                         vertical-stretch: 1;
-                        content-height: root.profile-names.length * 40px;
+                        content-height: root.profile-items.length * 48px;
 
                         VerticalLayout {
-                            spacing: 6px;
+                            spacing: 5px;
                             alignment: start;
 
-                            for name[idx] in root.profile-names: Rectangle {
-                                height: 34px;
-                                border-radius: 7px;
+                            for item[idx] in root.profile-items: Rectangle {
+                                height: item.subtitle != "" ? 44px : 36px;
+                                border-radius: 8px;
                                 background: idx == root.selected-index
-                                    ? rgba(255, 255, 255, 0.18)
-                                    : (item-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
+                                    ? Theme.accent-soft
+                                    : (item-touch.has-hover ? rgba(255, 255, 255, 0.06) : Theme.bg-card);
                                 border-width: 1px;
                                 border-color: idx == root.selected-index
-                                    ? rgba(255, 255, 255, 0.35)
-                                    : rgba(255, 255, 255, 0.06);
+                                    ? Theme.border-accent
+                                    : Theme.border-subtle;
 
-                                HorizontalLayout {
+                                animate background { duration: 100ms; easing: ease-out; }
+
+                                VerticalLayout {
                                     padding-left: 10px;
                                     padding-right: 10px;
+                                    alignment: center;
+                                    spacing: 1px;
 
-                                    Text {
-                                        text: name;
-                                        color: idx == root.selected-index ? #ffffff : #d4d4d8;
-                                        font-size: 13px;
-                                        font-weight: idx == root.selected-index ? 600 : 400;
-                                        vertical-alignment: center;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: space-between;
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: item.name;
+                                            color: idx == root.selected-index ? Theme.text-primary : Theme.text-secondary;
+                                            font-size: 13px;
+                                            font-weight: idx == root.selected-index ? 600 : 500;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        if item.is-global: Rectangle {
+                                            height: 17px;
+                                            border-radius: 4px;
+                                            background: rgba(255, 255, 255, 0.08);
+                                            HorizontalLayout {
+                                                padding-left: 5px;
+                                                padding-right: 5px;
+                                                Text {
+                                                    text: "Padrão";
+                                                    color: Theme.text-muted;
+                                                    font-size: 9px;
+                                                    font-weight: 600;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        if !item.is-global && item.has-custom-hub: Rectangle {
+                                            width: 6px;
+                                            height: 6px;
+                                            y: 5px;
+                                            border-radius: 3px;
+                                            background: Theme.accent;
+                                        }
+                                    }
+
+                                    if item.subtitle != "": Text {
+                                        text: item.subtitle;
+                                        color: Theme.text-dim;
+                                        font-size: 10px;
                                         overflow: elide;
                                     }
                                 }
 
                                 item-touch := TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => { root.select-profile(idx); }
                                 }
                             }
                         }
                     }
 
-                    DarkButton {
-                        text: "+ Adicionar perfil";
-                        clicked => { root.add-profile(); }
+                    HorizontalLayout {
+                        spacing: 6px;
+
+                        AppButton {
+                            horizontal-stretch: 1;
+                            text: "+ Novo";
+                            clicked => { root.add-profile(); }
+                        }
+
+                        AppButton {
+                            horizontal-stretch: 1;
+                            text: "+ Preset";
+                            clicked => { root.toggle-preset-picker(); }
+                        }
                     }
 
-                    DarkButton {
-                        text: root.preset-picker-open ? "Fechar presets" : "+ Preset contextual";
-                        clicked => { root.toggle-preset-picker(); }
-                    }
-
-                    DarkButton {
+                    AppButton {
                         text: "Remover perfil";
                         danger: true;
+                        enabled: !root.selected-is-global;
                         clicked => { root.remove-profile(); }
                     }
                 }
@@ -425,267 +632,401 @@ export component SettingsWindow inherits Window {
             // Coluna direita: editor do perfil selecionado
             Rectangle {
                 horizontal-stretch: 1;
-                border-radius: 10px;
-                background: rgba(30, 30, 30, 0.9);
+                clip: true;
+                border-radius: 12px;
+                background: Theme.bg-surface;
                 border-width: 1px;
-                border-color: rgba(255, 255, 255, 0.1);
+                border-color: Theme.border-subtle;
 
                 VerticalLayout {
                     padding: 14px;
-                    spacing: 7px;
+                    spacing: 10px;
 
-                    HorizontalLayout {
-                        spacing: 10px;
+                    // Banner limpo quando o perfil `global` está selecionado
+                    if root.selected-is-global: Rectangle {
+                        height: 52px;
+                        border-radius: 9px;
+                        background: Theme.bg-card;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
 
-                        DarkField {
-                            horizontal-stretch: 1;
-                            label: "Nome do perfil";
-                            placeholder: "ex: video_web";
-                            value <=> root.field-name;
-                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
 
-                        DarkField {
-                            horizontal-stretch: 2;
-                            label: "Janela (WINDOWCLASS, use | para várias)";
-                            placeholder: "ex: firefox|zen|chromium";
-                            value <=> root.field-window-class;
-                        }
-
-                        VerticalLayout {
-                            spacing: 4px;
-                            Text {
-                                text: "Detectar";
-                                color: #a1a1aa;
-                                font-size: 11px;
-                                font-weight: 500;
-                            }
-                            DarkButton {
-                                width: 100px;
+                            Rectangle {
+                                width: 32px;
                                 height: 32px;
-                                text: "Capturar";
-                                clicked => { root.capture-active-window(); }
+                                y: 10px;
+                                border-radius: 8px;
+                                background: Theme.accent-soft;
+                                border-width: 1px;
+                                border-color: Theme.border-accent;
+                                Text {
+                                    text: "◎";
+                                    color: Theme.accent-text;
+                                    font-size: 16px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+
+                                Text {
+                                    text: "Perfil Padrão (global)";
+                                    color: Theme.text-primary;
+                                    font-size: 14px;
+                                    font-weight: 700;
+                                }
+
+                                Text {
+                                    text: "Aplicado automaticamente quando nenhuma janela específica corresponder.";
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    overflow: elide;
+                                }
                             }
                         }
                     }
 
-                    HorizontalLayout {
-                        spacing: 10px;
+                    // Cabeçalho + Regras de ativação recolhíveis (apenas para perfis contextuais)
+                    if !root.selected-is-global: VerticalLayout {
+                        spacing: 8px;
 
-                        DarkField {
-                            horizontal-stretch: 2;
-                            label: "Título contém (opcional, use |)";
-                            placeholder: "ex: YouTube|Twitch|Netflix";
-                            value <=> root.field-window-title;
-                        }
+                        HorizontalLayout {
+                            spacing: 10px;
 
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 4px;
-                            Text {
-                                text: "Herda de:";
-                                color: #a1a1aa;
-                                font-size: 11px;
-                                font-weight: 500;
+                            AppField {
+                                horizontal-stretch: 2;
+                                label: "Nome do perfil";
+                                placeholder: "ex: video_web";
+                                value <=> root.field-name;
                             }
-                            DarkButton {
-                                height: 32px;
-                                primary: root.field-inherits-label != "Nenhum";
-                                text: root.field-inherits-label + " ▾";
-                                clicked => { root.toggle-inherits-picker(); }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 4px;
+                                Text {
+                                    text: "Herda de";
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    font-weight: 500;
+                                }
+                                AppButton {
+                                    height: 32px;
+                                    active: root.field-inherits-label != "Nenhum";
+                                    text: root.field-inherits-label + " ▾";
+                                    clicked => { root.toggle-inherits-picker(); }
+                                }
                             }
                         }
-                    }
 
-                    // Cadeia de herança clicável (ex.: global → base → firefox)
-                    if root.inherits-chain.length > 1: HorizontalLayout {
-                        spacing: 5px;
-                        alignment: start;
-
-                        Text {
-                            text: "Cadeia:";
-                            color: #a1a1aa;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
-
-                        for cname[cidx] in root.inherits-chain: HorizontalLayout {
+                        // Cadeia de herança clicável
+                        if root.inherits-chain.length > 1: HorizontalLayout {
                             spacing: 5px;
+                            alignment: start;
 
-                            if cidx > 0: Text {
-                                text: "→";
-                                color: #64748b;
+                            Text {
+                                text: "Cadeia:";
+                                color: Theme.text-dim;
                                 font-size: 11px;
                                 vertical-alignment: center;
                             }
 
-                            Rectangle {
-                                height: 22px;
-                                border-radius: 6px;
-                                background: cidx == root.inherits-chain.length - 1
-                                    ? rgba(59, 130, 246, 0.25)
-                                    : (chain-touch.has-hover ? rgba(255, 255, 255, 0.16) : rgba(255, 255, 255, 0.08));
-                                border-width: 1px;
-                                border-color: cidx == root.inherits-chain.length - 1
-                                    ? rgba(96, 165, 250, 0.55)
-                                    : rgba(255, 255, 255, 0.12);
+                            for cname[cidx] in root.inherits-chain: HorizontalLayout {
+                                spacing: 5px;
 
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 8px;
-                                    Text {
-                                        text: cname;
-                                        color: cidx == root.inherits-chain.length - 1 ? #bfdbfe : #e4e4e7;
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        vertical-alignment: center;
+                                if cidx > 0: Text {
+                                    text: "→";
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    height: 20px;
+                                    border-radius: 5px;
+                                    background: cidx == root.inherits-chain.length - 1
+                                        ? Theme.accent-soft
+                                        : (chain-touch.has-hover ? rgba(255, 255, 255, 0.14) : rgba(255, 255, 255, 0.06));
+                                    border-width: 1px;
+                                    border-color: cidx == root.inherits-chain.length - 1
+                                        ? Theme.border-accent
+                                        : Theme.border-subtle;
+
+                                    HorizontalLayout {
+                                        padding-left: 7px;
+                                        padding-right: 7px;
+                                        Text {
+                                            text: cname;
+                                            color: cidx == root.inherits-chain.length - 1 ? Theme.accent-text : Theme.text-secondary;
+                                            font-size: 10px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    chain-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.navigate-inherits-chain(cname); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Card recolhível de Regras de Ativação
+                        Rectangle {
+                            border-radius: 9px;
+                            background: Theme.bg-card;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+
+                                // Cabeçalho clicável do acordeão
+                                Rectangle {
+                                    height: 22px;
+                                    background: transparent;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: space-between;
+
+                                        Text {
+                                            text: (root.context-rules-expanded ? "▾ " : "▸ ") + "Regras de ativação";
+                                            color: Theme.text-secondary;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+
+                                        if !root.context-rules-expanded: Text {
+                                            horizontal-stretch: 1;
+                                            text: root.context-rules-summary;
+                                            color: Theme.text-dim;
+                                            font-size: 11px;
+                                            horizontal-alignment: right;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.toggle-context-rules(); }
                                     }
                                 }
 
-                                chain-touch := TouchArea {
-                                    clicked => { root.navigate-inherits-chain(cname); }
+                                if root.context-rules-expanded: VerticalLayout {
+                                    spacing: 8px;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+
+                                        AppField {
+                                            horizontal-stretch: 1;
+                                            label: "Classe da janela (WINDOWCLASS, use | para várias)";
+                                            placeholder: "ex: firefox|zen|chromium";
+                                            value <=> root.field-window-class;
+                                        }
+
+                                        VerticalLayout {
+                                            spacing: 4px;
+                                            Text {
+                                                text: "Detectar";
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                                font-weight: 500;
+                                            }
+                                            AppButton {
+                                                width: 128px;
+                                                height: 32px;
+                                                text: "◎ Capturar janela";
+                                                clicked => { root.capture-active-window(); }
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 10px;
+
+                                        AppField {
+                                            horizontal-stretch: 1;
+                                            label: "Título contém (opcional, use |)";
+                                            placeholder: "ex: YouTube|Twitch|Netflix";
+                                            value <=> root.field-window-title;
+                                        }
+
+                                        VerticalLayout {
+                                            spacing: 4px;
+                                            Text {
+                                                text: "Prioridade";
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                                font-weight: 500;
+                                            }
+                                            StepperControl {
+                                                height: 32px;
+                                                value-text: root.field-priority + "";
+                                                decrement => { root.change-priority(-5); }
+                                                increment => { root.change-priority(5); }
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            spacing: 4px;
+                                            Text {
+                                                text: "Só tela cheia";
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                                font-weight: 500;
+                                            }
+                                            HorizontalLayout {
+                                                height: 32px;
+                                                alignment: center;
+                                                ToggleSwitch {
+                                                    y: 6px;
+                                                    checked: root.field-fullscreen-only;
+                                                    toggled => { root.toggle-fullscreen-only(); }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if root.captured-window-hint != "": Text {
+                                        text: root.captured-window-hint;
+                                        color: Theme.accent-text;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
                                 }
                             }
                         }
                     }
 
-                    HorizontalLayout {
-                        spacing: 12px;
-                        alignment: start;
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: "Prioridade:";
-                                color: #a1a1aa;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                            DarkButton {
-                                width: 28px;
-                                height: 26px;
-                                text: "-";
-                                clicked => { root.change-priority(-5); }
-                            }
-                            Text {
-                                width: 30px;
-                                text: root.field-priority;
-                                color: #f5f5f7;
-                                font-size: 12px;
-                                font-weight: 600;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            DarkButton {
-                                width: 28px;
-                                height: 26px;
-                                text: "+";
-                                clicked => { root.change-priority(5); }
-                            }
-                        }
-
-                        DarkButton {
-                            height: 26px;
-                            primary: root.field-fullscreen-only;
-                            text: root.field-fullscreen-only ? "Tela cheia: SIM" : "Tela cheia: Qualquer";
-                            clicked => { root.toggle-fullscreen-only(); }
-                        }
-
-                        if root.captured-window-hint != "": Text {
-                            horizontal-stretch: 1;
-                            text: root.captured-window-hint;
-                            color: #93c5fd;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
+                    // Sub-abas do perfil via Segmented Control
+                    SegmentedTwo {
+                        first-label: "Ações do Knob";
+                        second-label: root.profile-hub-subtab-label;
+                        selected-index: root.profile-subtab;
+                        selected(i) => { root.select-profile-subtab(i); }
                     }
 
-                    // Sub-abas do perfil: Ações do Knob | Módulos do Hub
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-
-                        DarkButton {
-                            height: 26px;
-                            primary: root.profile-subtab == 0;
-                            text: "Ações do Knob";
-                            clicked => { root.select-profile-subtab(0); }
-                        }
-
-                        DarkButton {
-                            height: 26px;
-                            primary: root.profile-subtab == 1;
-                            text: "Módulos do Hub";
-                            clicked => { root.select-profile-subtab(1); }
-                        }
-                    }
-
+                    // Sub-aba 0: Mapa Físico dos Controles (Opção A)
                     if root.profile-subtab == 0: VerticalLayout {
                         vertical-stretch: 1;
-                        spacing: 7px;
+                        spacing: 10px;
 
-                        ActionRow {
-                            control-label: "RotateCw (Horário)";
-                            action-summary: root.summary-rotate-cw;
-                            show-learn: true;
-                            learn-clicked => { root.learn-action-slot(0); }
-                            edit-clicked => { root.open-action-editor(0); }
+                        // Seção Botão Rotativo
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                alignment: space-between;
+                                Text {
+                                    text: "BOTÃO ROTATIVO (KNOB)";
+                                    color: Theme.text-dim;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: "● Clique no knob abre o Hub Interativo";
+                                    color: Theme.text-muted;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+
+                                RotaryControlCard {
+                                    horizontal-stretch: 1;
+                                    glyph: "↺";
+                                    title: "Girar Anti-horário";
+                                    slot: root.slot-rotate-ccw;
+                                    learn-clicked => { root.learn-action-slot(1); }
+                                    edit-clicked => { root.open-action-editor(1); }
+                                    clear-clicked => { root.clear-action-slot(1); }
+                                }
+
+                                RotaryControlCard {
+                                    horizontal-stretch: 1;
+                                    glyph: "↻";
+                                    title: "Girar Horário";
+                                    slot: root.slot-rotate-cw;
+                                    learn-clicked => { root.learn-action-slot(0); }
+                                    edit-clicked => { root.open-action-editor(0); }
+                                    clear-clicked => { root.clear-action-slot(0); }
+                                }
+                            }
                         }
 
-                        ActionRow {
-                            control-label: "RotateCcw (Anti-horário)";
-                            action-summary: root.summary-rotate-ccw;
-                            show-learn: true;
-                            learn-clicked => { root.learn-action-slot(1); }
-                            edit-clicked => { root.open-action-editor(1); }
+                        // Seção Teclas Físicas
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "TECLAS FÍSICAS";
+                                color: Theme.text-dim;
+                                font-size: 10px;
+                                font-weight: 700;
+                            }
+
+                            PhysicalKeyRow {
+                                key-code: "K1";
+                                key-label: "Esquerda";
+                                slot: root.slot-key1;
+                                learn-clicked => { root.learn-action-slot(2); }
+                                edit-clicked => { root.open-action-editor(2); }
+                                clear-clicked => { root.clear-action-slot(2); }
+                            }
+
+                            PhysicalKeyRow {
+                                key-code: "K2";
+                                key-label: "Meio";
+                                slot: root.slot-key2;
+                                learn-clicked => { root.learn-action-slot(3); }
+                                edit-clicked => { root.open-action-editor(3); }
+                                clear-clicked => { root.clear-action-slot(3); }
+                            }
+
+                            PhysicalKeyRow {
+                                key-code: "K3";
+                                key-label: "Direita";
+                                slot: root.slot-key3;
+                                learn-clicked => { root.learn-action-slot(4); }
+                                edit-clicked => { root.open-action-editor(4); }
+                                clear-clicked => { root.clear-action-slot(4); }
+                            }
                         }
 
-                        ActionRow {
-                            control-label: "Key1 (Esquerda)";
-                            action-summary: root.summary-key1;
-                            show-learn: true;
-                            learn-clicked => { root.learn-action-slot(2); }
-                            edit-clicked => { root.open-action-editor(2); }
-                        }
-
-                        ActionRow {
-                            control-label: "Key2 (Meio)";
-                            action-summary: root.summary-key2;
-                            show-learn: true;
-                            learn-clicked => { root.learn-action-slot(3); }
-                            edit-clicked => { root.open-action-editor(3); }
-                        }
-
-                        ActionRow {
-                            control-label: "Key3 (Direita)";
-                            action-summary: root.summary-key3;
-                            show-learn: true;
-                            learn-clicked => { root.learn-action-slot(4); }
-                            edit-clicked => { root.open-action-editor(4); }
-                        }
-
-                        Text {
-                            text: "Nota: o clique no knob (KnobPress) abre o Hub Interativo; ações 'Nenhuma' herdam do perfil pai.";
-                            color: rgba(255, 255, 255, 0.48);
-                            font-size: 11px;
-                        }
+                        Rectangle { vertical-stretch: 1; }
                     }
 
+                    // Sub-aba 1: Módulos do Hub deste perfil
                     if root.profile-subtab == 1: VerticalLayout {
                         vertical-stretch: 1;
-                        spacing: 7px;
+                        spacing: 8px;
 
-                        // Banner de herança vs customização
                         Rectangle {
-                            height: 36px;
-                            border-radius: 7px;
+                            height: 38px;
+                            border-radius: 8px;
                             background: root.profile-hub-is-inherited
-                                ? rgba(255, 255, 255, 0.04)
-                                : rgba(59, 130, 246, 0.14);
+                                ? Theme.bg-card
+                                : Theme.accent-soft;
                             border-width: 1px;
                             border-color: root.profile-hub-is-inherited
-                                ? rgba(255, 255, 255, 0.10)
-                                : rgba(96, 165, 250, 0.35);
+                                ? Theme.border-subtle
+                                : Theme.border-accent;
 
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -695,32 +1036,35 @@ export component SettingsWindow inherits Window {
                                 Text {
                                     horizontal-stretch: 1;
                                     text: root.profile-hub-status-text;
-                                    color: root.profile-hub-is-inherited ? #a1a1aa : #bfdbfe;
+                                    color: root.profile-hub-is-inherited ? Theme.text-muted : Theme.accent-text;
                                     font-size: 11px;
                                     font-weight: 600;
                                     vertical-alignment: center;
                                     overflow: elide;
                                 }
 
-                                if root.profile-hub-is-inherited: DarkButton {
+                                if root.profile-hub-is-inherited: AppButton {
+                                    y: 7px;
                                     height: 24px;
+                                    font-size: 11px;
                                     primary: true;
                                     text: "Customizar";
                                     clicked => { root.profile-hub-customize(); }
                                 }
 
-                                if !root.profile-hub-is-inherited: DarkButton {
+                                if !root.profile-hub-is-inherited: AppButton {
+                                    y: 7px;
                                     height: 24px;
+                                    font-size: 11px;
                                     text: "Restaurar herança";
                                     clicked => { root.profile-hub-reset-inherit(); }
                                 }
                             }
                         }
 
-                        // Lista de módulos do Hub deste perfil
                         Flickable {
                             vertical-stretch: 1;
-                            content-height: root.profile-hub-module-labels.length * 32px;
+                            content-height: root.profile-hub-module-labels.length * 36px;
 
                             VerticalLayout {
                                 spacing: 4px;
@@ -728,27 +1072,27 @@ export component SettingsWindow inherits Window {
 
                                 if root.profile-hub-module-labels.length == 0: Text {
                                     text: "Nenhum módulo configurado (o Hub não abrirá neste perfil).";
-                                    color: #a1a1aa;
-                                    font-size: 11px;
+                                    color: Theme.text-muted;
+                                    font-size: 12px;
                                 }
 
                                 for mlabel[midx] in root.profile-hub-module-labels: Rectangle {
-                                    height: 28px;
-                                    border-radius: 6px;
+                                    height: 32px;
+                                    border-radius: 7px;
                                     background: midx == root.profile-hub-selected-index
-                                        ? rgba(59, 130, 246, 0.25)
-                                        : (pmod-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
+                                        ? Theme.accent-soft
+                                        : (pmod-touch.has-hover ? rgba(255, 255, 255, 0.06) : Theme.bg-card);
                                     border-width: 1px;
                                     border-color: midx == root.profile-hub-selected-index
-                                        ? rgba(96, 165, 250, 0.55)
-                                        : rgba(255, 255, 255, 0.06);
+                                        ? Theme.border-accent
+                                        : Theme.border-subtle;
 
                                     HorizontalLayout {
                                         padding-left: 10px;
                                         padding-right: 10px;
                                         Text {
                                             text: mlabel;
-                                            color: root.profile-hub-is-inherited ? #a1a1aa : #f5f5f7;
+                                            color: root.profile-hub-is-inherited ? Theme.text-muted : Theme.text-primary;
                                             font-size: 12px;
                                             vertical-alignment: center;
                                             overflow: elide;
@@ -756,45 +1100,45 @@ export component SettingsWindow inherits Window {
                                     }
 
                                     pmod-touch := TouchArea {
+                                        mouse-cursor: pointer;
                                         clicked => { root.profile-hub-select-module(midx); }
                                     }
                                 }
                             }
                         }
 
-                        // Ações de reordenação / adicionar / remover
                         HorizontalLayout {
                             spacing: 6px;
 
-                            DarkButton {
-                                height: 26px;
+                            AppButton {
+                                height: 28px;
                                 text: "↑ Subir";
                                 clicked => { root.profile-hub-move-module(-1); }
                             }
 
-                            DarkButton {
-                                height: 26px;
+                            AppButton {
+                                height: 28px;
                                 text: "↓ Descer";
                                 clicked => { root.profile-hub-move-module(1); }
                             }
 
-                            DarkButton {
+                            AppButton {
                                 horizontal-stretch: 1;
-                                height: 26px;
+                                height: 28px;
                                 primary: true;
                                 text: "+ Adicionar módulo";
                                 clicked => { root.profile-hub-toggle-picker(); }
                             }
 
-                            DarkButton {
-                                height: 26px;
+                            AppButton {
+                                height: 28px;
                                 danger: true;
                                 text: "Remover";
                                 clicked => { root.profile-hub-remove-module(); }
                             }
                         }
 
-                        if !root.profile-hub-is-inherited && root.profile-hub-module-labels.length > 0: DarkField {
+                        if !root.profile-hub-is-inherited && root.profile-hub-module-labels.length > 0: AppField {
                             label: "Rótulo do módulo selecionado";
                             placeholder: "ex: Abas";
                             value <=> root.profile-hub-selected-title;
@@ -805,427 +1149,610 @@ export component SettingsWindow inherits Window {
         }
 
         // ==================== ABA 1: OVERLAY / HUB ====================
-        if root.active-tab == 1: HorizontalLayout {
+        if root.active-tab == 1: VerticalLayout {
             vertical-stretch: 1;
-            spacing: 14px;
+            spacing: 10px;
 
-            // Coluna esquerda: itens do Hub
-            Rectangle {
-                width: 240px;
-                border-radius: 10px;
-                background: rgba(30, 30, 30, 0.9);
-                border-width: 1px;
-                border-color: rgba(255, 255, 255, 0.1);
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: space-between;
 
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 7px;
+                SegmentedTwo {
+                    width: 420px;
+                    first-label: "Itens Padrão do Hub";
+                    second-label: "Aparência e Comportamento";
+                    selected-index: root.hub-subtab;
+                    selected(i) => { root.select-hub-subtab(i); }
+                }
 
-                    Text {
-                        text: "Itens do Hub";
-                        color: #f5f5f7;
-                        font-size: 15px;
-                        font-weight: 700;
-                    }
+                Text {
+                    text: "Usado pelo perfil global e por perfis sem módulos próprios.";
+                    color: Theme.text-dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
 
-                    Flickable {
-                        vertical-stretch: 1;
-                        content-height: root.hub-item-labels.length * 38px;
+            // Sub-aba 0: Itens Padrão do Hub (altura total livre para editores!)
+            if root.hub-subtab == 0: HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 14px;
 
-                        VerticalLayout {
-                            spacing: 5px;
-                            alignment: start;
+                // Coluna esquerda: lista de itens do Hub
+                Rectangle {
+                    width: 248px;
+                    border-radius: 12px;
+                    background: Theme.bg-surface;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
 
-                            for label[idx] in root.hub-item-labels: Rectangle {
-                                height: 33px;
-                                border-radius: 7px;
-                                background: idx == root.hub-selected-index
-                                    ? rgba(255, 255, 255, 0.18)
-                                    : (hub-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
-                                border-width: 1px;
-                                border-color: idx == root.hub-selected-index
-                                    ? rgba(255, 255, 255, 0.35)
-                                    : rgba(255, 255, 255, 0.06);
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 7px;
 
-                                HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 10px;
-                                    Text {
-                                        text: label;
-                                        color: idx == root.hub-selected-index ? #ffffff : #d4d4d8;
-                                        font-size: 12px;
-                                        font-weight: idx == root.hub-selected-index ? 600 : 400;
-                                        vertical-alignment: center;
-                                        overflow: elide;
+                        Text {
+                            text: "Itens do Hub";
+                            color: Theme.text-primary;
+                            font-size: 14px;
+                            font-weight: 700;
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            content-height: root.hub-item-labels.length * 38px;
+
+                            VerticalLayout {
+                                spacing: 5px;
+                                alignment: start;
+
+                                for label[idx] in root.hub-item-labels: Rectangle {
+                                    height: 33px;
+                                    border-radius: 8px;
+                                    background: idx == root.hub-selected-index
+                                        ? Theme.accent-soft
+                                        : (hub-touch.has-hover ? rgba(255, 255, 255, 0.06) : Theme.bg-card);
+                                    border-width: 1px;
+                                    border-color: idx == root.hub-selected-index
+                                        ? Theme.border-accent
+                                        : Theme.border-subtle;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+
+                                        Rectangle {
+                                            width: 7px;
+                                            height: 7px;
+                                            y: 13px;
+                                            border-radius: 4px;
+                                            background: root.hub-item-enabled-flags[idx]
+                                                ? Theme.success
+                                                : Theme.text-dim;
+                                        }
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: label;
+                                            color: idx == root.hub-selected-index ? Theme.text-primary : Theme.text-secondary;
+                                            font-size: 12px;
+                                            font-weight: idx == root.hub-selected-index ? 600 : 400;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
                                     }
-                                }
 
-                                hub-touch := TouchArea {
-                                    clicked => { root.hub-select-item(idx); }
+                                    hub-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.hub-select-item(idx); }
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    HorizontalLayout {
-                        spacing: 6px;
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            text: "↑ Subir";
-                            clicked => { root.hub-move-item(-1); }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            AppButton {
+                                horizontal-stretch: 1;
+                                text: "↑ Subir";
+                                clicked => { root.hub-move-item(-1); }
+                            }
+                            AppButton {
+                                horizontal-stretch: 1;
+                                text: "↓ Descer";
+                                clicked => { root.hub-move-item(1); }
+                            }
                         }
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            text: "↓ Descer";
-                            clicked => { root.hub-move-item(1); }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            AppButton {
+                                horizontal-stretch: 1;
+                                font-size: 11px;
+                                text: "+ Ação";
+                                clicked => { root.hub-add-quick-action(); }
+                            }
+                            AppButton {
+                                horizontal-stretch: 1;
+                                font-size: 11px;
+                                text: "+ Slider";
+                                clicked => { root.hub-add-custom-slider(); }
+                            }
+                            AppButton {
+                                horizontal-stretch: 1;
+                                font-size: 11px;
+                                text: "+ Grupo";
+                                clicked => { root.hub-add-custom-group(); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            AppButton {
+                                horizontal-stretch: 1;
+                                text: "Padrão";
+                                clicked => { root.hub-reset-defaults(); }
+                            }
+                            AppButton {
+                                horizontal-stretch: 1;
+                                danger: true;
+                                text: "Remover";
+                                clicked => { root.hub-remove-item(); }
+                            }
                         }
                     }
+                }
 
-                    HorizontalLayout {
-                        spacing: 6px;
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            text: "+ Ação";
-                            clicked => { root.hub-add-quick-action(); }
-                        }
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            text: "+ Slider";
-                            clicked => { root.hub-add-custom-slider(); }
-                        }
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            text: "+ Grupo";
-                            clicked => { root.hub-add-custom-group(); }
-                        }
-                    }
+                // Coluna direita: editor do item selecionado
+                Rectangle {
+                    horizontal-stretch: 1;
+                    clip: true;
+                    border-radius: 12px;
+                    background: Theme.bg-surface;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
 
-                    HorizontalLayout {
-                        spacing: 6px;
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            text: "Padrão";
-                            clicked => { root.hub-reset-defaults(); }
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            AppField {
+                                horizontal-stretch: 1;
+                                label: "Título do item (" + root.hub-item-kind-label + ")";
+                                placeholder: "ex: Sons & Apps";
+                                value <=> root.hub-item-title;
+                            }
+
+                            VerticalLayout {
+                                spacing: 4px;
+                                Text {
+                                    text: "Visível no Hub";
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    font-weight: 500;
+                                }
+                                HorizontalLayout {
+                                    height: 32px;
+                                    spacing: 8px;
+                                    alignment: start;
+
+                                    ToggleSwitch {
+                                        y: 6px;
+                                        checked: root.hub-item-enabled;
+                                        toggled => { root.hub-toggle-enabled(); }
+                                    }
+
+                                    Text {
+                                        text: root.hub-item-enabled ? "Ativo" : "Oculto";
+                                        color: root.hub-item-enabled ? Theme.text-primary : Theme.text-dim;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
                         }
-                        DarkButton {
-                            horizontal-stretch: 1;
-                            danger: true;
-                            text: "Remover";
-                            clicked => { root.hub-remove-item(); }
+
+                        // Imagem opcional do item
+                        Rectangle {
+                            height: 38px;
+                            border-radius: 8px;
+                            background: Theme.bg-card;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 8px;
+                                spacing: 8px;
+
+                                Text {
+                                    text: "Imagem opcional:";
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: root.hub-item-icon-label;
+                                    color: Theme.text-secondary;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                AppButton {
+                                    y: 7px;
+                                    height: 24px;
+                                    font-size: 11px;
+                                    text: "Escolher...";
+                                    clicked => { root.hub-pick-item-icon(); }
+                                }
+                                AppButton {
+                                    y: 7px;
+                                    height: 24px;
+                                    font-size: 11px;
+                                    ghost: true;
+                                    text: "Limpar";
+                                    clicked => { root.hub-clear-item-icon(); }
+                                }
+                            }
+                        }
+
+                        // Modo 0: Módulo nativo embutido
+                        if root.hub-item-editor-mode == 0: Rectangle {
+                            vertical-stretch: 1;
+                            border-radius: 10px;
+                            background: Theme.bg-card;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+
+                            VerticalLayout {
+                                padding: 20px;
+                                alignment: center;
+                                spacing: 6px;
+                                Text {
+                                    text: "Módulo nativo: " + root.hub-item-kind-label;
+                                    color: Theme.text-primary;
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: "Você pode renomear, reordenar, atribuir uma imagem ou ocultar este módulo no Hub.";
+                                    color: Theme.text-muted;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // Modo 1: Ação Rápida
+                        if root.hub-item-editor-mode == 1: VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 10px;
+                            SimpleActionRow {
+                                control-label: "Ação ao confirmar";
+                                action-summary: root.hub-quick-action-summary;
+                                edit-clicked => { root.hub-edit-quick-action(); }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+
+                        // Modo 2: Slider Customizado
+                        if root.hub-item-editor-mode == 2: VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 8px;
+
+                            AppField {
+                                label: "Comando ao girar horário (+)";
+                                placeholder: "ex: hyprctl keyword cursor:zoom_factor 2";
+                                value <=> root.hub-slider-up;
+                            }
+                            AppField {
+                                label: "Comando ao girar anti-horário (-)";
+                                placeholder: "ex: hyprctl keyword cursor:zoom_factor 1";
+                                value <=> root.hub-slider-down;
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                AppField {
+                                    horizontal-stretch: 1;
+                                    label: "Comando K2 (opcional)";
+                                    placeholder: "ex: toggle / reset";
+                                    value <=> root.hub-slider-toggle;
+                                }
+                                AppField {
+                                    horizontal-stretch: 1;
+                                    label: "Comando leitura 0-100 (opcional)";
+                                    placeholder: "ex: echo 50";
+                                    value <=> root.hub-slider-read;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                Text {
+                                    text: "Passo visual:";
+                                    color: Theme.text-muted;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                                StepperControl {
+                                    value-text: root.hub-slider-step + "%";
+                                    decrement => { root.hub-change-slider-step(-1); }
+                                    increment => { root.hub-change-slider-step(1); }
+                                }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+
+                        // Modo 3: Submenu Customizado
+                        if root.hub-item-editor-mode == 3: VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 8px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: "Entradas do submenu";
+                                    color: Theme.text-secondary;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                                AppButton {
+                                    height: 26px;
+                                    primary: true;
+                                    font-size: 11px;
+                                    text: "+ Entrada";
+                                    clicked => { root.hub-group-add-entry(); }
+                                }
+                                AppButton {
+                                    height: 26px;
+                                    danger: true;
+                                    font-size: 11px;
+                                    text: "Remover";
+                                    clicked => { root.hub-group-remove-entry(); }
+                                }
+                            }
+
+                            Flickable {
+                                vertical-stretch: 1;
+                                content-height: root.hub-group-entry-labels.length * 36px;
+
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    for elabel[eidx] in root.hub-group-entry-labels: Rectangle {
+                                        height: 32px;
+                                        border-radius: 7px;
+                                        background: eidx == root.hub-group-selected-entry
+                                            ? Theme.accent-soft
+                                            : Theme.bg-card;
+                                        border-width: 1px;
+                                        border-color: eidx == root.hub-group-selected-entry
+                                            ? Theme.border-accent
+                                            : Theme.border-subtle;
+
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            Text {
+                                                text: elabel;
+                                                color: Theme.text-primary;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.hub-group-select-entry(eidx); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.hub-group-entry-labels.length > 0: VerticalLayout {
+                                spacing: 8px;
+                                AppField {
+                                    label: "Nome da entrada selecionada";
+                                    placeholder: "ex: Abrir Obsidian";
+                                    value <=> root.hub-group-entry-name;
+                                }
+                                SimpleActionRow {
+                                    control-label: "Ação da entrada";
+                                    action-summary: root.hub-group-entry-action-summary;
+                                    edit-clicked => { root.hub-group-edit-entry-action(); }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Coluna direita: ajustes gerais + editor do item selecionado
-            Rectangle {
-                horizontal-stretch: 1;
-                clip: true;
-                border-radius: 10px;
-                background: rgba(30, 30, 30, 0.9);
-                border-width: 1px;
-                border-color: rgba(255, 255, 255, 0.1);
+            // Sub-aba 1: Aparência e Comportamento (Cards limpos com Switches e Steppers)
+            if root.hub-subtab == 1: HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 14px;
 
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
+                // Card 1: Sensibilidade e Timeouts
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: 12px;
+                    background: Theme.bg-surface;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
 
-                    // Ajustes gerais do Hub
-                    Rectangle {
-                        border-radius: 8px;
-                        background: rgba(18, 18, 20, 0.85);
-                        border-width: 1px;
-                        border-color: rgba(255, 255, 255, 0.08);
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 16px;
 
                         VerticalLayout {
-                            padding: 8px;
-                            spacing: 6px;
-
+                            spacing: 2px;
                             Text {
-                                text: "Comportamento do Hub";
-                                color: #f5f5f7;
-                                font-size: 13px;
+                                text: "Sensibilidade e Timeouts";
+                                color: Theme.text-primary;
+                                font-size: 15px;
                                 font-weight: 700;
                             }
-
-                            HorizontalLayout {
-                                spacing: 14px;
-                                alignment: start;
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    Text { text: "Vol passo:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-volume-step(-1); } }
-                                    Text { width: 32px; text: root.hub-volume-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-volume-step(1); } }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    Text { text: "Brilho passo:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-brightness-step(-1); } }
-                                    Text { width: 32px; text: root.hub-brightness-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-brightness-step(1); } }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 14px;
-                                alignment: start;
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    Text { text: "Timeout navegar:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-browse-timeout(-1); } }
-                                    Text { width: 28px; text: root.hub-browse-timeout-sec + "s"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-browse-timeout(1); } }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    Text { text: "Timeout ajustando:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-adjust-timeout(-1); } }
-                                    Text { width: 32px; text: root.hub-adjust-timeout-sec + "s"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-adjust-timeout(1); } }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: start;
-
-                                DarkButton {
-                                    height: 24px;
-                                    primary: root.hub-key3-is-confirm;
-                                    text: root.hub-key3-is-confirm ? "K3: Confirmar" : "K3: Fechar";
-                                    clicked => { root.hub-toggle-key3-behavior(); }
-                                }
-
-                                DarkButton {
-                                    height: 24px;
-                                    primary: root.hub-show-images;
-                                    text: root.hub-show-images ? "Imagens: SIM" : "Imagens: NÃO";
-                                    clicked => { root.hub-toggle-show-images(); }
-                                }
-
-                                DarkButton {
-                                    height: 24px;
-                                    primary: root.hub-animations-enabled;
-                                    text: root.hub-animations-enabled ? "Animações: SIM" : "Animações: NÃO";
-                                    clicked => { root.hub-toggle-animations(); }
-                                }
-                            }
-                        }
-                    }
-
-                    // Editor do item selecionado
-                    HorizontalLayout {
-                        spacing: 10px;
-                        DarkField {
-                            horizontal-stretch: 1;
-                            label: "Título do item (" + root.hub-item-kind-label + ")";
-                            placeholder: "ex: Sons & Apps";
-                            value <=> root.hub-item-title;
-                        }
-                        VerticalLayout {
-                            spacing: 4px;
-                            Text { text: "Estado"; color: #a1a1aa; font-size: 11px; }
-                            DarkButton {
-                                width: 110px;
-                                height: 32px;
-                                primary: root.hub-item-enabled;
-                                text: root.hub-item-enabled ? "Ativo no Hub" : "Oculto";
-                                clicked => { root.hub-toggle-enabled(); }
-                            }
-                        }
-                    }
-
-                    // Imagem opcional do item selecionado
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            text: "Imagem opcional:";
-                            color: #a1a1aa;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            horizontal-stretch: 1;
-                            text: root.hub-item-icon-label;
-                            color: #d4d4d8;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        DarkButton {
-                            height: 24px;
-                            text: "Escolher...";
-                            clicked => { root.hub-pick-item-icon(); }
-                        }
-                        DarkButton {
-                            height: 24px;
-                            text: "Limpar";
-                            clicked => { root.hub-clear-item-icon(); }
-                        }
-                    }
-
-                    // Modo 0: Módulo nativo embutido
-                    if root.hub-item-editor-mode == 0: Rectangle {
-                        vertical-stretch: 1;
-                        border-radius: 8px;
-                        background: rgba(18, 18, 20, 0.65);
-                        border-width: 1px;
-                        border-color: rgba(255, 255, 255, 0.06);
-
-                        VerticalLayout {
-                            padding: 14px;
-                            alignment: center;
-                            spacing: 6px;
                             Text {
-                                text: "Módulo nativo: " + root.hub-item-kind-label;
-                                color: #f5f5f7;
-                                font-size: 13px;
-                                font-weight: 600;
-                                horizontal-alignment: center;
-                            }
-                            Text {
-                                text: "Você pode renomear, reordenar ou ocultar este módulo no Hub.";
-                                color: #a1a1aa;
+                                text: "Controle o incremento por giro e o tempo de fechamento automático do Hub.";
+                                color: Theme.text-muted;
                                 font-size: 11px;
-                                horizontal-alignment: center;
                                 wrap: word-wrap;
                             }
                         }
-                    }
-
-                    // Modo 1: Ação Rápida
-                    if root.hub-item-editor-mode == 1: VerticalLayout {
-                        vertical-stretch: 1;
-                        spacing: 8px;
-                        ActionRow {
-                            control-label: "Ação ao confirmar";
-                            action-summary: root.hub-quick-action-summary;
-                            edit-clicked => { root.hub-edit-quick-action(); }
-                        }
-                    }
-
-                    // Modo 2: Slider Customizado
-                    if root.hub-item-editor-mode == 2: VerticalLayout {
-                        vertical-stretch: 1;
-                        spacing: 6px;
-
-                        DarkField {
-                            label: "Comando ao girar horário (+)";
-                            placeholder: "ex: hyprctl keyword cursor:zoom_factor 2";
-                            value <=> root.hub-slider-up;
-                        }
-                        DarkField {
-                            label: "Comando ao girar anti-horário (-)";
-                            placeholder: "ex: hyprctl keyword cursor:zoom_factor 1";
-                            value <=> root.hub-slider-down;
-                        }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            DarkField {
-                                horizontal-stretch: 1;
-                                label: "Comando K2 (opcional)";
-                                placeholder: "ex: toggle / reset";
-                                value <=> root.hub-slider-toggle;
-                            }
-                            DarkField {
-                                horizontal-stretch: 1;
-                                label: "Comando leitura 0-100 (opcional)";
-                                placeholder: "ex: echo 50";
-                                value <=> root.hub-slider-read;
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: start;
-                            Text { text: "Passo visual:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
-                            DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-slider-step(-1); } }
-                            Text { width: 32px; text: root.hub-slider-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                            DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-slider-step(1); } }
-                        }
-                    }
-
-                    // Modo 3: Submenu Customizado (Grupo de Ações)
-                    if root.hub-item-editor-mode == 3: VerticalLayout {
-                        vertical-stretch: 1;
-                        spacing: 8px;
 
                         HorizontalLayout {
-                            spacing: 8px;
-                            Text {
-                                horizontal-stretch: 1;
-                                text: "Entradas do submenu:";
-                                color: #d4d4d8;
-                                font-size: 12px;
-                                font-weight: 600;
-                                vertical-alignment: center;
-                            }
-                            DarkButton {
-                                height: 25px;
-                                text: "+ Entrada";
-                                clicked => { root.hub-group-add-entry(); }
-                            }
-                            DarkButton {
-                                height: 25px;
-                                danger: true;
-                                text: "Remover";
-                                clicked => { root.hub-group-remove-entry(); }
-                            }
-                        }
-
-                        Flickable {
-                            vertical-stretch: 1;
-                            content-height: root.hub-group-entry-labels.length * 34px;
-
+                            spacing: 10px;
                             VerticalLayout {
-                                spacing: 4px;
-                                alignment: start;
-                                for elabel[eidx] in root.hub-group-entry-labels: Rectangle {
-                                    height: 30px;
-                                    border-radius: 6px;
-                                    background: eidx == root.hub-group-selected-entry
-                                        ? rgba(59, 130, 246, 0.25)
-                                        : rgba(255, 255, 255, 0.04);
-                                    border-width: 1px;
-                                    border-color: eidx == root.hub-group-selected-entry
-                                        ? rgba(96, 165, 250, 0.6)
-                                        : rgba(255, 255, 255, 0.06);
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "Passo de volume"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text { text: "Incremento ao girar no Mixer de Áudio"; color: Theme.text-dim; font-size: 11px; }
+                            }
+                            StepperControl {
+                                y: 4px;
+                                value-text: root.hub-volume-step + "%";
+                                decrement => { root.hub-change-volume-step(-1); }
+                                increment => { root.hub-change-volume-step(1); }
+                            }
+                        }
 
-                                    HorizontalLayout {
-                                        padding-left: 10px;
-                                        padding-right: 10px;
-                                        Text {
-                                            text: elabel;
-                                            color: #f5f5f7;
-                                            font-size: 12px;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                        }
-                                    }
-                                    TouchArea {
-                                        clicked => { root.hub-group-select-entry(eidx); }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "Passo de brilho"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text { text: "Incremento ao ajustar brilho dos monitores"; color: Theme.text-dim; font-size: 11px; }
+                            }
+                            StepperControl {
+                                y: 4px;
+                                value-text: root.hub-brightness-step + "%";
+                                decrement => { root.hub-change-brightness-step(-1); }
+                                increment => { root.hub-change-brightness-step(1); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "Timeout ao navegar"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text { text: "Fecha o Hub após inatividade navegando"; color: Theme.text-dim; font-size: 11px; }
+                            }
+                            StepperControl {
+                                y: 4px;
+                                value-text: root.hub-browse-timeout-sec + "s";
+                                decrement => { root.hub-change-browse-timeout(-1); }
+                                increment => { root.hub-change-browse-timeout(1); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "Timeout ajustando slider"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text { text: "Mantém o Hub aberto por mais tempo no modo ajuste"; color: Theme.text-dim; font-size: 11px; }
+                            }
+                            StepperControl {
+                                y: 4px;
+                                value-text: root.hub-adjust-timeout-sec + "s";
+                                decrement => { root.hub-change-adjust-timeout(-1); }
+                                increment => { root.hub-change-adjust-timeout(1); }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // Card 2: Interação e Visual
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: 12px;
+                    background: Theme.bg-surface;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 18px;
+
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: "Interação e Visual";
+                                color: Theme.text-primary;
+                                font-size: 15px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: "Personalize animações, miniaturas e o papel da tecla K3 com o Hub aberto.";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "Miniaturas e ícones de apps"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text { text: "Exibe thumbnails de wallpapers e ícones .desktop no carrossel"; color: Theme.text-dim; font-size: 11px; wrap: word-wrap; }
+                            }
+                            ToggleSwitch {
+                                y: 8px;
+                                checked: root.hub-show-images;
+                                toggled => { root.hub-toggle-show-images(); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "Animações suaves (60fps)"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text { text: "Transições contínuas ao girar o carrossel e abrir o overlay"; color: Theme.text-dim; font-size: 11px; wrap: word-wrap; }
+                            }
+                            ToggleSwitch {
+                                y: 8px;
+                                checked: root.hub-animations-enabled;
+                                toggled => { root.hub-toggle-animations(); }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text { text: "Comportamento da tecla K3 no Hub"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                            Text { text: "Define o que a tecla direita (K3) faz enquanto o overlay está aberto."; color: Theme.text-dim; font-size: 11px; wrap: word-wrap; }
+
+                            SegmentedTwo {
+                                first-label: "Confirmar / Travar";
+                                second-label: "Fechar Hub";
+                                selected-index: root.hub-key3-is-confirm ? 0 : 1;
+                                selected(i) => {
+                                    if (i == 0 && !root.hub-key3-is-confirm) || (i == 1 && root.hub-key3-is-confirm) {
+                                        root.hub-toggle-key3-behavior();
                                     }
                                 }
                             }
                         }
 
-                        if root.hub-group-entry-labels.length > 0: VerticalLayout {
-                            spacing: 6px;
-                            DarkField {
-                                label: "Nome da entrada selecionada";
-                                placeholder: "ex: Abrir Obsidian";
-                                value <=> root.hub-group-entry-name;
-                            }
-                            ActionRow {
-                                control-label: "Ação da entrada";
-                                action-summary: root.hub-group-entry-action-summary;
-                                edit-clicked => { root.hub-group-edit-entry-action(); }
-                            }
-                        }
+                        Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
@@ -1233,16 +1760,16 @@ export component SettingsWindow inherits Window {
 
         // Mensagem de erro global
         if root.error-message != "": Rectangle {
-            border-radius: 6px;
-            background: rgba(220, 38, 38, 0.22);
+            border-radius: 8px;
+            background: Theme.danger-soft;
             border-width: 1px;
-            border-color: rgba(248, 113, 113, 0.45);
+            border-color: Theme.danger-border;
 
             HorizontalLayout {
                 padding: 8px;
                 Text {
                     text: root.error-message;
-                    color: #fca5a5;
+                    color: Theme.danger-text;
                     font-size: 12px;
                     wrap: word-wrap;
                 }
@@ -1254,12 +1781,12 @@ export component SettingsWindow inherits Window {
             alignment: end;
             spacing: 10px;
 
-            DarkButton {
+            AppButton {
                 text: "Cancelar";
                 clicked => { root.cancel-requested(); }
             }
 
-            DarkButton {
+            AppButton {
                 text: "Salvar";
                 primary: true;
                 clicked => { root.save-requested(); }
@@ -1267,39 +1794,52 @@ export component SettingsWindow inherits Window {
         }
     }
 
+    // ==================== MODAL: HERDA DE ====================
     if root.inherits-picker-open: Rectangle {
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.58);
+        background: Theme.bg-scrim;
 
         TouchArea {
             clicked => { root.toggle-inherits-picker(); }
         }
 
         Rectangle {
-            width: 340px;
-            height: 320px;
+            width: 360px;
+            height: 340px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            border-radius: 12px;
-            background: rgba(24, 24, 27, 0.98);
+            border-radius: 14px;
+            background: Theme.bg-window;
             border-width: 1px;
-            border-color: rgba(255, 255, 255, 0.16);
+            border-color: Theme.border-default;
 
             VerticalLayout {
                 padding: 16px;
-                spacing: 8px;
+                spacing: 10px;
 
-                Text {
-                    text: "Herda de:";
-                    color: #f5f5f7;
-                    font-size: 15px;
-                    font-weight: 700;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "Herda de";
+                        color: Theme.text-primary;
+                        font-size: 15px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    AppButton {
+                        width: 26px;
+                        height: 26px;
+                        ghost: true;
+                        text: "×";
+                        font-size: 15px;
+                        clicked => { root.toggle-inherits-picker(); }
+                    }
                 }
 
                 Text {
                     text: "Ações definidas como 'Nenhuma' serão herdadas do perfil escolhido:";
-                    color: #a1a1aa;
+                    color: Theme.text-muted;
                     font-size: 11px;
                     wrap: word-wrap;
                 }
@@ -1312,59 +1852,64 @@ export component SettingsWindow inherits Window {
                         spacing: 6px;
                         alignment: start;
 
-                        for opt[oidx] in root.inherits-options: DarkButton {
+                        for opt[oidx] in root.inherits-options: AppButton {
                             height: 32px;
-                            primary: opt == root.field-inherits-label;
+                            active: opt == root.field-inherits-label;
                             text: opt;
                             clicked => { root.select-inherits-option(oidx); }
                         }
-                    }
-                }
-
-                HorizontalLayout {
-                    alignment: end;
-                    DarkButton {
-                        text: "Fechar";
-                        clicked => { root.toggle-inherits-picker(); }
                     }
                 }
             }
         }
     }
 
+    // ==================== MODAL: ADICIONAR MÓDULO AO HUB ====================
     if root.profile-hub-picker-open: Rectangle {
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.62);
+        background: Theme.bg-scrim;
 
         TouchArea {
             clicked => { root.profile-hub-toggle-picker(); }
         }
 
         Rectangle {
-            width: 380px;
-            height: 380px;
+            width: 400px;
+            height: 400px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            border-radius: 12px;
-            background: rgba(24, 24, 27, 0.98);
+            border-radius: 14px;
+            background: Theme.bg-window;
             border-width: 1px;
-            border-color: rgba(255, 255, 255, 0.16);
+            border-color: Theme.border-default;
 
             VerticalLayout {
                 padding: 16px;
-                spacing: 8px;
+                spacing: 10px;
 
-                Text {
-                    text: "Adicionar Módulo ao Hub";
-                    color: #f5f5f7;
-                    font-size: 15px;
-                    font-weight: 700;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "Adicionar Módulo ao Hub";
+                        color: Theme.text-primary;
+                        font-size: 15px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    AppButton {
+                        width: 26px;
+                        height: 26px;
+                        ghost: true;
+                        text: "×";
+                        font-size: 15px;
+                        clicked => { root.profile-hub-toggle-picker(); }
+                    }
                 }
 
                 Text {
                     text: "Escolha um módulo nativo para adicionar a este perfil:";
-                    color: #a1a1aa;
+                    color: Theme.text-muted;
                     font-size: 11px;
                     wrap: word-wrap;
                 }
@@ -1377,121 +1922,130 @@ export component SettingsWindow inherits Window {
                         spacing: 6px;
                         alignment: start;
 
-                        for tlabel[tidx] in root.profile-hub-template-labels: DarkButton {
+                        for tlabel[tidx] in root.profile-hub-template-labels: AppButton {
                             height: 30px;
                             text: tlabel;
                             clicked => { root.profile-hub-add-template(tidx); }
                         }
                     }
                 }
-
-                HorizontalLayout {
-                    alignment: end;
-                    DarkButton {
-                        text: "Fechar";
-                        clicked => { root.profile-hub-toggle-picker(); }
-                    }
-                }
             }
         }
     }
 
+    // ==================== MODAL: PRESETS CONTEXTUAIS ====================
     if root.preset-picker-open: Rectangle {
         width: 100%;
         height: 100%;
-        background: rgba(0, 0, 0, 0.62);
+        background: Theme.bg-scrim;
 
         TouchArea {
             clicked => { root.toggle-preset-picker(); }
         }
 
         Rectangle {
-            width: 420px;
-            height: 360px;
+            width: 440px;
+            height: 380px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            border-radius: 12px;
-            background: rgba(24, 24, 27, 0.98);
+            border-radius: 14px;
+            background: Theme.bg-window;
             border-width: 1px;
-            border-color: rgba(255, 255, 255, 0.16);
+            border-color: Theme.border-default;
 
             VerticalLayout {
                 padding: 16px;
-                spacing: 8px;
+                spacing: 10px;
 
-                Text {
-                    text: "Adicionar Preset Contextual";
-                    color: #f5f5f7;
-                    font-size: 15px;
-                    font-weight: 700;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "Adicionar Preset Contextual";
+                        color: Theme.text-primary;
+                        font-size: 15px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    AppButton {
+                        width: 26px;
+                        height: 26px;
+                        ghost: true;
+                        text: "×";
+                        font-size: 15px;
+                        clicked => { root.toggle-preset-picker(); }
+                    }
                 }
 
                 Text {
                     text: "Escolha um comportamento pronto para adicionar aos seus perfis:";
-                    color: #a1a1aa;
+                    color: Theme.text-muted;
                     font-size: 11px;
                     wrap: word-wrap;
                 }
 
-                VerticalLayout {
-                    spacing: 6px;
+                Flickable {
                     vertical-stretch: 1;
+                    content-height: root.preset-labels.length * 40px;
 
-                    for label[idx] in root.preset-labels: DarkButton {
-                        height: 34px;
-                        text: label;
-                        clicked => { root.add-preset(idx); }
-                    }
-                }
+                    VerticalLayout {
+                        spacing: 6px;
+                        alignment: start;
 
-                HorizontalLayout {
-                    alignment: end;
-                    DarkButton {
-                        text: "Fechar";
-                        clicked => { root.toggle-preset-picker(); }
+                        for label[idx] in root.preset-labels: AppButton {
+                            height: 34px;
+                            text: label;
+                            clicked => { root.add-preset(idx); }
+                        }
                     }
                 }
             }
         }
     }
 
+    // ==================== POPOVER: SELETOR DE AÇÕES ====================
     if root.editor-open: ActionEditorPopover {
         width: 100%;
         height: 100%;
         control-title: root.editor-control-title;
-        type-titles: root.editor-type-titles;
+        profile-context-label: root.editor-profile-context-label;
+        inherited-hint: root.editor-inherited-hint;
         selected-type-index: root.editor-type-index;
+        preview-text: root.editor-preview-text;
         shortcut-text <=> root.editor-shortcut-text;
-        capturing-shortcut: root.editor-capturing-shortcut;
+        shortcut-parts: root.editor-shortcut-parts;
         selected-media-index: root.editor-media-index;
         app-search <=> root.editor-app-search;
-        filtered-app-names: root.editor-filtered-apps;
+        filtered-apps: root.editor-filtered-apps;
         selected-app-index: root.editor-selected-app-index;
+        selected-app-label: root.editor-selected-app-label;
         url-text <=> root.editor-url-text;
         file-text <=> root.editor-file-text;
         exec-text <=> root.editor-exec-text;
         scroll-direction-index: root.editor-scroll-direction;
         scroll-amount: root.editor-scroll-amount;
-        macro-step-labels: root.editor-macro-steps;
+        macro-steps: root.editor-macro-steps;
         macro-key-text <=> root.editor-macro-key-text;
         macro-wait-text <=> root.editor-macro-wait-text;
-        capturing-macro-key: root.editor-capturing-macro;
         error-message: root.editor-error-message;
 
         select-type(i) => { root.editor-select-type(i); }
-        toggle-shortcut-capture => { root.editor-toggle-shortcut-capture(); }
-        shortcut-key-captured(t, c, a, s, m) => { root.editor-shortcut-key-captured(t, c, a, s, m); }
         open-learn-shortcut => { root.editor-open-learn-shortcut(); }
+        shortcut-text-edited(v) => { root.editor-shortcut-text-edited(v); }
+        toggle-shortcut-modifier(m) => { root.editor-toggle-shortcut-modifier(m); }
+        apply-shortcut-preset(p) => { root.editor-apply-shortcut-preset(p); }
+        clear-shortcut => { root.editor-clear-shortcut(); }
         select-media(i) => { root.editor-select-media(i); }
         app-search-changed(q) => { root.editor-app-search-changed(q); }
         select-app(i) => { root.editor-select-app(i); }
         pick-file => { root.editor-pick-file(); }
         select-scroll-direction(i) => { root.editor-select-scroll-direction(i); }
         change-scroll-amount(d) => { root.editor-change-scroll-amount(d); }
-        toggle-macro-capture => { root.editor-toggle-macro-capture(); }
-        macro-key-captured(t, c, a, s, m) => { root.editor-macro-key-captured(t, c, a, s, m); }
+        set-scroll-amount(v) => { root.editor-set-scroll-amount(v); }
+        open-learn-macro => { root.editor-open-learn-macro(); }
         add-macro-key => { root.editor-add-macro-key(); }
         add-macro-wait => { root.editor-add-macro-wait(); }
+        add-macro-wait-preset(ms) => { root.editor-add-macro-wait-preset(ms); }
+        move-macro-step(idx, d) => { root.editor-move-macro-step(idx, d); }
         remove-macro-step(i) => { root.editor-remove-macro-step(i); }
         save-action => { root.editor-save(); }
         cancel-action => { root.editor-cancel(); }

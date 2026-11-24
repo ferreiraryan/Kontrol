@@ -1,6 +1,5 @@
 use crate::actions_catalog::{
-    action_summary, action_type_title, list_desktop_apps, ActionType, DesktopApp,
-    ACTION_TYPE_TITLES,
+    action_summary, action_type_index, action_type_title, list_desktop_apps, ActionType, DesktopApp,
 };
 use crate::config::{
     builtin_hub_module_templates, builtin_profile_presets, default_overlay_items, ActionConfig,
@@ -9,10 +8,10 @@ use crate::config::{
 };
 use crate::context::ActiveWindowInfo;
 use crate::error::KnobError;
-use crate::ui::action_editor_mod::{format_captured_key, pick_file_uri, sync_editor_to_ui};
+use crate::ui::action_editor_mod::{pick_file_uri, sync_editor_to_ui};
 use crate::ui::action_editor_state::{ActionEditorState, ControlSlot};
 use crate::ui::learn_mod::LearnController;
-use crate::ui::SettingsWindow;
+use crate::ui::{ControlSlotView, ProfileListItem, SettingsWindow};
 use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,7 +26,9 @@ enum EditorTarget {
 struct SettingsDraft {
     base_config: Config,
     active_tab: usize,
+    hub_subtab: usize,
     profile_subtab: usize,
+    context_rules_expanded: bool,
     selected_index: usize,
     profile_hub_selected_index: usize,
     profile_hub_picker_open: bool,
@@ -71,7 +72,9 @@ impl SettingsController {
         let draft = Rc::new(RefCell::new(SettingsDraft {
             base_config: initial_config,
             active_tab: 0,
+            hub_subtab: 0,
             profile_subtab: 0,
+            context_rules_expanded: true,
             selected_index: 0,
             profile_hub_selected_index: 0,
             profile_hub_picker_open: false,
@@ -100,12 +103,6 @@ impl SettingsController {
 
     fn create_wired_window(&self) -> Result<SettingsWindow, KnobError> {
         let window = SettingsWindow::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
-
-        let titles: Vec<SharedString> = ACTION_TYPE_TITLES
-            .iter()
-            .map(|t| SharedString::from(*t))
-            .collect();
-        window.set_editor_type_titles(ModelRc::from(Rc::new(VecModel::from(titles))));
 
         let preset_labels: Vec<SharedString> = builtin_profile_presets()
             .iter()
@@ -149,6 +146,34 @@ impl SettingsController {
             });
         }
 
+        // Alternar sub-aba de Overlay / Hub (0 = Itens Padrão, 1 = Aparência e Comportamento)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_select_hub_subtab(move |sub| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                if d.hub_subtab == 0 {
+                    apply_hub_fields_to_draft(&win, &mut d);
+                }
+                d.hub_subtab = if sub == 1 { 1 } else { 0 };
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Recolher / expandir card "Regras de ativação"
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_toggle_context_rules(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                let _ = apply_profile_header_to_draft(&win, &mut d);
+                d.context_rules_expanded = !d.context_rules_expanded;
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
         // Selecionar perfil na lista lateral
         {
             let weak = window.as_weak();
@@ -165,6 +190,12 @@ impl SettingsController {
                 d.selected_index = target;
                 d.profile_hub_selected_index = 0;
                 d.profile_hub_picker_open = false;
+                // Abre automaticamente as regras se o perfil contextual ainda não tiver window_class
+                d.context_rules_expanded = d
+                    .base_config
+                    .profiles
+                    .get(target)
+                    .is_some_and(|p| p.window_class.is_none());
                 win.set_error_message(SharedString::from(""));
                 sync_all_to_ui(&win, &d);
             });
@@ -368,6 +399,7 @@ impl SettingsController {
                     hub_modules: None,
                 });
                 d.selected_index = d.base_config.profiles.len() - 1;
+                d.context_rules_expanded = true;
                 d.dirty = true;
                 win.set_error_message(SharedString::from(""));
                 sync_all_to_ui(&win, &d);
@@ -612,16 +644,51 @@ impl SettingsController {
                     win.set_error_message(SharedString::from(err.to_string()));
                     return;
                 }
-                let current_action = d
+                let (profile_name, inherited_hint, current_action) = d
                     .base_config
                     .profiles
                     .get(d.selected_index)
-                    .map(|p| get_slot_action(p, slot).to_action_type())
-                    .unwrap_or(ActionType::None);
+                    .map(|p| {
+                        let hint = p
+                            .inherits
+                            .as_deref()
+                            .filter(|s| !s.trim().is_empty())
+                            .map(|parent| {
+                                format!(
+                                    "Com 'Nenhuma ação', este controle herdará automaticamente do perfil '{parent}'."
+                                )
+                            })
+                            .unwrap_or_default();
+                        (p.name.clone(), hint, get_slot_action(p, slot).to_action_type())
+                    })
+                    .unwrap_or_else(|| (String::new(), String::new(), ActionType::None));
                 d.editor_target = Some(EditorTarget::ProfileSlot(slot));
                 d.editor.open(slot, &current_action);
+                win.set_editor_profile_context_label(SharedString::from(profile_name));
+                win.set_editor_inherited_hint(SharedString::from(inherited_hint));
                 win.set_editor_error_message(SharedString::from(""));
                 sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            });
+        }
+
+        // Limpar rapidamente um slot de ação para None (revertendo para herança se houver pai)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_clear_action_slot(move |slot_idx| {
+                let Some(win) = weak.upgrade() else { return };
+                let Some(slot) = ControlSlot::from_index(slot_idx.max(0) as usize) else {
+                    return;
+                };
+                let mut d = draft_ref.borrow_mut();
+                let pidx = d.selected_index;
+                if let Some(profile) = d.base_config.profiles.get_mut(pidx) {
+                    if *get_slot_action(profile, slot) != ActionConfig::None {
+                        set_slot_action(profile, slot, ActionConfig::None);
+                        d.dirty = true;
+                    }
+                }
+                sync_all_to_ui(&win, &d);
             });
         }
 
@@ -705,6 +772,48 @@ impl SettingsController {
                         d.editor.capturing_shortcut = false;
                         w.set_editor_error_message(SharedString::from(""));
                         sync_editor_to_ui(&w, &d.editor, &d.desktop_apps);
+                        rel_ok();
+                    },
+                    move || {
+                        rel_cancel();
+                    },
+                ) {
+                    win.set_editor_error_message(SharedString::from(format!(
+                        "Falha ao abrir Modo Aprender: {err}"
+                    )));
+                }
+            });
+        }
+
+        // Modo Aprender a partir da aba Macro do popover
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            let learn_ref = Rc::clone(&self.learn);
+            let release_cb = Rc::clone(&on_release_modifiers);
+            window.on_editor_open_learn_macro(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let title = format!("Macro • {}", win.get_editor_control_title());
+                let weak_inner = win.as_weak();
+                let draft_inner = Rc::clone(&draft_ref);
+                let rel_ok = Rc::clone(&release_cb);
+                let rel_cancel = Rc::clone(&release_cb);
+                if let Err(err) = learn_ref.open(
+                    &title,
+                    move |combo| {
+                        let Some(w) = weak_inner.upgrade() else {
+                            return;
+                        };
+                        let mut d = draft_inner.borrow_mut();
+                        match d.editor.add_macro_key_step(&combo) {
+                            Ok(()) => {
+                                w.set_editor_error_message(SharedString::from(""));
+                                sync_editor_to_ui(&w, &d.editor, &d.desktop_apps);
+                            }
+                            Err(e) => {
+                                w.set_editor_error_message(SharedString::from(e.to_string()));
+                            }
+                        }
                         rel_ok();
                     },
                     move || {
@@ -826,7 +935,13 @@ impl SettingsController {
             let mut d = self.draft.borrow_mut();
             d.base_config = current_config.clone();
             d.active_tab = 0;
+            d.hub_subtab = 0;
             d.selected_index = current_config.active_profile_index();
+            d.context_rules_expanded = d
+                .base_config
+                .profiles
+                .get(d.selected_index)
+                .is_some_and(|p| p.window_class.is_none());
             d.hub_selected_index = 0;
             d.hub_group_selected_entry = 0;
             d.dirty = false;
@@ -1065,6 +1180,8 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
             if let Some((title, act)) = info {
                 d.editor_target = Some(EditorTarget::HubQuickAction(idx));
                 d.editor.open_custom(format!("Hub: {title}"), &act);
+                win.set_editor_profile_context_label(SharedString::from(""));
+                win.set_editor_inherited_hint(SharedString::from(""));
                 win.set_editor_error_message(SharedString::from(""));
                 sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
             }
@@ -1184,6 +1301,8 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                     entry_idx: eidx,
                 });
                 d.editor.open_custom(format!("Submenu: {label}"), &act);
+                win.set_editor_profile_context_label(SharedString::from(""));
+                win.set_editor_inherited_hint(SharedString::from(""));
                 win.set_editor_error_message(SharedString::from(""));
                 sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
             }
@@ -1341,10 +1460,10 @@ fn wire_action_editor_callbacks(
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
-        window.on_editor_toggle_shortcut_capture(move || {
+        window.on_editor_shortcut_text_edited(move |val| {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
-            d.editor.capturing_shortcut = !d.editor.capturing_shortcut;
+            d.editor.shortcut_text = val.to_string();
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
         });
     }
@@ -1352,15 +1471,37 @@ fn wire_action_editor_callbacks(
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
-        window.on_editor_shortcut_key_captured(move |text, ctrl, alt, shift, meta| {
+        window.on_editor_toggle_shortcut_modifier(move |modifier| {
             let Some(win) = weak.upgrade() else { return };
-            if let Some(combo) = format_captured_key(text.as_str(), ctrl, alt, shift, meta) {
-                let mut d = draft_ref.borrow_mut();
-                d.editor.shortcut_text = combo;
-                d.editor.capturing_shortcut = false;
-                win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
-            }
+            let mut d = draft_ref.borrow_mut();
+            d.editor.shortcut_text = win.get_editor_shortcut_text().to_string();
+            d.editor.toggle_shortcut_modifier(modifier.as_str());
+            win.set_editor_error_message(SharedString::from(""));
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_apply_shortcut_preset(move |preset| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.editor.shortcut_text = preset.to_string();
+            win.set_editor_error_message(SharedString::from(""));
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_clear_shortcut(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.editor.shortcut_text.clear();
+            win.set_editor_error_message(SharedString::from(""));
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
         });
     }
 
@@ -1445,10 +1586,10 @@ fn wire_action_editor_callbacks(
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
-        window.on_editor_toggle_macro_capture(move || {
+        window.on_editor_set_scroll_amount(move |val| {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
-            d.editor.capturing_macro_key = !d.editor.capturing_macro_key;
+            d.editor.scroll_amount = val.clamp(1, 10) as u8;
             sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
         });
     }
@@ -1456,15 +1597,29 @@ fn wire_action_editor_callbacks(
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
-        window.on_editor_macro_key_captured(move |text, ctrl, alt, shift, meta| {
+        window.on_editor_add_macro_wait_preset(move |ms| {
             let Some(win) = weak.upgrade() else { return };
-            if let Some(combo) = format_captured_key(text.as_str(), ctrl, alt, shift, meta) {
-                let mut d = draft_ref.borrow_mut();
-                d.editor.macro_key_input = combo;
-                d.editor.capturing_macro_key = false;
-                win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            let mut d = draft_ref.borrow_mut();
+            let raw = ms.max(1).to_string();
+            match d.editor.add_macro_wait_step(&raw) {
+                Ok(()) => {
+                    win.set_editor_error_message(SharedString::from(""));
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                }
+                Err(err) => win.set_editor_error_message(SharedString::from(err.to_string())),
             }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_move_macro_step(move |idx, delta| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.editor
+                .move_macro_step(idx.max(0) as usize, delta as isize);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
         });
     }
 
@@ -1662,9 +1817,95 @@ fn format_summary(action: &ActionConfig, apps: &[DesktopApp]) -> SharedString {
 
 fn sync_all_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     win.set_active_tab(draft.active_tab as i32);
+    win.set_hub_subtab(draft.hub_subtab as i32);
     win.set_has_unsaved_changes(draft.dirty);
     sync_profile_tab_to_ui(win, draft);
     sync_hub_tab_to_ui(win, draft);
+}
+
+/// Resolve a visualização de um controle físico (ação própria vs. herdada pela cadeia `inherits`).
+pub fn resolve_slot_view(
+    profiles: &[ProfileConfig],
+    profile_idx: usize,
+    slot: ControlSlot,
+    apps: &[DesktopApp],
+) -> ControlSlotView {
+    let Some(profile) = profiles.get(profile_idx) else {
+        return ControlSlotView {
+            summary: SharedString::from("Nenhuma"),
+            category: 8,
+            is_inherited: false,
+            inherited_from: SharedString::from(""),
+            can_clear: false,
+        };
+    };
+
+    let own = get_slot_action(profile, slot);
+    if *own != ActionConfig::None {
+        let act_type = own.to_action_type();
+        return ControlSlotView {
+            summary: SharedString::from(action_summary(&act_type, apps)),
+            category: action_type_index(&act_type) as i32,
+            is_inherited: false,
+            inherited_from: SharedString::from(""),
+            can_clear: true,
+        };
+    }
+
+    // Percorre cadeia `inherits` protegida contra ciclos para mostrar o valor efetivo herdado
+    let mut visited = vec![profile.name.to_ascii_lowercase()];
+    let mut parent_name = profile.inherits.as_deref();
+    while let Some(pname) = parent_name {
+        let trimmed = pname.trim();
+        let key = trimmed.to_ascii_lowercase();
+        if trimmed.is_empty() || visited.contains(&key) {
+            break;
+        }
+        visited.push(key);
+        let Some(parent) = profiles
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(trimmed))
+        else {
+            break;
+        };
+        let p_act = get_slot_action(parent, slot);
+        if *p_act != ActionConfig::None {
+            let act_type = p_act.to_action_type();
+            return ControlSlotView {
+                summary: SharedString::from(action_summary(&act_type, apps)),
+                category: action_type_index(&act_type) as i32,
+                is_inherited: true,
+                inherited_from: SharedString::from(parent.name.as_str()),
+                can_clear: false,
+            };
+        }
+        parent_name = parent.inherits.as_deref();
+    }
+
+    ControlSlotView {
+        summary: SharedString::from("Nenhuma"),
+        category: 8,
+        is_inherited: false,
+        inherited_from: SharedString::from(""),
+        can_clear: false,
+    }
+}
+
+fn format_context_rules_summary(profile: &ProfileConfig) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref wc) = profile.window_class {
+        parts.push(wc.clone());
+    } else {
+        parts.push("Sem classe".to_string());
+    }
+    if let Some(ref wt) = profile.window_title {
+        parts.push(format!("Título: {wt}"));
+    }
+    parts.push(format!("Prio {}", profile.priority));
+    if profile.fullscreen == Some(true) {
+        parts.push("Tela cheia".to_string());
+    }
+    parts.join(" • ")
 }
 
 const INHERITS_NONE_LABEL: &str = "Nenhum";
@@ -1749,13 +1990,28 @@ pub fn apply_inherits_selection(
 }
 
 fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
-    let names: Vec<SharedString> = draft
+    let items: Vec<ProfileListItem> = draft
         .base_config
         .profiles
         .iter()
-        .map(|p| SharedString::from(p.name.as_str()))
+        .map(|p| {
+            let is_global = p.name.eq_ignore_ascii_case(GLOBAL_PROFILE_NAME);
+            let subtitle = if is_global {
+                String::new()
+            } else {
+                p.window_class
+                    .clone()
+                    .unwrap_or_else(|| "sem janela".to_string())
+            };
+            ProfileListItem {
+                name: SharedString::from(p.name.as_str()),
+                subtitle: SharedString::from(subtitle),
+                is_global,
+                has_custom_hub: p.hub_modules.is_some(),
+            }
+        })
         .collect();
-    win.set_profile_names(ModelRc::from(Rc::new(VecModel::from(names))));
+    win.set_profile_items(ModelRc::from(Rc::new(VecModel::from(items))));
     win.set_selected_index(draft.selected_index as i32);
 
     let options: Vec<SharedString> =
@@ -1773,6 +2029,11 @@ fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     win.set_inherits_chain(ModelRc::from(Rc::new(VecModel::from(chain))));
 
     if let Some(profile) = draft.base_config.profiles.get(draft.selected_index) {
+        let is_global = profile.name.eq_ignore_ascii_case(GLOBAL_PROFILE_NAME);
+        win.set_selected_is_global(is_global);
+        win.set_context_rules_expanded(draft.context_rules_expanded);
+        win.set_context_rules_summary(SharedString::from(format_context_rules_summary(profile)));
+
         win.set_field_name(SharedString::from(profile.name.as_str()));
         win.set_field_window_class(SharedString::from(
             profile.window_class.as_deref().unwrap_or(""),
@@ -1789,11 +2050,39 @@ fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         ));
         win.set_field_priority(profile.priority);
         win.set_field_fullscreen_only(profile.fullscreen == Some(true));
-        win.set_summary_rotate_cw(format_summary(&profile.knob_cw, &draft.desktop_apps));
-        win.set_summary_rotate_ccw(format_summary(&profile.knob_ccw, &draft.desktop_apps));
-        win.set_summary_key1(format_summary(&profile.key1, &draft.desktop_apps));
-        win.set_summary_key2(format_summary(&profile.key2, &draft.desktop_apps));
-        win.set_summary_key3(format_summary(&profile.key3, &draft.desktop_apps));
+
+        let profiles = &draft.base_config.profiles;
+        let idx = draft.selected_index;
+        win.set_slot_rotate_cw(resolve_slot_view(
+            profiles,
+            idx,
+            ControlSlot::RotateCw,
+            &draft.desktop_apps,
+        ));
+        win.set_slot_rotate_ccw(resolve_slot_view(
+            profiles,
+            idx,
+            ControlSlot::RotateCcw,
+            &draft.desktop_apps,
+        ));
+        win.set_slot_key1(resolve_slot_view(
+            profiles,
+            idx,
+            ControlSlot::Key1,
+            &draft.desktop_apps,
+        ));
+        win.set_slot_key2(resolve_slot_view(
+            profiles,
+            idx,
+            ControlSlot::Key2,
+            &draft.desktop_apps,
+        ));
+        win.set_slot_key3(resolve_slot_view(
+            profiles,
+            idx,
+            ControlSlot::Key3,
+            &draft.desktop_apps,
+        ));
 
         // Módulos do Hub deste perfil (próprios ou herdados)
         win.set_profile_subtab(draft.profile_subtab as i32);
@@ -1801,6 +2090,12 @@ fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         let (effective_mods, inherited_from) = draft.base_config.resolve_hub_modules(&profile.name);
         let is_inherited = profile.hub_modules.is_none();
         win.set_profile_hub_is_inherited(is_inherited);
+        let subtab_label = if is_inherited {
+            "Módulos do Hub • herdado".to_string()
+        } else {
+            format!("Módulos do Hub ({})", effective_mods.len())
+        };
+        win.set_profile_hub_subtab_label(SharedString::from(subtab_label));
         let status_text = if is_inherited {
             let parent = inherited_from.as_deref().unwrap_or(GLOBAL_PROFILE_NAME);
             format!("Herdado de {parent} — clique para customizar")
@@ -1881,12 +2176,11 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     let labels: Vec<SharedString> = overlay
         .items
         .iter()
-        .map(|i| {
-            let prefix = if i.enabled { "● " } else { "○ " };
-            SharedString::from(format!("{prefix}{}", i.title))
-        })
+        .map(|i| SharedString::from(i.title.as_str()))
         .collect();
+    let enabled_flags: Vec<bool> = overlay.items.iter().map(|i| i.enabled).collect();
     win.set_hub_item_labels(ModelRc::from(Rc::new(VecModel::from(labels))));
+    win.set_hub_item_enabled_flags(ModelRc::from(Rc::new(VecModel::from(enabled_flags))));
     win.set_hub_selected_index(draft.hub_selected_index as i32);
 
     if let Some(item) = overlay.items.get(draft.hub_selected_index) {
@@ -1965,6 +2259,12 @@ fn apply_profile_header_to_draft(
     let Some(old_name) = draft.base_config.profiles.get(idx).map(|p| p.name.clone()) else {
         return Ok(());
     };
+
+    // O perfil `global` oculta campos de regra contextual na UI; apenas aplica título de módulo do Hub
+    if old_name.eq_ignore_ascii_case(GLOBAL_PROFILE_NAME) {
+        apply_profile_hub_title_to_draft(win, draft);
+        return Ok(());
+    }
 
     let name = win.get_field_name().trim().to_string();
     if name.is_empty() {
@@ -2069,10 +2369,47 @@ fn normalize_optional_field(raw: &str) -> Option<String> {
 mod tests {
     use super::{
         apply_inherits_selection, compute_inheritance_chain, inherits_options_for_profile,
-        INHERITS_NONE_LABEL,
+        resolve_slot_view, INHERITS_NONE_LABEL,
     };
     use crate::config::{ActionConfig, Config, ProfileConfig};
     use crate::error::KnobError;
+    use crate::ui::action_editor_state::ControlSlot;
+
+    #[test]
+    fn resolve_slot_view_displays_own_inherited_and_empty_actions() {
+        let mut cfg = Config::default();
+        // global tem Key3 = MediaPlayPause
+        cfg.profiles[0].key3 = ActionConfig::MediaPlayPause;
+        // firefox herda de global e deixa Key3 = None
+        cfg.profiles[1].inherits = Some("global".to_string());
+        cfg.profiles[1].key3 = ActionConfig::None;
+        cfg.profiles[1].key1 = ActionConfig::Shortcut {
+            keys: vec!["Ctrl".into(), "T".into()],
+        };
+
+        // Ação própria em firefox (Key1)
+        let own = resolve_slot_view(&cfg.profiles, 1, ControlSlot::Key1, &[]);
+        assert_eq!(own.summary.as_str(), "Ctrl+T");
+        assert!(!own.is_inherited);
+        assert!(own.can_clear);
+        assert_eq!(own.category, 0);
+
+        // Ação herdada de global em firefox (Key3)
+        let inherited = resolve_slot_view(&cfg.profiles, 1, ControlSlot::Key3, &[]);
+        assert_eq!(inherited.summary.as_str(), "Play / Pause");
+        assert!(inherited.is_inherited);
+        assert_eq!(inherited.inherited_from.as_str(), "global");
+        assert!(!inherited.can_clear);
+        assert_eq!(inherited.category, 1);
+
+        // Sem herança e sem ação -> Vazio
+        cfg.profiles[0].key2 = ActionConfig::None;
+        let empty = resolve_slot_view(&cfg.profiles, 0, ControlSlot::Key2, &[]);
+        assert_eq!(empty.summary.as_str(), "Nenhuma");
+        assert!(!empty.is_inherited);
+        assert!(!empty.can_clear);
+        assert_eq!(empty.category, 8);
+    }
 
     #[test]
     fn inherits_editor_validates_chain_rejects_cycles_and_clears_on_none() {
