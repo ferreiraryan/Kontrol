@@ -28,6 +28,17 @@ export struct PresetListItem {
     combo: string,
 }
 
+export struct ProviderOptionItem {
+    id: string,
+    name: string,
+    available: bool,
+}
+
+export struct ProviderCommandItem {
+    id: string,
+    name: string,
+}
+
 export global Theme {
     // Superfícies (alinhadas ao Overlay e Mini-HUD)
     out property <color> bg-window: #11141b;
@@ -311,6 +322,115 @@ export component SegmentedTwo inherits Rectangle {
     }
 }
 
+export component SegmentedThree inherits Rectangle {
+    in property <string> first-label;
+    in property <string> second-label;
+    in property <string> third-label;
+    in property <int> selected-index: 0;
+    callback selected(int);
+
+    height: 34px;
+    border-radius: 8px;
+    background: Theme.bg-input;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 6px;
+            background: root.selected-index == 0
+                ? Theme.bg-elevated
+                : (t0.has-hover ? rgba(255, 255, 255, 0.05) : transparent);
+            border-width: root.selected-index == 0 ? 1px : 0px;
+            border-color: Theme.border-default;
+            animate background { duration: 120ms; easing: ease-out; }
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: center;
+                Text {
+                    text: root.first-label;
+                    color: root.selected-index == 0 ? Theme.text-primary : Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: root.selected-index == 0 ? 600 : 500;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            t0 := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected(0); }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 6px;
+            background: root.selected-index == 1
+                ? Theme.bg-elevated
+                : (t1.has-hover ? rgba(255, 255, 255, 0.05) : transparent);
+            border-width: root.selected-index == 1 ? 1px : 0px;
+            border-color: Theme.border-default;
+            animate background { duration: 120ms; easing: ease-out; }
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: center;
+                Text {
+                    text: root.second-label;
+                    color: root.selected-index == 1 ? Theme.text-primary : Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: root.selected-index == 1 ? 600 : 500;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            t1 := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected(1); }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 6px;
+            background: root.selected-index == 2
+                ? Theme.bg-elevated
+                : (t2.has-hover ? rgba(255, 255, 255, 0.05) : transparent);
+            border-width: root.selected-index == 2 ? 1px : 0px;
+            border-color: Theme.border-default;
+            animate background { duration: 120ms; easing: ease-out; }
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: center;
+                Text {
+                    text: root.third-label;
+                    color: root.selected-index == 2 ? Theme.text-primary : Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: root.selected-index == 2 ? 600 : 500;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            t2 := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected(2); }
+            }
+        }
+    }
+}
+
 export component StepperControl inherits Rectangle {
     in property <string> value-text;
     callback decrement();
@@ -379,7 +499,7 @@ export component StepperControl inherits Rectangle {
 }
 
 export component ActionCategoryBadge inherits Rectangle {
-    // 0=Atalho, 1=Mídia, 2=App, 3=URL, 4=Arquivo, 5=Comando, 6=Scroll, 7=Macro, 8=Nenhuma
+    // 0=Atalho, 1=Mídia, 2=App, 3=URL, 4=Arquivo, 5=Comando, 6=Scroll, 7=Macro, 8=Nenhuma, 9=Integração
     in property <int> category: 8;
     in property <bool> inherited: false;
 
@@ -395,7 +515,8 @@ export component ActionCategoryBadge inherits Rectangle {
         : (root.category == 5 ? rgba(245, 158, 11, 0.18)
         : (root.category == 6 ? rgba(99, 102, 241, 0.20)
         : (root.category == 7 ? rgba(244, 63, 94, 0.20)
-        : rgba(255, 255, 255, 0.06)))))))));
+        : (root.category == 9 ? rgba(16, 185, 129, 0.22)
+        : rgba(255, 255, 255, 0.06))))))))));
     border-width: 1px;
     border-color: root.inherited
         ? rgba(148, 163, 184, 0.25)
@@ -407,7 +528,8 @@ export component ActionCategoryBadge inherits Rectangle {
         : (root.category == 5 ? rgba(251, 191, 36, 0.35)
         : (root.category == 6 ? rgba(129, 140, 248, 0.35)
         : (root.category == 7 ? rgba(251, 113, 133, 0.35)
-        : rgba(255, 255, 255, 0.10)))))))));
+        : (root.category == 9 ? rgba(52, 211, 153, 0.42)
+        : rgba(255, 255, 255, 0.10))))))))));
 
     HorizontalLayout {
         padding-left: 7px;
@@ -425,7 +547,8 @@ export component ActionCategoryBadge inherits Rectangle {
                 : (root.category == 5 ? "Comando"
                 : (root.category == 6 ? "Scroll"
                 : (root.category == 7 ? "Macro"
-                : "Vazio"))))))));
+                : (root.category == 9 ? "Integração"
+                : "Vazio")))))))));
             color: root.inherited
                 ? Theme.text-muted
                 : (root.category == 0 ? #93c5fd
@@ -436,7 +559,8 @@ export component ActionCategoryBadge inherits Rectangle {
                 : (root.category == 5 ? #fde68a
                 : (root.category == 6 ? #a5b4fc
                 : (root.category == 7 ? #fda4af
-                : Theme.text-dim))))))));
+                : (root.category == 9 ? #6ee7b7
+                : Theme.text-dim)))))))));
             font-size: 10px;
             font-weight: 600;
             vertical-alignment: center;

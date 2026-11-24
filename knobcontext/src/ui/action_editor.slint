@@ -6,6 +6,8 @@ import {
     AppListItem,
     MacroStepItem,
     PresetListItem,
+    ProviderOptionItem,
+    ProviderCommandItem,
 } from "theme.slint";
 
 component CategoryNavItem inherits Rectangle {
@@ -141,6 +143,16 @@ export component ActionEditorPopover inherits Rectangle {
     in-out property <string> macro-key-text;
     in-out property <string> macro-wait-text: "100";
 
+    // 9: Integração direta (Providers)
+    in property <[ProviderOptionItem]> provider-options: [];
+    in property <int> selected-provider-index: 0;
+    in property <bool> selected-provider-available: false;
+    in property <[ProviderCommandItem]> provider-commands: [];
+    in property <int> selected-provider-command-index: 0;
+    in property <string> provider-arg-label: "";
+    in property <string> provider-arg-placeholder: "";
+    in-out property <string> provider-arg-value: "";
+
     in property <string> error-message;
 
     callback select-type(int);
@@ -165,6 +177,9 @@ export component ActionEditorPopover inherits Rectangle {
     callback add-macro-wait-preset(int);
     callback move-macro-step(int, int);
     callback remove-macro-step(int);
+    callback select-provider(int);
+    callback select-provider-command(int);
+    callback provider-arg-edited(string);
     callback save-action();
     callback cancel-action();
 
@@ -338,8 +353,14 @@ export component ActionEditorPopover inherits Rectangle {
                             selected: root.selected-type-index == 5;
                             clicked => { root.select-type(5); }
                         }
+                        CategoryNavItem {
+                            glyph: "◈";
+                            title: "Integração direta";
+                            selected: root.selected-type-index == 9;
+                            clicked => { root.select-type(9); }
+                        }
 
-                        Rectangle { height: 6px; background: transparent; }
+                        Rectangle { height: 4px; background: transparent; }
 
                         Text {
                             text: "OUTROS";
@@ -1281,6 +1302,184 @@ export component ActionEditorPopover inherits Rectangle {
                             font-size: 12px;
                             horizontal-alignment: center;
                             wrap: word-wrap;
+                        }
+                    }
+
+                    // 9: Integração direta (OBS, MPRIS, futuros providers)
+                    if root.selected-type-index == 9: VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: space-between;
+
+                            Text {
+                                text: "Integração direta (API)";
+                                color: Theme.text-primary;
+                                font-size: 14px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                height: 22px;
+                                border-radius: 6px;
+                                background: root.selected-provider-available
+                                    ? Theme.success-soft
+                                    : Theme.warning-soft;
+                                border-width: 1px;
+                                border-color: root.selected-provider-available
+                                    ? rgba(34, 197, 94, 0.42)
+                                    : rgba(251, 191, 36, 0.42);
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: root.selected-provider-available
+                                            ? "● Disponível"
+                                            : "○ Indisponível";
+                                        color: root.selected-provider-available
+                                            ? #86efac
+                                            : #fde68a;
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Seletor de Provider
+                        VerticalLayout {
+                            spacing: 5px;
+                            Text {
+                                text: "Provider";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+
+                                for prov[pidx] in root.provider-options: Rectangle {
+                                    height: 32px;
+                                    border-radius: 7px;
+                                    background: pidx == root.selected-provider-index
+                                        ? Theme.accent-soft
+                                        : (pv-touch.has-hover ? rgba(255, 255, 255, 0.08) : Theme.bg-card);
+                                    border-width: 1px;
+                                    border-color: pidx == root.selected-provider-index
+                                        ? Theme.border-focus
+                                        : Theme.border-subtle;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 12px;
+                                        spacing: 7px;
+
+                                        Rectangle {
+                                            width: 7px;
+                                            height: 7px;
+                                            y: 12px;
+                                            border-radius: 4px;
+                                            background: prov.available ? Theme.success : Theme.text-dim;
+                                        }
+
+                                        Text {
+                                            text: prov.name;
+                                            color: pidx == root.selected-provider-index
+                                                ? Theme.text-primary
+                                                : Theme.text-secondary;
+                                            font-size: 12px;
+                                            font-weight: pidx == root.selected-provider-index ? 600 : 500;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    pv-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.select-provider(pidx); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Lista dinâmica de comandos do Provider selecionado
+                        Text {
+                            text: "Comando";
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                            font-weight: 600;
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            content-height: root.provider-commands.length * 36px;
+
+                            VerticalLayout {
+                                spacing: 4px;
+                                alignment: start;
+
+                                for cmd[cidx] in root.provider-commands: Rectangle {
+                                    height: 32px;
+                                    border-radius: 7px;
+                                    background: cidx == root.selected-provider-command-index
+                                        ? Theme.accent-soft
+                                        : (pc-touch.has-hover ? rgba(255, 255, 255, 0.07) : Theme.bg-card);
+                                    border-width: 1px;
+                                    border-color: cidx == root.selected-provider-command-index
+                                        ? Theme.border-focus
+                                        : Theme.border-subtle;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: cmd.name;
+                                            color: Theme.text-primary;
+                                            font-size: 12px;
+                                            font-weight: cidx == root.selected-provider-command-index ? 600 : 500;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: cmd.id;
+                                            color: Theme.text-dim;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    pc-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.select-provider-command(cidx); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Campo dinâmico de argumento (conforme ArgsSchema do comando)
+                        if root.provider-arg-label != "": VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: root.provider-arg-label;
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                font-weight: 600;
+                            }
+                            AppInput {
+                                placeholder: root.provider-arg-placeholder;
+                                text <=> root.provider-arg-value;
+                                edited(v) => { root.provider-arg-edited(v); }
+                            }
                         }
                     }
                 }

@@ -11,6 +11,7 @@ use crate::config::{
 };
 use crate::context::ActiveWindowInfo;
 use crate::error::KnobError;
+use crate::providers::ProviderRegistry;
 use crate::ui::action_editor_mod::{pick_file_uri, sync_editor_to_ui};
 use crate::ui::action_editor_state::{ActionEditorState, ControlSlot};
 use crate::ui::learn_mod::LearnController;
@@ -43,6 +44,13 @@ struct SettingsDraft {
     editor: ActionEditorState,
     editor_target: Option<EditorTarget>,
     desktop_apps: Vec<DesktopApp>,
+    provider_registry: ProviderRegistry,
+    obs_status_code: i32,
+    obs_status_label: String,
+    obs_status_detail: String,
+    mpris_available: bool,
+    mpris_status_label: String,
+    mpris_status_detail: String,
 }
 
 type OnSavedCallback = Rc<dyn Fn(Config)>;
@@ -72,6 +80,7 @@ impl SettingsController {
         on_release_modifiers: impl Fn() + 'static,
         on_capture_window: impl Fn() -> Option<ActiveWindowInfo> + 'static,
     ) -> Result<Self, KnobError> {
+        let initial_registry = ProviderRegistry::default_registry(&initial_config.providers);
         let draft = Rc::new(RefCell::new(SettingsDraft {
             base_config: initial_config,
             active_tab: 0,
@@ -89,6 +98,13 @@ impl SettingsController {
             editor: ActionEditorState::default(),
             editor_target: None,
             desktop_apps: list_desktop_apps(),
+            provider_registry: initial_registry,
+            obs_status_code: 0,
+            obs_status_label: "Desconectado".to_string(),
+            obs_status_detail: String::new(),
+            mpris_available: false,
+            mpris_status_label: "Indisponível".to_string(),
+            mpris_status_detail: String::new(),
         }));
         let is_open = Rc::new(RefCell::new(false));
 
@@ -128,22 +144,39 @@ impl SettingsController {
         let on_release_modifiers = Rc::clone(&self.on_release_modifiers);
         let on_capture_window = Rc::clone(&self.on_capture_window);
 
-        // Alternar aba (0 = Perfis & Contexto, 1 = Overlay / Hub)
+        // Alternar aba (0 = Perfis & Contexto, 1 = Overlay / Hub, 2 = Integrações)
         {
             let weak = window.as_weak();
             let draft_ref = Rc::clone(&draft);
             window.on_select_tab(move |tab| {
                 let Some(win) = weak.upgrade() else { return };
                 let mut d = draft_ref.borrow_mut();
-                if d.active_tab == 0 {
-                    if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
-                        win.set_error_message(SharedString::from(err.to_string()));
-                        return;
+                match d.active_tab {
+                    0 => {
+                        if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                            win.set_error_message(SharedString::from(err.to_string()));
+                            return;
+                        }
                     }
-                } else {
-                    apply_hub_fields_to_draft(&win, &mut d);
+                    1 => {
+                        apply_hub_fields_to_draft(&win, &mut d);
+                    }
+                    2 => {
+                        if let Err(err) = apply_integrations_fields_to_draft(&win, &mut d) {
+                            win.set_error_message(SharedString::from(err.to_string()));
+                            return;
+                        }
+                    }
+                    _ => {}
                 }
-                d.active_tab = if tab == 1 { 1 } else { 0 };
+                d.active_tab = match tab {
+                    1 => 1,
+                    2 => 2,
+                    _ => 0,
+                };
+                if d.active_tab == 2 {
+                    refresh_integrations_status(&mut d);
+                }
                 win.set_error_message(SharedString::from(""));
                 sync_all_to_ui(&win, &d);
             });
@@ -671,7 +704,7 @@ impl SettingsController {
                 win.set_editor_profile_context_label(SharedString::from(profile_name));
                 win.set_editor_inherited_hint(SharedString::from(inherited_hint));
                 win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             });
         }
 
@@ -775,7 +808,7 @@ impl SettingsController {
                         d.editor.set_manual_shortcut(combo);
                         d.editor.capturing_shortcut = false;
                         w.set_editor_error_message(SharedString::from(""));
-                        sync_editor_to_ui(&w, &d.editor, &d.desktop_apps);
+                        sync_editor_to_ui(&w, &d.editor, &d.desktop_apps, &d.provider_registry);
                         rel_ok();
                     },
                     move || {
@@ -812,7 +845,12 @@ impl SettingsController {
                         match d.editor.add_macro_key_step(&combo) {
                             Ok(()) => {
                                 w.set_editor_error_message(SharedString::from(""));
-                                sync_editor_to_ui(&w, &d.editor, &d.desktop_apps);
+                                sync_editor_to_ui(
+                                    &w,
+                                    &d.editor,
+                                    &d.desktop_apps,
+                                    &d.provider_registry,
+                                );
                             }
                             Err(e) => {
                                 w.set_editor_error_message(SharedString::from(e.to_string()));
@@ -832,6 +870,7 @@ impl SettingsController {
         }
 
         wire_hub_tab_callbacks(&window, Rc::clone(&draft));
+        wire_integrations_tab_callbacks(&window, Rc::clone(&draft));
         wire_action_editor_callbacks(&window, Rc::clone(&draft), Rc::clone(&on_release_modifiers));
 
         // Salvar e persistir em ~/.config/knobcontext/config.toml
@@ -844,13 +883,23 @@ impl SettingsController {
             window.on_save_requested(move || {
                 let Some(win) = weak.upgrade() else { return };
                 let mut d = draft_ref.borrow_mut();
-                if d.active_tab == 0 {
-                    if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
-                        win.set_error_message(SharedString::from(err.to_string()));
-                        return;
+                match d.active_tab {
+                    0 => {
+                        if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                            win.set_error_message(SharedString::from(err.to_string()));
+                            return;
+                        }
                     }
-                } else {
-                    apply_hub_fields_to_draft(&win, &mut d);
+                    1 => {
+                        apply_hub_fields_to_draft(&win, &mut d);
+                    }
+                    2 => {
+                        if let Err(err) = apply_integrations_fields_to_draft(&win, &mut d) {
+                            win.set_error_message(SharedString::from(err.to_string()));
+                            return;
+                        }
+                    }
+                    _ => {}
                 }
 
                 if !d
@@ -938,6 +987,7 @@ impl SettingsController {
         {
             let mut d = self.draft.borrow_mut();
             d.base_config = current_config.clone();
+            d.provider_registry = ProviderRegistry::default_registry(&current_config.providers);
             d.active_tab = 0;
             d.hub_subtab = 0;
             d.selected_index = current_config.active_profile_index();
@@ -954,7 +1004,7 @@ impl SettingsController {
             d.editor.cancel();
             d.editor_target = None;
             sync_all_to_ui(&window, &d);
-            sync_editor_to_ui(&window, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&window, &d.editor, &d.desktop_apps, &d.provider_registry);
         }
         window.set_preset_picker_open(false);
         window.set_inherits_picker_open(false);
@@ -1187,7 +1237,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 win.set_editor_profile_context_label(SharedString::from(""));
                 win.set_editor_inherited_hint(SharedString::from(""));
                 win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             }
         });
     }
@@ -1308,7 +1358,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 win.set_editor_profile_context_label(SharedString::from(""));
                 win.set_editor_inherited_hint(SharedString::from(""));
                 win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             }
         });
     }
@@ -1438,6 +1488,96 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
     }
 }
 
+fn wire_integrations_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDraft>>) {
+    // Habilitar/desabilitar OBS WebSocket
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_obs_toggle_enabled(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            let _ = apply_integrations_fields_to_draft(&win, &mut d);
+            d.base_config.providers.obs.enabled = !d.base_config.providers.obs.enabled;
+            d.provider_registry = ProviderRegistry::default_registry(&d.base_config.providers);
+            d.dirty = true;
+            if !d.base_config.providers.obs.enabled {
+                d.obs_status_code = 0;
+                d.obs_status_label = "Desconectado".to_string();
+                d.obs_status_detail = "Integração OBS desabilitada.".to_string();
+            }
+            sync_all_to_ui(&win, &d);
+        });
+    }
+
+    // Testar conexão OBS WebSocket com os campos atuais do rascunho
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_obs_test_connection(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            if let Err(err) = apply_integrations_fields_to_draft(&win, &mut d) {
+                d.obs_status_code = 2;
+                d.obs_status_label = "Indisponível".to_string();
+                d.obs_status_detail = err.to_string();
+                sync_all_to_ui(&win, &d);
+                return;
+            }
+            let result = d.provider_registry.find("obs").map(|p| p.test_connection());
+            match result {
+                Some(Ok(msg)) => {
+                    d.obs_status_code = 1;
+                    d.obs_status_label = "Conectado".to_string();
+                    d.obs_status_detail = msg;
+                }
+                Some(Err(err)) => {
+                    d.obs_status_code = 2;
+                    d.obs_status_label = "Indisponível".to_string();
+                    d.obs_status_detail = err.to_string();
+                }
+                None => {
+                    d.obs_status_code = 2;
+                    d.obs_status_label = "Indisponível".to_string();
+                    d.obs_status_detail = "Provider OBS não registrado.".to_string();
+                }
+            }
+            sync_all_to_ui(&win, &d);
+        });
+    }
+
+    // Verificar players MPRIS ativos via D-Bus
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_mpris_test_connection(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            let result = d
+                .provider_registry
+                .find("mpris")
+                .map(|p| p.test_connection());
+            match result {
+                Some(Ok(msg)) => {
+                    d.mpris_available = true;
+                    d.mpris_status_label = "Disponível".to_string();
+                    d.mpris_status_detail = msg;
+                }
+                Some(Err(err)) => {
+                    d.mpris_available = false;
+                    d.mpris_status_label = "Indisponível".to_string();
+                    d.mpris_status_detail = err.to_string();
+                }
+                None => {
+                    d.mpris_available = false;
+                    d.mpris_status_label = "Indisponível".to_string();
+                    d.mpris_status_detail = "Provider MPRIS não registrado.".to_string();
+                }
+            }
+            sync_all_to_ui(&win, &d);
+        });
+    }
+}
+
 fn wire_action_editor_callbacks(
     window: &SettingsWindow,
     draft: Rc<RefCell<SettingsDraft>>,
@@ -1454,7 +1594,7 @@ fn wire_action_editor_callbacks(
             pull_editor_text_fields(&win, &mut d.editor);
             d.editor.select_type(idx.max(0) as usize);
             win.set_editor_error_message(SharedString::from(""));
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             if was_capturing {
                 release_cb();
             }
@@ -1468,7 +1608,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.set_manual_shortcut(val.to_string());
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1481,7 +1621,7 @@ fn wire_action_editor_callbacks(
             d.editor.shortcut_text = win.get_editor_shortcut_text().to_string();
             d.editor.toggle_shortcut_modifier(modifier.as_str());
             win.set_editor_error_message(SharedString::from(""));
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1493,7 +1633,7 @@ fn wire_action_editor_callbacks(
             let mut d = draft_ref.borrow_mut();
             d.editor.set_manual_shortcut(preset.to_string());
             win.set_editor_error_message(SharedString::from(""));
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1504,7 +1644,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.preset_dropdown_open = !d.editor.preset_dropdown_open;
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1516,7 +1656,7 @@ fn wire_action_editor_callbacks(
             let mut d = draft_ref.borrow_mut();
             let max_idx = shortcut_preset_apps().len().saturating_sub(1);
             d.editor.preset_app_index = (app_idx.max(0) as usize).min(max_idx);
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1533,7 +1673,7 @@ fn wire_action_editor_callbacks(
                     d.editor
                         .apply_named_preset(preset.app, preset.name, preset.combo);
                     win.set_editor_error_message(SharedString::from(""));
-                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
                 }
             }
         });
@@ -1548,7 +1688,7 @@ fn wire_action_editor_callbacks(
             d.editor.shortcut_text.clear();
             d.editor.active_preset_label.clear();
             win.set_editor_error_message(SharedString::from(""));
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1559,7 +1699,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.media_index = (idx.max(0) as usize).min(5);
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1570,7 +1710,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.app_search = query.to_string();
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1588,7 +1728,7 @@ fn wire_action_editor_callbacks(
             if let Some(desktop_file) = chosen {
                 d.editor.selected_desktop_file = desktop_file;
                 win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             }
         });
     }
@@ -1602,7 +1742,7 @@ fn wire_action_editor_callbacks(
                 let mut d = draft_ref.borrow_mut();
                 d.editor.file_uri = uri;
                 win.set_editor_error_message(SharedString::from(""));
-                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             }
         });
     }
@@ -1614,7 +1754,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.scroll_direction_index = (idx.max(0) as usize).min(3);
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1626,7 +1766,7 @@ fn wire_action_editor_callbacks(
             let mut d = draft_ref.borrow_mut();
             let next = (i32::from(d.editor.scroll_amount) + delta).clamp(1, 10) as u8;
             d.editor.scroll_amount = next;
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1637,7 +1777,7 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.scroll_amount = val.clamp(1, 10) as u8;
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1651,7 +1791,7 @@ fn wire_action_editor_callbacks(
             match d.editor.add_macro_wait_step(&raw) {
                 Ok(()) => {
                     win.set_editor_error_message(SharedString::from(""));
-                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
                 }
                 Err(err) => win.set_editor_error_message(SharedString::from(err.to_string())),
             }
@@ -1666,7 +1806,7 @@ fn wire_action_editor_callbacks(
             let mut d = draft_ref.borrow_mut();
             d.editor
                 .move_macro_step(idx.max(0) as usize, delta as isize);
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1680,7 +1820,7 @@ fn wire_action_editor_callbacks(
             match d.editor.add_macro_key_step(&raw) {
                 Ok(()) => {
                     win.set_editor_error_message(SharedString::from(""));
-                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
                 }
                 Err(err) => win.set_editor_error_message(SharedString::from(err.to_string())),
             }
@@ -1697,7 +1837,7 @@ fn wire_action_editor_callbacks(
             match d.editor.add_macro_wait_step(&raw) {
                 Ok(()) => {
                     win.set_editor_error_message(SharedString::from(""));
-                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
                 }
                 Err(err) => win.set_editor_error_message(SharedString::from(err.to_string())),
             }
@@ -1711,7 +1851,48 @@ fn wire_action_editor_callbacks(
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
             d.editor.remove_macro_step(idx.max(0) as usize);
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_select_provider(move |pidx| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            let reg = ProviderRegistry::default_registry(&d.base_config.providers);
+            d.editor
+                .select_provider_by_index(&reg, pidx.max(0) as usize);
+            d.provider_registry = reg;
+            win.set_editor_error_message(SharedString::from(""));
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_select_provider_command(move |cidx| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            let reg = ProviderRegistry::default_registry(&d.base_config.providers);
+            d.editor
+                .select_provider_command_by_index(&reg, cidx.max(0) as usize);
+            d.provider_registry = reg;
+            win.set_editor_error_message(SharedString::from(""));
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_editor_provider_arg_edited(move |val| {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.editor.provider_arg_value = val.to_string();
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
         });
     }
 
@@ -1769,7 +1950,7 @@ fn wire_action_editor_callbacks(
                     d.editor.cancel();
                     d.editor_target = None;
                     win.set_editor_error_message(SharedString::from(""));
-                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+                    sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
                     sync_all_to_ui(&win, &d);
                     release_cb();
                 }
@@ -1788,7 +1969,7 @@ fn wire_action_editor_callbacks(
             d.editor.cancel();
             d.editor_target = None;
             win.set_editor_error_message(SharedString::from(""));
-            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps);
+            sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
             release_cb();
         });
     }
@@ -1802,6 +1983,7 @@ fn pull_editor_text_fields(win: &SettingsWindow, editor: &mut ActionEditorState)
     editor.exec_command = win.get_editor_exec_text().to_string();
     editor.macro_key_input = win.get_editor_macro_key_text().to_string();
     editor.macro_wait_ms_input = win.get_editor_macro_wait_text().to_string();
+    editor.provider_arg_value = win.get_editor_provider_arg_value().to_string();
 }
 
 fn get_slot_action(profile: &ProfileConfig, slot: ControlSlot) -> &ActionConfig {
@@ -1868,6 +2050,78 @@ fn sync_all_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     win.set_has_unsaved_changes(draft.dirty);
     sync_profile_tab_to_ui(win, draft);
     sync_hub_tab_to_ui(win, draft);
+    sync_integrations_tab_to_ui(win, draft);
+}
+
+fn sync_integrations_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
+    let obs = &draft.base_config.providers.obs;
+    win.set_obs_enabled(obs.enabled);
+    win.set_obs_port(SharedString::from(obs.port.to_string()));
+    win.set_obs_password(SharedString::from(obs.password.as_deref().unwrap_or("")));
+    win.set_obs_status_code(draft.obs_status_code);
+    win.set_obs_status_label(SharedString::from(draft.obs_status_label.as_str()));
+    win.set_obs_status_detail(SharedString::from(draft.obs_status_detail.as_str()));
+    win.set_mpris_available(draft.mpris_available);
+    win.set_mpris_status_label(SharedString::from(draft.mpris_status_label.as_str()));
+    win.set_mpris_status_detail(SharedString::from(draft.mpris_status_detail.as_str()));
+}
+
+fn refresh_integrations_status(draft: &mut SettingsDraft) {
+    if !draft.base_config.providers.obs.enabled {
+        draft.obs_status_code = 0;
+        draft.obs_status_label = "Desconectado".to_string();
+    } else if draft
+        .provider_registry
+        .find("obs")
+        .is_some_and(|p| p.is_available())
+    {
+        draft.obs_status_code = 1;
+        draft.obs_status_label = "Conectado".to_string();
+    } else {
+        draft.obs_status_code = 2;
+        draft.obs_status_label = "Indisponível".to_string();
+    }
+
+    if let Some(mpris) = draft.provider_registry.find("mpris") {
+        match mpris.test_connection() {
+            Ok(msg) => {
+                draft.mpris_available = true;
+                draft.mpris_status_label = "Disponível".to_string();
+                draft.mpris_status_detail = msg;
+            }
+            Err(err) => {
+                draft.mpris_available = false;
+                draft.mpris_status_label = "Indisponível".to_string();
+                draft.mpris_status_detail = err.to_string();
+            }
+        }
+    }
+}
+
+fn apply_integrations_fields_to_draft(
+    win: &SettingsWindow,
+    draft: &mut SettingsDraft,
+) -> Result<(), KnobError> {
+    let port_raw = win.get_obs_port().trim().to_string();
+    let port = port_raw.parse::<u16>().map_err(|_| {
+        KnobError::ConfigValidation(format!(
+            "porta OBS WebSocket inválida: '{port_raw}' (use 1 a 65535)"
+        ))
+    })?;
+    if port == 0 {
+        return Err(KnobError::ConfigValidation(
+            "porta OBS WebSocket deve estar entre 1 e 65535".to_string(),
+        ));
+    }
+    let password = normalize_optional_field(win.get_obs_password().as_str());
+    let obs = &mut draft.base_config.providers.obs;
+    if obs.port != port || obs.password != password {
+        obs.port = port;
+        obs.password = password;
+        draft.dirty = true;
+    }
+    draft.provider_registry = ProviderRegistry::default_registry(&draft.base_config.providers);
+    Ok(())
 }
 
 /// Resolve a visualização de um controle físico (ação própria vs. herdada pela cadeia `inherits`).

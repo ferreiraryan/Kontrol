@@ -3,6 +3,8 @@ use crate::actions_catalog::{
     ScrollDirection,
 };
 use crate::error::KnobError;
+use crate::providers::ProviderRegistry;
+use std::collections::BTreeMap;
 
 /// Identificador dos 5 controles físicos editáveis na janela de configurações
 /// (`KnobPress` é reservado para abrir/fechar o overlay).
@@ -62,6 +64,9 @@ pub struct ActionEditorState {
     pub macro_key_input: String,
     pub macro_wait_ms_input: String,
     pub capturing_macro_key: bool,
+    pub provider_id: String,
+    pub provider_command_id: String,
+    pub provider_arg_value: String,
 }
 
 impl Default for ActionEditorState {
@@ -88,6 +93,9 @@ impl Default for ActionEditorState {
             macro_key_input: String::new(),
             macro_wait_ms_input: "100".to_string(),
             capturing_macro_key: false,
+            provider_id: "obs".to_string(),
+            provider_command_id: "toggle_record".to_string(),
+            provider_arg_value: String::new(),
         }
     }
 }
@@ -145,15 +153,55 @@ impl ActionEditorState {
             ActionType::Macro(steps) => {
                 self.macro_steps = steps.clone();
             }
-            ActionType::Provider { .. } | ActionType::None => {}
+            ActionType::Provider {
+                provider_id,
+                command_id,
+                args,
+            } => {
+                self.provider_id = provider_id.clone();
+                self.provider_command_id = command_id.clone();
+                self.provider_arg_value = args.values().next().cloned().unwrap_or_default();
+            }
+            ActionType::None => {}
         }
     }
 
     pub fn select_type(&mut self, index: usize) {
-        self.selected_type_index = index.min(8);
+        self.selected_type_index = index.min(9);
         self.preset_dropdown_open = false;
         self.capturing_shortcut = false;
         self.capturing_macro_key = false;
+    }
+
+    pub fn select_provider_by_index(&mut self, registry: &ProviderRegistry, idx: usize) {
+        if let Some(prov) = registry.providers().get(idx) {
+            if !self.provider_id.eq_ignore_ascii_case(prov.id()) {
+                self.provider_id = prov.id().to_string();
+                self.provider_command_id = prov
+                    .commands()
+                    .first()
+                    .map(|c| c.id.to_string())
+                    .unwrap_or_default();
+                self.provider_arg_value.clear();
+            }
+        }
+    }
+
+    pub fn select_provider_command_by_index(
+        &mut self,
+        registry: &ProviderRegistry,
+        cmd_idx: usize,
+    ) {
+        let Some(prov) = registry.find(&self.provider_id) else {
+            return;
+        };
+        let cmds = prov.commands();
+        if let Some(cmd) = cmds.get(cmd_idx) {
+            if !self.provider_command_id.eq_ignore_ascii_case(cmd.id) {
+                self.provider_command_id = cmd.id.to_string();
+                self.provider_arg_value.clear();
+            }
+        }
     }
 
     pub fn cancel(&mut self) {
@@ -367,6 +415,20 @@ impl ActionEditorState {
                     format!("Macro • {n} passos")
                 }
             }
+            9 => {
+                let arg = self.provider_arg_value.trim();
+                if arg.is_empty() {
+                    format!(
+                        "Integração • {} → {}",
+                        self.provider_id, self.provider_command_id
+                    )
+                } else {
+                    format!(
+                        "Integração • {} → {} ({arg})",
+                        self.provider_id, self.provider_command_id
+                    )
+                }
+            }
             _ => "Nenhuma ação (herda do pai se houver)".to_string(),
         }
     }
@@ -466,6 +528,42 @@ impl ActionEditorState {
                     ));
                 }
                 Ok(ActionType::Macro(self.macro_steps.clone()))
+            }
+            9 => {
+                let registry =
+                    ProviderRegistry::default_registry(&crate::config::ProvidersConfig::default());
+                let provider = registry.find(&self.provider_id).ok_or_else(|| {
+                    KnobError::InvalidAction(format!("provider inválido: '{}'", self.provider_id))
+                })?;
+                let cmds = provider.commands();
+                let cmd = cmds
+                    .iter()
+                    .find(|c| c.id.eq_ignore_ascii_case(&self.provider_command_id))
+                    .ok_or_else(|| {
+                        KnobError::InvalidAction(format!(
+                            "comando inválido '{}' para '{}'",
+                            self.provider_command_id,
+                            provider.id()
+                        ))
+                    })?;
+                let mut args = BTreeMap::new();
+                if let Some(field) = cmd.args_schema.fields.first() {
+                    let val = self.provider_arg_value.trim();
+                    if field.required && val.is_empty() {
+                        return Err(KnobError::InvalidAction(format!(
+                            "preencha o campo obrigatório '{}'",
+                            field.label
+                        )));
+                    }
+                    if !val.is_empty() {
+                        args.insert(field.key.to_string(), val.to_string());
+                    }
+                }
+                Ok(ActionType::Provider {
+                    provider_id: provider.id().to_string(),
+                    command_id: cmd.id.to_string(),
+                    args,
+                })
             }
             _ => Ok(ActionType::None),
         }
@@ -608,5 +706,38 @@ mod tests {
         st.set_manual_shortcut("Ctrl+Shift+T".to_string());
         assert_eq!(st.shortcut_text, "Ctrl+Shift+T");
         assert!(st.active_preset_label.is_empty());
+    }
+
+    #[test]
+    fn builds_and_validates_provider_actions_in_editor() {
+        let reg = crate::providers::ProviderRegistry::default_registry(
+            &crate::config::ProvidersConfig::default(),
+        );
+        let mut st = ActionEditorState::default();
+        st.open(ControlSlot::Key1, &ActionType::None);
+        st.select_type(9);
+        st.select_provider_by_index(&reg, 0); // obs
+        st.select_provider_command_by_index(&reg, 0); // toggle_record
+        assert_eq!(
+            st.build_action().ok(),
+            Some(ActionType::Provider {
+                provider_id: "obs".into(),
+                command_id: "toggle_record".into(),
+                args: std::collections::BTreeMap::new(),
+            })
+        );
+
+        // toggle_input_mute (índice 6) exige input_name
+        st.select_provider_command_by_index(&reg, 6);
+        assert!(st.build_action().is_err());
+        st.provider_arg_value = "Mic/Aux".into();
+        assert_eq!(
+            st.build_action().ok(),
+            Some(ActionType::Provider {
+                provider_id: "obs".into(),
+                command_id: "toggle_input_mute".into(),
+                args: std::collections::BTreeMap::from([("input_name".into(), "Mic/Aux".into())]),
+            })
+        );
     }
 }

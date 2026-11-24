@@ -4,6 +4,7 @@ import {
     AppField,
     ToggleSwitch,
     SegmentedTwo,
+    SegmentedThree,
     StepperControl,
     ActionCategoryBadge,
     ProfileListItem,
@@ -11,6 +12,8 @@ import {
     AppListItem,
     MacroStepItem,
     PresetListItem,
+    ProviderOptionItem,
+    ProviderCommandItem,
 } from "theme.slint";
 import { ActionEditorPopover } from "action_editor.slint";
 
@@ -342,6 +345,18 @@ export component SettingsWindow inherits Window {
     in property <bool> hub-animations-enabled: true;
     in property <string> hub-item-icon-label: "Automático / nenhuma";
 
+    // --- Aba 2: Integrações (Providers) ---
+    in property <bool> obs-enabled: false;
+    in-out property <string> obs-port: "4455";
+    in-out property <string> obs-password: "";
+    // 0 = Desconectado, 1 = Conectado, 2 = Indisponível
+    in property <int> obs-status-code: 0;
+    in property <string> obs-status-label: "Desconectado";
+    in property <string> obs-status-detail: "";
+    in property <bool> mpris-available: false;
+    in property <string> mpris-status-label: "Indisponível";
+    in property <string> mpris-status-detail: "";
+
     // --- Estado geral ---
     in property <bool> has-unsaved-changes: false;
     in-out property <string> error-message;
@@ -373,6 +388,14 @@ export component SettingsWindow inherits Window {
     in property <[MacroStepItem]> editor-macro-steps;
     in-out property <string> editor-macro-key-text;
     in-out property <string> editor-macro-wait-text: "100";
+    in property <[ProviderOptionItem]> editor-provider-options: [];
+    in property <int> editor-selected-provider-index: 0;
+    in property <bool> editor-selected-provider-available: false;
+    in property <[ProviderCommandItem]> editor-provider-commands: [];
+    in property <int> editor-selected-provider-command-index: 0;
+    in property <string> editor-provider-arg-label: "";
+    in property <string> editor-provider-arg-placeholder: "";
+    in-out property <string> editor-provider-arg-value: "";
     in property <string> editor-error-message;
 
     // Callbacks gerais e Aba 0
@@ -429,6 +452,11 @@ export component SettingsWindow inherits Window {
     callback hub-pick-item-icon();
     callback hub-clear-item-icon();
 
+    // Callbacks Aba 2: Integrações
+    callback obs-toggle-enabled();
+    callback obs-test-connection();
+    callback mpris-test-connection();
+
     // Callbacks Popover
     callback editor-select-type(int);
     callback editor-open-learn-shortcut();
@@ -452,6 +480,9 @@ export component SettingsWindow inherits Window {
     callback editor-add-macro-wait-preset(int);
     callback editor-move-macro-step(int, int);
     callback editor-remove-macro-step(int);
+    callback editor-select-provider(int);
+    callback editor-select-provider-command(int);
+    callback editor-provider-arg-edited(string);
     callback editor-save();
     callback editor-cancel();
 
@@ -464,11 +495,12 @@ export component SettingsWindow inherits Window {
             spacing: 10px;
             alignment: space-between;
 
-            SegmentedTwo {
-                width: 360px;
+            SegmentedThree {
+                width: 500px;
                 height: 34px;
                 first-label: "Perfis & Contexto";
                 second-label: "Overlay / Hub";
+                third-label: "Integrações";
                 selected-index: root.active-tab;
                 selected(i) => { root.select-tab(i); }
             }
@@ -1767,6 +1799,258 @@ export component SettingsWindow inherits Window {
             }
         }
 
+        // ==================== ABA 2: INTEGRAÇÕES (PROVIDERS) ====================
+        if root.active-tab == 2: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 14px;
+
+            // Card 1: OBS Studio (obs-websocket 5.x)
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 12px;
+                background: Theme.bg-surface;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: space-between;
+
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: "OBS Studio";
+                                color: Theme.text-primary;
+                                font-size: 16px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: "Controle direto via obs-websocket 5.x (localhost)";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 24px;
+                            y: 4px;
+                            border-radius: 6px;
+                            background: root.obs-status-code == 1
+                                ? Theme.success-soft
+                                : (root.obs-status-code == 2 ? Theme.danger-soft : rgba(255, 255, 255, 0.06));
+                            border-width: 1px;
+                            border-color: root.obs-status-code == 1
+                                ? rgba(34, 197, 94, 0.42)
+                                : (root.obs-status-code == 2 ? Theme.danger-border : Theme.border-subtle);
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                Text {
+                                    text: root.obs-status-label;
+                                    color: root.obs-status-code == 1
+                                        ? #86efac
+                                        : (root.obs-status-code == 2 ? Theme.danger-text : Theme.text-muted);
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Text { text: "Habilitar OBS WebSocket"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                            Text { text: "Conexão preguiçosa: só conecta ao executar um comando ou testar"; color: Theme.text-dim; font-size: 11px; wrap: word-wrap; }
+                        }
+                        ToggleSwitch {
+                            y: 8px;
+                            checked: root.obs-enabled;
+                            toggled => { root.obs-toggle-enabled(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        AppField {
+                            width: 120px;
+                            label: "Porta";
+                            placeholder: "4455";
+                            value <=> root.obs-port;
+                        }
+                        AppField {
+                            horizontal-stretch: 1;
+                            label: "Senha (opcional)";
+                            placeholder: "Vazio se sem autenticação";
+                            value <=> root.obs-password;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        AppButton {
+                            primary: true;
+                            text: "Testar conexão";
+                            clicked => { root.obs-test-connection(); }
+                        }
+                    }
+
+                    if root.obs-status-detail != "": Rectangle {
+                        border-radius: 8px;
+                        background: Theme.bg-card;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+
+                        HorizontalLayout {
+                            padding: 10px;
+                            Text {
+                                text: root.obs-status-detail;
+                                color: root.obs-status-code == 1
+                                    ? #86efac
+                                    : (root.obs-status-code == 2 ? Theme.danger-text : Theme.text-secondary);
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "No OBS: Ferramentas → Configurações do Servidor WebSocket (porta padrão 4455).";
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // Card 2: Mídia (MPRIS / D-Bus)
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 12px;
+                background: Theme.bg-surface;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: space-between;
+
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: "Mídia (MPRIS)";
+                                color: Theme.text-primary;
+                                font-size: 16px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: "Protocolo padrão Linux via D-Bus (sem configuração)";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 24px;
+                            y: 4px;
+                            border-radius: 6px;
+                            background: root.mpris-available ? Theme.success-soft : rgba(255, 255, 255, 0.06);
+                            border-width: 1px;
+                            border-color: root.mpris-available ? rgba(34, 197, 94, 0.42) : Theme.border-subtle;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                Text {
+                                    text: root.mpris-status-label;
+                                    color: root.mpris-available ? #86efac : Theme.text-muted;
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "Controla diretamente qualquer player compatível com MPRIS em execução (Spotify, Firefox, Chromium, mpv, VLC) sem depender de atalhos de teclado.";
+                        color: Theme.text-secondary;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        AppButton {
+                            text: "Verificar players";
+                            clicked => { root.mpris-test-connection(); }
+                        }
+                    }
+
+                    if root.mpris-status-detail != "": Rectangle {
+                        border-radius: 8px;
+                        background: Theme.bg-card;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+
+                        HorizontalLayout {
+                            padding: 10px;
+                            Text {
+                                text: root.mpris-status-detail;
+                                color: root.mpris-available ? #86efac : Theme.text-muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: 8px;
+                        background: Theme.bg-card;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 6px;
+                            Text {
+                                text: "Comandos disponíveis no Seletor de Ações";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 600;
+                            }
+                            Text {
+                                text: "• Play / Pause  • Próxima faixa  • Faixa anterior  • Parar  • Avançar / retroceder (segundos)";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+
         // Mensagem de erro global
         if root.error-message != "": Rectangle {
             border-radius: 8px;
@@ -2040,6 +2324,14 @@ export component SettingsWindow inherits Window {
         macro-steps: root.editor-macro-steps;
         macro-key-text <=> root.editor-macro-key-text;
         macro-wait-text <=> root.editor-macro-wait-text;
+        provider-options: root.editor-provider-options;
+        selected-provider-index: root.editor-selected-provider-index;
+        selected-provider-available: root.editor-selected-provider-available;
+        provider-commands: root.editor-provider-commands;
+        selected-provider-command-index: root.editor-selected-provider-command-index;
+        provider-arg-label: root.editor-provider-arg-label;
+        provider-arg-placeholder: root.editor-provider-arg-placeholder;
+        provider-arg-value <=> root.editor-provider-arg-value;
         error-message: root.editor-error-message;
 
         select-type(i) => { root.editor-select-type(i); }
@@ -2064,6 +2356,9 @@ export component SettingsWindow inherits Window {
         add-macro-wait-preset(ms) => { root.editor-add-macro-wait-preset(ms); }
         move-macro-step(idx, d) => { root.editor-move-macro-step(idx, d); }
         remove-macro-step(i) => { root.editor-remove-macro-step(i); }
+        select-provider(i) => { root.editor-select-provider(i); }
+        select-provider-command(i) => { root.editor-select-provider-command(i); }
+        provider-arg-edited(v) => { root.editor-provider-arg-edited(v); }
         save-action => { root.editor-save(); }
         cancel-action => { root.editor-cancel(); }
     }

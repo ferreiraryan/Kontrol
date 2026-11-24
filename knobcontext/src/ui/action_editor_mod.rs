@@ -1,7 +1,11 @@
 use crate::action_presets::{apps as preset_apps, presets_for_app};
 use crate::actions_catalog::{DesktopApp, MacroStep};
+use crate::providers::ProviderRegistry;
 use crate::ui::action_editor_state::ActionEditorState;
-use crate::ui::{AppListItem, MacroStepItem, PresetListItem, SettingsWindow};
+use crate::ui::{
+    AppListItem, MacroStepItem, PresetListItem, ProviderCommandItem, ProviderOptionItem,
+    SettingsWindow,
+};
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -102,7 +106,12 @@ fn map_slint_key_text(text: &str, ctrl_held: bool) -> Option<(String, bool)> {
 }
 
 /// Sincroniza todo o estado do `ActionEditorState` para as propriedades do popover na `SettingsWindow`.
-pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps: &[DesktopApp]) {
+pub fn sync_editor_to_ui(
+    win: &SettingsWindow,
+    editor: &ActionEditorState,
+    apps: &[DesktopApp],
+    providers: &ProviderRegistry,
+) {
     win.set_editor_open(editor.is_open);
     if let Some(ref title) = editor.custom_title {
         win.set_editor_control_title(SharedString::from(title.as_str()));
@@ -194,6 +203,58 @@ pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps:
     win.set_editor_macro_steps(ModelRc::from(Rc::new(VecModel::from(step_items))));
     win.set_editor_macro_key_text(SharedString::from(editor.macro_key_input.as_str()));
     win.set_editor_macro_wait_text(SharedString::from(editor.macro_wait_ms_input.as_str()));
+
+    // Integração direta (Providers)
+    let prov_list = providers.providers();
+    let prov_options: Vec<ProviderOptionItem> = prov_list
+        .iter()
+        .map(|p| ProviderOptionItem {
+            id: SharedString::from(p.id()),
+            name: SharedString::from(p.name()),
+            available: p.is_available(),
+        })
+        .collect();
+    let selected_prov_idx = prov_list
+        .iter()
+        .position(|p| p.id().eq_ignore_ascii_case(&editor.provider_id))
+        .unwrap_or(0);
+    let selected_prov_available = prov_options
+        .get(selected_prov_idx)
+        .is_some_and(|p| p.available);
+
+    let (cmd_items, selected_cmd_idx, arg_label, arg_placeholder) = prov_list
+        .get(selected_prov_idx)
+        .map(|p| {
+            let cmds = p.commands();
+            let cidx = cmds
+                .iter()
+                .position(|c| c.id.eq_ignore_ascii_case(&editor.provider_command_id))
+                .unwrap_or(0);
+            let (albl, aph) = cmds
+                .get(cidx)
+                .and_then(|c| c.args_schema.fields.first())
+                .map(|f| (f.label.to_string(), f.placeholder.to_string()))
+                .unwrap_or_default();
+            let items: Vec<ProviderCommandItem> = cmds
+                .into_iter()
+                .map(|c| ProviderCommandItem {
+                    id: SharedString::from(c.id),
+                    name: SharedString::from(c.name),
+                })
+                .collect();
+            (items, cidx, albl, aph)
+        })
+        .unwrap_or_default();
+
+    win.set_editor_provider_options(ModelRc::from(Rc::new(VecModel::from(prov_options))));
+    win.set_editor_selected_provider_index(selected_prov_idx as i32);
+    win.set_editor_selected_provider_available(selected_prov_available);
+    win.set_editor_provider_commands(ModelRc::from(Rc::new(VecModel::from(cmd_items))));
+    win.set_editor_selected_provider_command_index(selected_cmd_idx as i32);
+    win.set_editor_provider_arg_label(SharedString::from(arg_label));
+    win.set_editor_provider_arg_placeholder(SharedString::from(arg_placeholder));
+    win.set_editor_provider_arg_value(SharedString::from(editor.provider_arg_value.as_str()));
+
     win.set_editor_preview_text(SharedString::from(editor.live_preview_summary(apps)));
 }
 
