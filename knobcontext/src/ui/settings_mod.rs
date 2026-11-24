@@ -560,6 +560,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 id,
                 title: "Ação Rápida".to_string(),
                 enabled: true,
+                icon: None,
                 kind: OverlayItemKind::QuickAction {
                     action: ActionConfig::MediaPlayPause,
                 },
@@ -583,6 +584,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 id,
                 title: "Slider Customizado".to_string(),
                 enabled: true,
+                icon: None,
                 kind: OverlayItemKind::CustomSlider {
                     step: 5,
                     up_command: String::new(),
@@ -610,10 +612,12 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 id,
                 title: "Submenu Customizado".to_string(),
                 enabled: true,
+                icon: None,
                 kind: OverlayItemKind::CustomGroup {
                     entries: vec![CustomGroupEntry {
                         label: "Nova ação".to_string(),
                         action: ActionConfig::None,
+                        icon: None,
                     }],
                 },
             });
@@ -747,6 +751,7 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 entries.push(CustomGroupEntry {
                     label: format!("Ação {n}"),
                     action: ActionConfig::None,
+                    icon: None,
                 });
                 d.hub_group_selected_entry = entries.len() - 1;
                 d.dirty = true;
@@ -875,6 +880,53 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 OverlayKey3Behavior::Close => OverlayKey3Behavior::Confirm,
             };
             d.dirty = true;
+            sync_all_to_ui(&win, &d);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_toggle_show_images(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.base_config.overlay.show_images = !d.base_config.overlay.show_images;
+            d.dirty = true;
+            sync_all_to_ui(&win, &d);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_pick_item_icon(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "svg"])
+                .pick_file()
+            {
+                let mut d = draft_ref.borrow_mut();
+                apply_hub_fields_to_draft(&win, &mut d);
+                let idx = d.hub_selected_index;
+                if let Some(item) = d.base_config.overlay.items.get_mut(idx) {
+                    item.icon = Some(path.to_string_lossy().into_owned());
+                    d.dirty = true;
+                }
+                sync_all_to_ui(&win, &d);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_clear_item_icon(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            apply_hub_fields_to_draft(&win, &mut d);
+            let idx = d.hub_selected_index;
+            if let Some(item) = d.base_config.overlay.items.get_mut(idx) {
+                if item.icon.take().is_some() {
+                    d.dirty = true;
+                }
+            }
             sync_all_to_ui(&win, &d);
         });
     }
@@ -1270,6 +1322,7 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     win.set_hub_browse_timeout_sec((overlay.browse_timeout_ms / 1_000) as i32);
     win.set_hub_adjust_timeout_sec((overlay.adjust_timeout_ms / 1_000) as i32);
     win.set_hub_key3_is_confirm(overlay.key3_behavior == OverlayKey3Behavior::Confirm);
+    win.set_hub_show_images(overlay.show_images);
 
     let labels: Vec<SharedString> = overlay
         .items
@@ -1286,6 +1339,13 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         win.set_hub_item_title(SharedString::from(item.title.as_str()));
         win.set_hub_item_kind_label(SharedString::from(item.kind.kind_label()));
         win.set_hub_item_enabled(item.enabled);
+        let icon_label = item
+            .icon
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).file_name().and_then(|n| n.to_str()))
+            .or(item.icon.as_deref())
+            .unwrap_or("Automático / nenhuma");
+        win.set_hub_item_icon_label(SharedString::from(icon_label));
 
         match &item.kind {
             OverlayItemKind::QuickAction { action } => {

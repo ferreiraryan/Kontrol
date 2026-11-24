@@ -182,6 +182,8 @@ export component SettingsWindow inherits Window {
     in property <int> hub-browse-timeout-sec: 5;
     in property <int> hub-adjust-timeout-sec: 10;
     in property <bool> hub-key3-is-confirm: true;
+    in property <bool> hub-show-images: true;
+    in property <string> hub-item-icon-label: "Automático / nenhuma";
 
     // --- Estado geral ---
     in property <bool> has-unsaved-changes: false;
@@ -243,6 +245,9 @@ export component SettingsWindow inherits Window {
     callback hub-change-browse-timeout(int);
     callback hub-change-adjust-timeout(int);
     callback hub-toggle-key3-behavior();
+    callback hub-toggle-show-images();
+    callback hub-pick-item-icon();
+    callback hub-clear-item-icon();
 
     // Callbacks Popover
     callback editor-select-type(int);
@@ -724,6 +729,13 @@ export component SettingsWindow inherits Window {
                                     Text { width: 32px; text: root.hub-adjust-timeout-sec + "s"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                     DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-adjust-timeout(1); } }
                                 }
+
+                                DarkButton {
+                                    height: 24px;
+                                    primary: root.hub-show-images;
+                                    text: root.hub-show-images ? "Imagens: SIM" : "Imagens: NÃO";
+                                    clicked => { root.hub-toggle-show-images(); }
+                                }
                             }
                         }
                     }
@@ -747,6 +759,35 @@ export component SettingsWindow inherits Window {
                                 text: root.hub-item-enabled ? "Ativo no Hub" : "Oculto";
                                 clicked => { root.hub-toggle-enabled(); }
                             }
+                        }
+                    }
+
+                    // Imagem opcional do item selecionado
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "Imagem opcional:";
+                            color: #a1a1aa;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.hub-item-icon-label;
+                            color: #d4d4d8;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        DarkButton {
+                            height: 24px;
+                            text: "Escolher...";
+                            clicked => { root.hub-pick-item-icon(); }
+                        }
+                        DarkButton {
+                            height: 24px;
+                            text: "Limpar";
+                            clicked => { root.hub-clear-item-icon(); }
                         }
                     }
 

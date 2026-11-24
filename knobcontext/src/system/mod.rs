@@ -2,6 +2,8 @@ pub mod audio;
 pub mod brightness;
 pub mod caelestia;
 pub mod hyprland;
+pub mod icons;
+pub mod thumbs;
 
 use crate::system::audio::{
     fetch_audio_mixer, fetch_audio_outputs, set_app_volume, set_default_audio_output,
@@ -14,8 +16,10 @@ use crate::system::caelestia::{
     trigger_caelestia_toggle, CaelestiaToggleKind, CaelestiaTogglesSnapshot, WallpapersSnapshot,
 };
 use crate::system::hyprland::{
-    fetch_workspaces, switch_workspace, toggle_special_workspace, WorkspacesSnapshot,
+    fetch_workspaces, position_overlay_bottom_center, switch_workspace, toggle_special_workspace,
+    WorkspacesSnapshot,
 };
+use crate::system::thumbs::{load_or_generate_thumbnail, DecodedThumbnail, ThumbnailRequest};
 use log::warn;
 use std::collections::VecDeque;
 use std::process::Command;
@@ -72,6 +76,12 @@ pub enum SystemRequest {
         item_id: String,
         read_command: String,
     },
+    LoadThumbnail(ThumbnailRequest),
+    PositionOverlay {
+        width: i32,
+        height: i32,
+        bottom_margin: i32,
+    },
     Shutdown,
 }
 
@@ -85,6 +95,7 @@ pub enum SystemResponse {
     Wallpapers(WallpapersSnapshot),
     CaelestiaToggles(CaelestiaTogglesSnapshot),
     CustomSliderValue { item_id: String, percent: i32 },
+    ThumbnailReady(DecodedThumbnail),
     Error(String),
 }
 
@@ -150,6 +161,16 @@ pub fn coalesce_request(queue: &mut VecDeque<SystemRequest>, incoming: SystemReq
                 .any(|r| matches!(r, SystemRequest::FetchCaelestiaToggles)) =>
         {
             return;
+        }
+        SystemRequest::LoadThumbnail(req)
+            if queue.iter().any(
+                |r| matches!(r, SystemRequest::LoadThumbnail(existing) if existing == req),
+            ) =>
+        {
+            return;
+        }
+        SystemRequest::PositionOverlay { .. } => {
+            queue.retain(|req| !matches!(req, SystemRequest::PositionOverlay { .. }));
         }
         _ => {}
     }
@@ -375,6 +396,23 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
             }
             Ok(_) | Err(_) => None,
         },
+        SystemRequest::LoadThumbnail(req) => match load_or_generate_thumbnail(&req) {
+            Ok(decoded) => Some(SystemResponse::ThumbnailReady(decoded)),
+            Err(err) => {
+                log::debug!("Thumbnail ignorado para '{}': {err}", req.path);
+                None
+            }
+        },
+        SystemRequest::PositionOverlay {
+            width,
+            height,
+            bottom_margin,
+        } => {
+            if let Err(err) = position_overlay_bottom_center(width, height, bottom_margin) {
+                log::debug!("Posicionamento automático do overlay no Hyprland ignorado: {err}");
+            }
+            None
+        }
         SystemRequest::Shutdown => None,
     }
 }

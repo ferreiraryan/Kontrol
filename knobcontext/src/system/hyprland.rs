@@ -20,11 +20,17 @@ pub struct WorkspacesSnapshot {
     pub workspaces: Vec<WorkspaceItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MonitorInfo {
     pub name: String,
     pub model: String,
     pub focused: bool,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub scale: f32,
+    pub transform: i32,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +52,22 @@ struct HyprMonitorJson {
     model: String,
     #[serde(default)]
     focused: bool,
+    #[serde(default)]
+    x: i32,
+    #[serde(default)]
+    y: i32,
+    #[serde(default)]
+    width: i32,
+    #[serde(default)]
+    height: i32,
+    #[serde(default = "default_scale")]
+    scale: f32,
+    #[serde(default)]
+    transform: i32,
+}
+
+fn default_scale() -> f32 {
+    1.0
 }
 
 fn hypr_socket1_command(cmd: &str) -> Result<String, KnobError> {
@@ -130,10 +152,66 @@ pub fn parse_monitors_json(raw: &str) -> Result<Vec<MonitorInfo>, KnobError> {
             name: m.name.trim().to_string(),
             model: m.model.trim().to_string(),
             focused: m.focused,
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+            scale: if m.scale > 0.1 { m.scale } else { 1.0 },
+            transform: m.transform,
         })
         .collect();
     monitors.sort_by(|a, b| b.focused.cmp(&a.focused).then_with(|| a.name.cmp(&b.name)));
     Ok(monitors)
+}
+
+/// Calcula a posição `(x, y)` na parte inferior central do monitor, respeitando `scale` e `transform`.
+pub fn compute_bottom_center_position(
+    mon: &MonitorInfo,
+    win_w: i32,
+    win_h: i32,
+    bottom_margin: i32,
+) -> (i32, i32) {
+    let rotated = matches!(mon.transform % 4, 1 | 3);
+    let raw_w = if rotated { mon.height } else { mon.width };
+    let raw_h = if rotated { mon.width } else { mon.height };
+    let scale = if mon.scale > 0.1 { mon.scale } else { 1.0 };
+    let logical_w = ((raw_w as f32) / scale).round() as i32;
+    let logical_h = ((raw_h as f32) / scale).round() as i32;
+
+    let x = mon.x + ((logical_w - win_w) / 2).max(0);
+    let y = mon.y + (logical_h - win_h - bottom_margin.max(0)).max(0);
+    (x, y)
+}
+
+/// Posiciona a janela `KnobContext Overlay` na parte inferior central do monitor focado via IPC.
+pub fn position_overlay_bottom_center(
+    win_w: i32,
+    win_h: i32,
+    bottom_margin: i32,
+) -> Result<(), KnobError> {
+    let monitors = fetch_monitors()?;
+    let Some(target) = monitors
+        .iter()
+        .find(|m| m.focused)
+        .or_else(|| monitors.first())
+    else {
+        return Ok(());
+    };
+    let (x, y) = compute_bottom_center_position(target, win_w, win_h, bottom_margin);
+    let cmd = format!("dispatch movewindowpixel exact {x} {y},title:^(KnobContext Overlay)$");
+
+    // Curto retry porque o compositor pode levar ~15-40ms para mapear a xdg_toplevel recém-criada.
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if let Ok(resp) = hypr_socket1_command(&cmd) {
+            if resp.trim().eq_ignore_ascii_case("ok") {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn fetch_workspaces() -> Result<WorkspacesSnapshot, KnobError> {
@@ -182,15 +260,27 @@ mod tests {
     }
 
     #[test]
-    fn parses_monitors_focused_first() {
+    fn parses_monitors_focused_first_and_computes_bottom_center() {
         let raw = r#"[
-            {"name": "HDMI-A-1", "model": "MCR-VLK24BL01", "focused": false},
-            {"name": "DP-3", "model": "GA271", "focused": true}
+            {"name": "HDMI-A-1", "model": "MCR-VLK24BL01", "focused": false, "x": 2560, "y": 0, "width": 1920, "height": 1080, "scale": 1.0, "transform": 3},
+            {"name": "DP-3", "model": "GA271", "focused": true, "x": 0, "y": 900, "width": 2560, "height": 1440, "scale": 1.0, "transform": 0}
         ]"#;
         let monitors = parse_monitors_json(raw).expect("monitors válidos");
         assert_eq!(monitors.len(), 2);
         assert_eq!(monitors[0].name, "DP-3");
         assert!(monitors[0].focused);
         assert_eq!(monitors[1].name, "HDMI-A-1");
+
+        // Monitor horizontal DP-3 (2560x1440 em y=900), overlay 960x256, margem 20
+        assert_eq!(
+            super::compute_bottom_center_position(&monitors[0], 960, 256, 20),
+            (800, 900 + 1440 - 256 - 20)
+        );
+
+        // Monitor vertical HDMI-A-1 (transform=3 -> lógico 1080x1920 em x=2560, y=0)
+        assert_eq!(
+            super::compute_bottom_center_position(&monitors[1], 960, 256, 20),
+            (2560 + 60, 1920 - 256 - 20)
+        );
     }
 }

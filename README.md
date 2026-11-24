@@ -30,18 +30,31 @@ sudo usermod -aG input "$USER"
 
 ## Regras recomendadas no Hyprland (Wayland)
 
-No Wayland, o backend `winit` do Slint cria uma janela `xdg_toplevel` (não `wlr-layer-shell`), portanto o compositor controla **posicionamento centralizado**, **sempre no topo (`pin`)** e **não roubar foco (`nofocus`)**.
+O KnobContext posiciona automaticamente o overlay flutuante na **parte inferior central do monitor focado** via IPC do Hyprland (`.socket.sock`).
 
-Adicione as regras abaixo ao seu `~/.config/hypr/hyprland.conf` para garantir que o overlay fique sempre no topo, centralizado, sem bordas do compositor e **sem roubar o foco** do aplicativo ativo:
+Se quiser garantir também **sempre no topo (`pin`)**, **sem roubar foco (`nofocus`)**, **sem bordas/sombras** e posicionamento instantâneo desde o 1º frame, adicione as regras abaixo:
 
+**Em `~/.config/hypr/hyprland.conf`:**
 ```ini
-# KnobContext Overlay
+# KnobContext Overlay (dock flutuante inferior central)
 windowrulev2 = float, title:^(KnobContext Overlay)$
 windowrulev2 = pin, title:^(KnobContext Overlay)$
-windowrulev2 = center, title:^(KnobContext Overlay)$
+windowrulev2 = move (monitor_w-window_w)/2 (monitor_h-window_h-20), title:^(KnobContext Overlay)$
 windowrulev2 = nofocus, title:^(KnobContext Overlay)$
 windowrulev2 = noborder, title:^(KnobContext Overlay)$
 windowrulev2 = noshadow, title:^(KnobContext Overlay)$
+```
+
+**Ou em `~/.config/caelestia/hypr-user.lua` (setup Caelestia em Lua):**
+```lua
+hl.window_rule({
+  match = { title = "^(KnobContext Overlay)$" },
+  float = true,
+  pin = true,
+  nofocus = true,
+  noborder = true,
+  noshadow = true,
+})
 ```
 
 > **Transparência**: o overlay utiliza `background: transparent` no Slint (`renderer-software`) com cartão interno em `rgba(20, 20, 20, 0.85)` e cantos arredondados de `12px`. No Hyprland, a transparência RGBA funciona nativamente sem configuração adicional; se desejar desfoque de fundo, adicione `windowrulev2 = blur, title:^(KnobContext Overlay)$` ou regra de layer/opacity conforme sua versão do Hyprland.

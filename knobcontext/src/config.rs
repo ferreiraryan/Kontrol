@@ -22,9 +22,14 @@ pub const DEFAULT_OVERLAY_ADJUST_TIMEOUT_MS: u64 = 10_000;
 pub const DEFAULT_VOLUME_STEP: i32 = 5;
 pub const DEFAULT_BRIGHTNESS_STEP: i32 = 5;
 pub const DEFAULT_MAX_VOLUME_PERCENT: i32 = 150;
+pub const DEFAULT_OVERLAY_BOTTOM_MARGIN_PX: i32 = 20;
 
 fn default_true() -> bool {
     true
+}
+
+fn default_bottom_margin_px() -> i32 {
+    DEFAULT_OVERLAY_BOTTOM_MARGIN_PX
 }
 
 fn default_slider_step() -> i32 {
@@ -45,6 +50,9 @@ pub enum OverlayKey3Behavior {
 pub struct CustomGroupEntry {
     pub label: String,
     pub action: ActionConfig,
+    /// Caminho opcional de imagem/ícone exibido no carrossel para esta entrada.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +107,9 @@ pub struct OverlayItemConfig {
     pub title: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Caminho opcional de imagem/ícone exibido no carrossel para este item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(flatten)]
     pub kind: OverlayItemKind,
 }
@@ -112,6 +123,12 @@ pub struct OverlayConfig {
     pub brightness_step: i32,
     pub max_volume_percent: i32,
     pub key3_behavior: OverlayKey3Behavior,
+    /// Exibe thumbnails de wallpapers e ícones de aplicativos quando disponíveis (opcional).
+    #[serde(default = "default_true")]
+    pub show_images: bool,
+    /// Margem inferior (em pixels) do dock flutuante na base central da tela.
+    #[serde(default = "default_bottom_margin_px")]
+    pub bottom_margin_px: i32,
     pub items: Vec<OverlayItemConfig>,
 }
 
@@ -124,6 +141,8 @@ impl Default for OverlayConfig {
             brightness_step: DEFAULT_BRIGHTNESS_STEP,
             max_volume_percent: DEFAULT_MAX_VOLUME_PERCENT,
             key3_behavior: OverlayKey3Behavior::Confirm,
+            show_images: true,
+            bottom_margin_px: DEFAULT_OVERLAY_BOTTOM_MARGIN_PX,
             items: default_overlay_items(),
         }
     }
@@ -135,42 +154,49 @@ pub fn default_overlay_items() -> Vec<OverlayItemConfig> {
             id: "profiles".to_string(),
             title: "Perfis".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::Profiles,
         },
         OverlayItemConfig {
             id: "audio_mixer".to_string(),
             title: "Sons & Apps".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::AudioMixer,
         },
         OverlayItemConfig {
             id: "audio_outputs".to_string(),
             title: "Saída de Som".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::AudioOutputs,
         },
         OverlayItemConfig {
             id: "workspaces".to_string(),
             title: "Workspaces".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::Workspaces,
         },
         OverlayItemConfig {
             id: "brightness".to_string(),
             title: "Brilho".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::Brightness,
         },
         OverlayItemConfig {
             id: "caelestia_wallpapers".to_string(),
             title: "Wallpapers".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::CaelestiaWallpapers,
         },
         OverlayItemConfig {
             id: "caelestia_toggles".to_string(),
             title: "Caelestia".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::CaelestiaToggles,
         },
     ]
@@ -1259,10 +1285,13 @@ knob_cw = "VolumeUp"
         cfg.overlay.volume_step = 10;
         cfg.overlay.brightness_step = 5;
         cfg.overlay.key3_behavior = OverlayKey3Behavior::Close;
+        cfg.overlay.show_images = false;
+        cfg.overlay.bottom_margin_px = 24;
         cfg.overlay.items.push(OverlayItemConfig {
             id: "quick_term".to_string(),
             title: "Abrir Terminal".to_string(),
             enabled: true,
+            icon: Some("/usr/share/icons/hicolor/128x128/apps/kitty.png".to_string()),
             kind: OverlayItemKind::QuickAction {
                 action: ActionConfig::Exec {
                     command: "kitty".to_string(),
@@ -1273,12 +1302,14 @@ knob_cw = "VolumeUp"
             id: "custom_group_1".to_string(),
             title: "Ferramentas".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::CustomGroup {
                 entries: vec![CustomGroupEntry {
                     label: "Copiar".to_string(),
                     action: ActionConfig::Shortcut {
                         keys: vec!["Ctrl".into(), "C".into()],
                     },
+                    icon: None,
                 }],
             },
         });
@@ -1286,6 +1317,7 @@ knob_cw = "VolumeUp"
             id: "custom_slider_1".to_string(),
             title: "Zoom Hyprland".to_string(),
             enabled: true,
+            icon: None,
             kind: OverlayItemKind::CustomSlider {
                 step: 5,
                 up_command: "hyprctl keyword cursor:zoom_factor 2".to_string(),

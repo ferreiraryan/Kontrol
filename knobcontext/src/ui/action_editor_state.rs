@@ -353,11 +353,13 @@ mod tests {
                 desktop_file: "firefox.desktop".into(),
                 name: "Mozilla Firefox".into(),
                 exec: "firefox".into(),
+                icon: None,
             },
             DesktopApp {
                 desktop_file: "gimp.desktop".into(),
                 name: "GNU Image Manipulation Program".into(),
                 exec: "gimp".into(),
+                icon: None,
             },
         ];
 

@@ -1,7 +1,12 @@
-export struct OverlayRowData {
+export struct OverlayCardData {
+    is-empty: bool,
     title: string,
     subtitle: string,
     badge: string,
+    glyph: string,
+    has-image: bool,
+    image-is-cover: bool,
+    image-source: image,
     value-percent: int,
     max-percent: int,
     is-slider: bool,
@@ -9,33 +14,236 @@ export struct OverlayRowData {
     is-muted: bool,
 }
 
+component CarouselCard inherits Rectangle {
+    in property <OverlayCardData> card;
+    in property <bool> is-center: false;
+    in property <bool> is-outer: false;
+    in property <bool> adjusting: false;
+
+    width: root.is-center ? 228px : (root.is-outer ? 148px : 162px);
+    height: root.is-center ? 168px : (root.is-outer ? 132px : 142px);
+    border-radius: root.is-center ? 14px : 11px;
+    background: root.card.is-empty
+        ? transparent
+        : (root.is-center
+            ? (root.adjusting ? rgba(37, 99, 235, 0.24) : rgba(255, 255, 255, 0.08))
+            : transparent);
+    border-width: root.card.is-empty ? 0px : (root.is-center ? 1.2px : 0px);
+    border-color: root.is-center
+        ? (root.adjusting ? rgba(96, 165, 250, 0.88) : rgba(255, 255, 255, 0.16))
+        : transparent;
+
+    animate background, border-color {
+        duration: 130ms;
+        easing: ease-out;
+    }
+
+    if !root.card.is-empty: VerticalLayout {
+        padding-top: root.is-center ? 10px : 6px;
+        padding-bottom: root.is-center ? 8px : 4px;
+        padding-left: root.is-center ? 10px : 4px;
+        padding-right: root.is-center ? 10px : 4px;
+        spacing: root.is-center ? 7px : 5px;
+        alignment: center;
+
+        // Área visual principal do card (16:10 thumbnail, ícone de app ou card limpo)
+        Rectangle {
+            height: root.is-center ? 114px : (root.is-outer ? 84px : 94px);
+            border-radius: 10px;
+            clip: true;
+            background: root.card.has-image && root.card.image-is-cover
+                ? rgba(10, 12, 16, 0.9)
+                : (root.is-center
+                    ? (root.adjusting
+                        ? rgba(30, 58, 138, 0.55)
+                        : rgba(34, 38, 50, 0.92))
+                    : (root.is-outer
+                        ? rgba(24, 27, 36, 0.72)
+                        : rgba(28, 31, 42, 0.84)));
+            border-width: 1px;
+            border-color: root.is-center
+                ? (root.adjusting
+                    ? rgba(96, 165, 250, 0.85)
+                    : rgba(255, 255, 255, 0.24))
+                : (root.card.is-active
+                    ? rgba(147, 197, 253, 0.35)
+                    : rgba(255, 255, 255, 0.08));
+
+            // 1. Imagem Cover (ex.: Wallpapers ou imagem customizada)
+            if root.card.has-image && root.card.image-is-cover: Image {
+                width: 100%;
+                height: 100%;
+                source: root.card.image-source;
+                image-fit: cover;
+                opacity: root.is-center ? 1.0 : (root.is-outer ? 0.62 : 0.82);
+            }
+
+            // 2. Ícone de aplicativo (ex.: Firefox no Mixer ou LaunchApp)
+            if root.card.has-image && !root.card.image-is-cover: VerticalLayout {
+                alignment: center;
+                padding: 8px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        width: root.is-center ? (root.card.is-slider ? 46px : 58px) : 38px;
+                        height: root.is-center ? (root.card.is-slider ? 46px : 58px) : 38px;
+                        source: root.card.image-source;
+                        image-fit: contain;
+                        opacity: root.is-center ? 1.0 : (root.is-outer ? 0.68 : 0.85);
+                    }
+                }
+
+                if root.card.is-slider: VerticalLayout {
+                    spacing: 3px;
+                    Text {
+                        text: root.card.badge;
+                        color: root.card.is-muted ? #f87171 : #e2e8f0;
+                        font-size: root.is-center ? 13px : 11px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Rectangle {
+                        height: 5px;
+                        border-radius: 3px;
+                        background: rgba(255, 255, 255, 0.14);
+                        clip: true;
+
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            height: 100%;
+                            width: parent.width * max(0.0, min(1.0, root.card.value-percent / max(1, root.card.max-percent)));
+                            border-radius: 3px;
+                            background: root.card.is-muted
+                                ? #ef4444
+                                : (root.is-center && root.adjusting ? #3b82f6 : #93c5fd);
+                        }
+                    }
+                }
+            }
+
+            // 3. Card minimalista SEM imagem (Sliders, Workspaces, Saídas, Brilho, Toggles)
+            if !root.card.has-image: VerticalLayout {
+                alignment: center;
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 6px;
+
+                if root.card.is-slider: Text {
+                    text: root.card.is-muted ? "MUTE" : (root.card.value-percent + "%");
+                    color: root.card.is-muted
+                        ? #f87171
+                        : (root.is-center ? #ffffff : #cbd5e1);
+                    font-size: root.is-center ? 24px : 17px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+
+                if !root.card.is-slider: Text {
+                    text: root.card.glyph;
+                    color: root.is-center
+                        ? #e0e7ff
+                        : (root.is-outer ? rgba(203, 213, 225, 0.55) : #94a3b8);
+                    font-size: root.is-center ? 30px : 22px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+
+                if root.card.is-slider: Rectangle {
+                    height: 6px;
+                    border-radius: 3px;
+                    background: rgba(255, 255, 255, 0.14);
+                    clip: true;
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        height: 100%;
+                        width: parent.width * max(0.0, min(1.0, root.card.value-percent / max(1, root.card.max-percent)));
+                        border-radius: 3px;
+                        background: root.card.is-muted
+                            ? #ef4444
+                            : (root.is-center && root.adjusting ? #3b82f6 : #93c5fd);
+                    }
+                }
+
+                if !root.card.is-slider && root.card.subtitle != "": Text {
+                    text: root.card.subtitle;
+                    color: rgba(226, 232, 240, 0.62);
+                    font-size: 10px;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            // Badge discreto no canto superior direito (ATUAL / ATIVO / ON / OFF)
+            if root.card.badge != "" && !root.card.is-slider: Rectangle {
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                width: 48px;
+                height: 18px;
+                border-radius: 9px;
+                background: root.card.is-active
+                    ? rgba(59, 130, 246, 0.85)
+                    : rgba(15, 23, 42, 0.78);
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.18);
+
+                Text {
+                    text: root.card.badge;
+                    color: #f8fafc;
+                    font-size: 9px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Título centralizado abaixo do card (idêntico ao estilo do Caelestia)
+        Text {
+            text: root.card.title;
+            color: root.is-center
+                ? #f8fafc
+                : (root.is-outer ? rgba(226, 232, 240, 0.56) : rgba(226, 232, 240, 0.78));
+            font-size: root.is-center ? 12px : 11px;
+            font-weight: root.is-center ? 700 : 500;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 export component Overlay inherits Window {
     title: "KnobContext Overlay";
     no-frame: true;
     always-on-top: true;
     background: transparent;
-    width: 520px;
-    height: 356px;
+    width: 960px;
+    height: 256px;
 
-    in property <string> breadcrumb: "KnobContext Hub";
-    in property <string> context-badge: "Auto • global";
+    in property <string> parent-pill: "Auto • global";
+    in property <string> active-pill: "KnobContext";
+    in property <string> status-pill: "1 / 7";
     in property <bool> adjusting: false;
     in property <bool> loading: false;
     in property <string> empty-message: "";
-    in property <[OverlayRowData]> rows: [];
-    in property <int> highlighted-index: 0;
-    in property <string> scroll-indicator: "";
+    in property <[OverlayCardData]> cards: [];
     in property <string> footer-hint: "Girar: Navegar • Knob/K3: Abrir • K1: Fechar";
 
     Rectangle {
         width: 100%;
         height: 100%;
-        background: rgba(18, 18, 22, 0.92);
-        border-radius: 14px;
+        background: rgba(17, 20, 27, 0.90);
+        border-radius: 20px;
         border-width: 1.5px;
         border-color: root.adjusting
-            ? rgba(59, 130, 246, 0.78)
-            : rgba(255, 255, 255, 0.12);
+            ? rgba(96, 165, 250, 0.82)
+            : rgba(255, 255, 255, 0.11);
 
         animate border-color {
             duration: 140ms;
@@ -43,42 +251,51 @@ export component Overlay inherits Window {
         }
 
         VerticalLayout {
-            padding-top: 14px;
-            padding-bottom: 12px;
-            padding-left: 16px;
-            padding-right: 16px;
-            spacing: 10px;
+            padding-top: 12px;
+            padding-bottom: 10px;
+            padding-left: 18px;
+            padding-right: 18px;
+            spacing: 8px;
+            alignment: stretch;
 
-            // Cabeçalho: Breadcrumb + Modo Contextual + Badge AJUSTANDO
+            // Barra superior centralizada com pílulas estilo Caelestia
             HorizontalLayout {
-                spacing: 8px;
-                alignment: stretch;
+                alignment: center;
+                spacing: 10px;
 
-                Text {
-                    horizontal-stretch: 1;
-                    text: root.breadcrumb;
-                    color: #f5f5f7;
-                    font-size: 16px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                if root.adjusting: Rectangle {
-                    height: 22px;
-                    border-radius: 11px;
-                    background: rgba(59, 130, 246, 0.28);
-                    border-width: 1px;
-                    border-color: rgba(96, 165, 250, 0.65);
+                Rectangle {
+                    height: 26px;
+                    border-radius: 13px;
+                    background: rgba(255, 255, 255, 0.05);
 
                     HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         alignment: center;
                         Text {
-                            text: "● AJUSTANDO";
-                            color: #93c5fd;
-                            font-size: 10px;
+                            text: root.parent-pill;
+                            color: rgba(203, 213, 225, 0.78);
+                            font-size: 11px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Pílula central clara em destaque (como "Animated" no print)
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: root.adjusting ? #3b82f6 : #c7d2fe;
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        alignment: center;
+                        Text {
+                            text: root.active-pill;
+                            color: root.adjusting ? #ffffff : #0f172a;
+                            font-size: 12px;
                             font-weight: 700;
                             vertical-alignment: center;
                         }
@@ -86,28 +303,30 @@ export component Overlay inherits Window {
                 }
 
                 Rectangle {
-                    height: 22px;
-                    border-radius: 11px;
-                    background: rgba(255, 255, 255, 0.07);
-                    border-width: 1px;
-                    border-color: rgba(255, 255, 255, 0.1);
+                    height: 26px;
+                    border-radius: 13px;
+                    background: root.adjusting
+                        ? rgba(59, 130, 246, 0.25)
+                        : rgba(255, 255, 255, 0.05);
+                    border-width: root.adjusting ? 1px : 0px;
+                    border-color: rgba(96, 165, 250, 0.65);
 
                     HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         alignment: center;
                         Text {
-                            text: root.context-badge;
-                            color: #cbd5e1;
-                            font-size: 10px;
-                            font-weight: 600;
+                            text: root.status-pill;
+                            color: root.adjusting ? #93c5fd : rgba(203, 213, 225, 0.78);
+                            font-size: 11px;
+                            font-weight: root.adjusting ? 700 : 500;
                             vertical-alignment: center;
                         }
                     }
                 }
             }
 
-            // Corpo principal: lista de até 5 itens visíveis
+            // Carrossel horizontal de 5 cards com foco central elevado
             Rectangle {
                 vertical-stretch: 1;
                 background: transparent;
@@ -115,141 +334,45 @@ export component Overlay inherits Window {
                 if root.loading: VerticalLayout {
                     alignment: center;
                     Text {
-                        text: "Carregando dados do sistema...";
-                        color: #a1a1aa;
+                        text: "Carregando...";
+                        color: #94a3b8;
                         font-size: 13px;
                         horizontal-alignment: center;
                     }
                 }
 
-                if !root.loading && root.rows.length == 0: VerticalLayout {
+                if !root.loading && root.cards.length == 0: VerticalLayout {
                     alignment: center;
                     Text {
                         text: root.empty-message;
-                        color: #a1a1aa;
+                        color: #94a3b8;
                         font-size: 13px;
                         horizontal-alignment: center;
-                        wrap: word-wrap;
                     }
                 }
 
-                if !root.loading && root.rows.length > 0: VerticalLayout {
-                    spacing: 6px;
-                    alignment: start;
+                if !root.loading && root.cards.length > 0: HorizontalLayout {
+                    alignment: center;
+                    spacing: 12px;
 
-                    for row[idx] in root.rows: Rectangle {
-                        height: row.is-slider ? 48px : 44px;
-                        border-radius: 9px;
-                        background: idx == root.highlighted-index
-                            ? (root.adjusting
-                                ? rgba(37, 99, 235, 0.22)
-                                : rgba(255, 255, 255, 0.14))
-                            : rgba(255, 255, 255, 0.04);
-                        border-width: 1px;
-                        border-color: idx == root.highlighted-index
-                            ? (root.adjusting
-                                ? rgba(96, 165, 250, 0.85)
-                                : rgba(255, 255, 255, 0.38))
-                            : (row.is-active
-                                ? rgba(147, 197, 253, 0.22)
-                                : rgba(255, 255, 255, 0.06));
-
-                        animate background, border-color {
-                            duration: 110ms;
-                            easing: ease-out;
-                        }
-
-                        VerticalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            padding-top: 6px;
-                            padding-bottom: 6px;
-                            spacing: 4px;
-                            alignment: center;
-
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: stretch;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 1px;
-                                    alignment: center;
-
-                                    Text {
-                                        text: row.title;
-                                        color: idx == root.highlighted-index ? #ffffff : #e4e4e7;
-                                        font-size: 13px;
-                                        font-weight: idx == root.highlighted-index ? 700 : 500;
-                                        overflow: elide;
-                                    }
-
-                                    if row.subtitle != "": Text {
-                                        text: row.subtitle;
-                                        color: rgba(255, 255, 255, 0.52);
-                                        font-size: 10px;
-                                        overflow: elide;
-                                    }
-                                }
-
-                                if row.badge != "": Text {
-                                    text: row.badge;
-                                    color: row.is-muted
-                                        ? #f87171
-                                        : (row.is-active || (idx == root.highlighted-index && root.adjusting)
-                                            ? #93c5fd
-                                            : #d4d4d8);
-                                    font-size: 12px;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            if row.is-slider: Rectangle {
-                                height: 5px;
-                                border-radius: 3px;
-                                background: rgba(255, 255, 255, 0.1);
-                                clip: true;
-
-                                Rectangle {
-                                    x: 0px;
-                                    y: 0px;
-                                    height: 100%;
-                                    width: parent.width * max(0.0, min(1.0, row.value-percent / max(1, row.max-percent)));
-                                    border-radius: 3px;
-                                    background: row.is-muted
-                                        ? #ef4444
-                                        : (idx == root.highlighted-index && root.adjusting
-                                            ? #3b82f6
-                                            : #93c5fd);
-                                }
-                            }
+                    for card[idx] in root.cards: VerticalLayout {
+                        alignment: center;
+                        CarouselCard {
+                            card: card;
+                            is-center: idx == 2;
+                            is-outer: idx == 0 || idx == 4;
+                            adjusting: root.adjusting;
                         }
                     }
                 }
             }
 
-            // Rodapé: Dicas dos controles + indicador de página/posição
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: stretch;
-
-                Text {
-                    horizontal-stretch: 1;
-                    text: root.footer-hint;
-                    color: rgba(255, 255, 255, 0.55);
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                if root.scroll-indicator != "": Text {
-                    text: root.scroll-indicator;
-                    color: rgba(255, 255, 255, 0.45);
-                    font-size: 11px;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                }
+            // Rodapé discreto centralizado
+            Text {
+                text: root.footer-hint;
+                color: rgba(203, 213, 225, 0.50);
+                font-size: 11px;
+                horizontal-alignment: center;
             }
         }
     }

@@ -1,3 +1,4 @@
+use crate::actions_catalog::{list_desktop_apps, DesktopApp};
 use crate::config::{
     ActionConfig, Config, OverlayConfig, OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior,
 };
@@ -7,11 +8,16 @@ use crate::system::audio::{AudioMixerSnapshot, AudioOutputsSnapshot};
 use crate::system::brightness::BrightnessSnapshot;
 use crate::system::caelestia::{CaelestiaTogglesSnapshot, WallpapersSnapshot};
 use crate::system::hyprland::WorkspacesSnapshot;
+use crate::system::icons::resolve_app_icon_path;
+use crate::system::thumbs::{ThumbnailMode, ThumbnailRequest};
 use crate::system::{SystemRequest, SystemResponse};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-pub const VISIBLE_HUB_ROWS: usize = 5;
+pub const CAROUSEL_SLOTS: usize = 5;
+pub const THUMB_COVER_WIDTH: u32 = 240;
+pub const THUMB_COVER_HEIGHT: u32 = 140;
+pub const THUMB_ICON_SIZE: u32 = 96;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubScreen {
@@ -34,10 +40,14 @@ pub enum InteractionMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HubRowView {
+pub struct HubCardView {
+    pub is_empty_slot: bool,
     pub title: String,
     pub subtitle: String,
     pub badge: String,
+    pub glyph: String,
+    pub image_path: Option<String>,
+    pub image_is_cover: bool,
     pub value_percent: i32,
     pub max_percent: i32,
     pub is_slider: bool,
@@ -45,15 +55,37 @@ pub struct HubRowView {
     pub is_muted: bool,
 }
 
+impl HubCardView {
+    pub fn empty() -> Self {
+        Self {
+            is_empty_slot: true,
+            title: String::new(),
+            subtitle: String::new(),
+            badge: String::new(),
+            glyph: String::new(),
+            image_path: None,
+            image_is_cover: false,
+            value_percent: -1,
+            max_percent: 100,
+            is_slider: false,
+            is_active: false,
+            is_muted: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HubViewModel {
-    pub breadcrumb: String,
-    pub context_badge: String,
+    pub parent_pill: String,
+    pub active_pill: String,
+    pub status_pill: String,
     pub adjusting: bool,
     pub loading: bool,
     pub empty_message: String,
-    pub rows: Vec<HubRowView>,
-    pub highlighted_visible_index: usize,
+    /// Exatamente 5 slots do carrossel horizontal, com o item selecionado fixo no slot central (`2`).
+    pub cards: Vec<HubCardView>,
+    /// Lista de thumbnails extras (vizinhos imediatos) para pre-fetch suave em background.
+    pub prefetch_requests: Vec<ThumbnailRequest>,
     pub scroll_indicator: String,
     pub footer_hint: String,
 }
@@ -74,7 +106,7 @@ pub enum HubEffect {
     ExecuteAction(ActionConfig),
 }
 
-/// Máquina de estados hierárquica do Hub Interativo do KnobContext.
+/// Máquina de estados hierárquica do Hub Interativo em Carrossel Horizontal.
 pub struct HubController {
     open: bool,
     settings_open: bool,
@@ -91,10 +123,16 @@ pub struct HubController {
     wallpapers: WallpapersSnapshot,
     caelestia_toggles: CaelestiaTogglesSnapshot,
     custom_slider_values: HashMap<String, i32>,
+    desktop_apps: Vec<DesktopApp>,
+    icon_path_cache: HashMap<String, Option<String>>,
 }
 
 impl HubController {
     pub fn new() -> Self {
+        Self::with_desktop_apps(list_desktop_apps())
+    }
+
+    pub fn with_desktop_apps(desktop_apps: Vec<DesktopApp>) -> Self {
         Self {
             open: false,
             settings_open: false,
@@ -111,6 +149,8 @@ impl HubController {
             wallpapers: WallpapersSnapshot::default(),
             caelestia_toggles: CaelestiaTogglesSnapshot::default(),
             custom_slider_values: HashMap::new(),
+            desktop_apps,
+            icon_path_cache: HashMap::new(),
         }
     }
 
@@ -144,6 +184,20 @@ impl HubController {
             KnobEvent::Key3 => overlay.key3_behavior == OverlayKey3Behavior::Confirm,
             _ => false,
         }
+    }
+
+    fn resolve_icon_cached(&mut self, hint: &str) -> Option<String> {
+        let key = hint.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            return None;
+        }
+        if let Some(cached) = self.icon_path_cache.get(&key) {
+            return cached.clone();
+        }
+        let resolved = resolve_app_icon_path(hint, &self.desktop_apps)
+            .map(|p| p.to_string_lossy().into_owned());
+        self.icon_path_cache.insert(key, resolved.clone());
+        resolved
     }
 
     pub fn handle_event(
@@ -293,6 +347,7 @@ impl HubController {
                     false
                 }
             }
+            SystemResponse::ThumbnailReady(_) => false,
             SystemResponse::Error(_) => {
                 if self.loading {
                     self.loading = false;
@@ -515,7 +570,6 @@ impl HubController {
                 }
             }
             HubScreen::Brightness => {
-                // Sincroniza o percentual do monitor destacado para todos os monitores
                 if let Some(pct) = self
                     .brightness
                     .monitors
@@ -846,72 +900,98 @@ impl HubController {
     }
 
     pub fn build_view_model(
-        &self,
+        &mut self,
         config: &Config,
         mode: &ProfileMode,
         contextual_profile: &str,
     ) -> HubViewModel {
+        let show_images = config.overlay.show_images;
         let context_badge = match mode {
             ProfileMode::Auto => format!("Auto • {contextual_profile}"),
             ProfileMode::Manual(name) => format!("Manual • {name}"),
         };
 
-        let (breadcrumb, all_rows, empty_message, footer_hint) = match &self.screen {
+        let (parent_pill, active_pill, all_cards, empty_message, footer_hint) = match self
+            .screen
+            .clone()
+        {
             HubScreen::Root => {
-                let rows: Vec<HubRowView> = self
+                let items: Vec<OverlayItemConfig> = self
                     .enabled_root_items(&config.overlay)
                     .into_iter()
-                    .map(|item| {
-                        let subtitle = match &item.kind {
-                            OverlayItemKind::Profiles => context_badge.clone(),
-                            OverlayItemKind::AudioMixer => {
-                                "Volume global e por aplicativo".to_string()
-                            }
-                            OverlayItemKind::AudioOutputs => {
-                                "Alternar dispositivo de saída".to_string()
-                            }
-                            OverlayItemKind::Workspaces => "Workspaces do Hyprland".to_string(),
-                            OverlayItemKind::Brightness => "Brilho dos monitores".to_string(),
-                            OverlayItemKind::CaelestiaWallpapers => {
-                                "Trocar wallpaper (Caelestia)".to_string()
-                            }
-                            OverlayItemKind::CaelestiaToggles => {
-                                "DND, Game Mode e Idle".to_string()
-                            }
-                            OverlayItemKind::QuickAction { action } => action.to_display_string(),
-                            OverlayItemKind::CustomGroup { entries } => {
-                                format!("{} ações", entries.len())
-                            }
-                            OverlayItemKind::CustomSlider { .. } => {
-                                "Controle deslizante customizado".to_string()
-                            }
-                        };
-                        HubRowView {
-                            title: item.title.clone(),
-                            subtitle,
-                            badge: "›".to_string(),
-                            value_percent: -1,
-                            max_percent: 100,
-                            is_slider: false,
-                            is_active: false,
-                            is_muted: false,
-                        }
-                    })
+                    .cloned()
                     .collect();
+                let mut cards = Vec::with_capacity(items.len());
+                for item in items {
+                    let (subtitle, glyph, auto_icon_hint) = match &item.kind {
+                        OverlayItemKind::Profiles => (context_badge.clone(), "◈", None),
+                        OverlayItemKind::AudioMixer => ("Global & Apps".to_string(), "♫", None),
+                        OverlayItemKind::AudioOutputs => ("Dispositivos".to_string(), "◎", None),
+                        OverlayItemKind::Workspaces => ("Hyprland".to_string(), "⊞", None),
+                        OverlayItemKind::Brightness => ("Monitores".to_string(), "☀", None),
+                        OverlayItemKind::CaelestiaWallpapers => {
+                            ("Caelestia".to_string(), "▣", None)
+                        }
+                        OverlayItemKind::CaelestiaToggles => ("Sistema".to_string(), "⚡", None),
+                        OverlayItemKind::QuickAction { action } => {
+                            let hint = match action {
+                                ActionConfig::Launch { desktop_file } => Some(desktop_file.clone()),
+                                _ => None,
+                            };
+                            (action.to_display_string(), "▶", hint)
+                        }
+                        OverlayItemKind::CustomGroup { entries } => {
+                            (format!("{} ações", entries.len()), "☰", None)
+                        }
+                        OverlayItemKind::CustomSlider { .. } => ("Slider".to_string(), "━", None),
+                    };
+                    let image_path = if show_images {
+                        item.icon
+                            .as_deref()
+                            .and_then(|p| self.resolve_icon_cached(p))
+                            .or_else(|| {
+                                auto_icon_hint
+                                    .as_deref()
+                                    .and_then(|h| self.resolve_icon_cached(h))
+                            })
+                    } else {
+                        None
+                    };
+                    let image_is_cover = item.icon.is_some() && image_path.is_some();
+                    cards.push(HubCardView {
+                        is_empty_slot: false,
+                        title: item.title,
+                        subtitle,
+                        badge: String::new(),
+                        glyph: glyph.to_string(),
+                        image_path,
+                        image_is_cover,
+                        value_percent: -1,
+                        max_percent: 100,
+                        is_slider: false,
+                        is_active: false,
+                        is_muted: false,
+                    });
+                }
                 (
-                    "KnobContext Hub".to_string(),
-                    rows,
+                    context_badge.clone(),
+                    "KnobContext".to_string(),
+                    cards,
                     "Nenhum módulo habilitado no Hub.".to_string(),
                     "Girar: Navegar • Knob/K3: Abrir • K1: Fechar".to_string(),
                 )
             }
             HubScreen::Profiles => {
-                let mut rows = Vec::with_capacity(config.profiles.len() + 1);
+                let mut cards = Vec::with_capacity(config.profiles.len() + 1);
                 let is_auto = matches!(mode, ProfileMode::Auto);
-                rows.push(HubRowView {
+                cards.push(HubCardView {
+                    is_empty_slot: false,
                     title: "Automático".to_string(),
-                    subtitle: format!("Segue janela ativa ({contextual_profile})"),
+                    subtitle: contextual_profile.to_string(),
                     badge: if is_auto { "ATIVO" } else { "" }.to_string(),
+                    glyph: "✦".to_string(),
+                    image_path: None,
+                    image_is_cover: false,
                     value_percent: -1,
                     max_percent: 100,
                     is_slider: false,
@@ -920,16 +1000,31 @@ impl HubController {
                 });
                 for profile in &config.profiles {
                     let active = matches!(mode, ProfileMode::Manual(m) if m.eq_ignore_ascii_case(&profile.name));
+                    let first_class = profile
+                        .window_class
+                        .as_deref()
+                        .and_then(|c| c.split(['|', ',']).next())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty());
+                    let image_path = if show_images {
+                        first_class.and_then(|cls| self.resolve_icon_cached(cls))
+                    } else {
+                        None
+                    };
                     let rule_desc = match (&profile.window_class, &profile.window_title) {
                         (Some(c), Some(t)) => format!("{c} • {t}"),
                         (Some(c), None) => c.clone(),
                         (None, Some(t)) => t.clone(),
-                        (None, None) => "Perfil manual / global".to_string(),
+                        (None, None) => "Global / manual".to_string(),
                     };
-                    rows.push(HubRowView {
+                    cards.push(HubCardView {
+                        is_empty_slot: false,
                         title: profile.name.clone(),
                         subtitle: rule_desc,
                         badge: if active { "ATIVO" } else { "" }.to_string(),
+                        glyph: "◈".to_string(),
+                        image_path,
+                        image_is_cover: false,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
@@ -938,58 +1033,72 @@ impl HubController {
                     });
                 }
                 (
-                    "Hub › Perfis".to_string(),
-                    rows,
+                    "Hub".to_string(),
+                    "Perfis".to_string(),
+                    cards,
                     "Nenhum perfil configurado.".to_string(),
-                    "Girar: Escolher • Knob/K3: Selecionar • K1: Voltar".to_string(),
+                    "Girar: Escolher • Knob/K3: Ativar • K1: Voltar".to_string(),
                 )
             }
             HubScreen::AudioMixer => {
                 let max_vol = config.overlay.max_volume_percent.max(100);
-                let rows: Vec<HubRowView> = self
-                    .audio_mixer
-                    .streams
-                    .iter()
-                    .map(|s| HubRowView {
-                        title: s.title.clone(),
-                        subtitle: s.subtitle.clone(),
+                let streams = self.audio_mixer.streams.clone();
+                let mut cards = Vec::with_capacity(streams.len());
+                for s in streams {
+                    let image_path = if show_images && !s.is_master {
+                        self.resolve_icon_cached(&s.title)
+                    } else {
+                        None
+                    };
+                    cards.push(HubCardView {
+                        is_empty_slot: false,
+                        title: s.title,
+                        subtitle: s.subtitle,
                         badge: if s.muted {
-                            format!("MUTE ({}%)", s.volume_percent)
+                            "MUTE".to_string()
                         } else {
                             format!("{}%", s.volume_percent)
                         },
+                        glyph: if s.is_master { "♫" } else { "♪" }.to_string(),
+                        image_path,
+                        image_is_cover: false,
                         value_percent: s.volume_percent,
                         max_percent: max_vol,
                         is_slider: true,
                         is_active: s.is_master,
                         is_muted: s.muted,
-                    })
-                    .collect();
+                    });
+                }
                 let hint = if self.interaction == InteractionMode::Adjusting {
                     "Girar: Volume • Knob/K3/K1: Soltar • K2: Mudo".to_string()
                 } else {
                     "Girar: App • Knob/K3: Ajustar • K2: Mudo • K1: Voltar".to_string()
                 };
                 (
-                    "Hub › Sons & Apps".to_string(),
-                    rows,
-                    "Nenhum dispositivo ou aplicativo de áudio ativo.".to_string(),
+                    "Hub".to_string(),
+                    "Sons & Apps".to_string(),
+                    cards,
+                    "Nenhum canal de áudio ativo.".to_string(),
                     hint,
                 )
             }
             HubScreen::AudioOutputs => {
-                let rows: Vec<HubRowView> = self
+                let cards: Vec<HubCardView> = self
                     .audio_outputs
                     .outputs
                     .iter()
-                    .map(|o| HubRowView {
+                    .map(|o| HubCardView {
+                        is_empty_slot: false,
                         title: o.description.clone(),
                         subtitle: if o.muted {
                             format!("Mudo • {}%", o.volume_percent)
                         } else {
-                            format!("Volume {}%", o.volume_percent)
+                            format!("{}%", o.volume_percent)
                         },
                         badge: if o.is_default { "ATIVO" } else { "" }.to_string(),
+                        glyph: "◎".to_string(),
+                        image_path: None,
+                        image_is_cover: false,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
@@ -998,34 +1107,41 @@ impl HubController {
                     })
                     .collect();
                 (
-                    "Hub › Saída de Som".to_string(),
-                    rows,
+                    "Hub".to_string(),
+                    "Saída de Som".to_string(),
+                    cards,
                     "Nenhuma saída de áudio encontrada.".to_string(),
                     "Girar: Saída • Knob/K3: Ativar • K1: Voltar".to_string(),
                 )
             }
             HubScreen::Workspaces => {
-                let rows: Vec<HubRowView> = self
+                let cards: Vec<HubCardView> = self
                     .workspaces
                     .workspaces
                     .iter()
                     .map(|w| {
                         let subtitle = if w.is_new_slot {
-                            w.monitor.clone()
-                        } else if w.windows == 1 {
-                            format!("{} • 1 janela", w.monitor)
+                            "Livre".to_string()
                         } else {
-                            format!("{} • {} janelas", w.monitor, w.windows)
+                            format!("{} • {} jan.", w.monitor, w.windows)
                         };
                         let title = if w.is_new_slot {
-                            format!("+ {}", w.name)
+                            format!("+ WS {}", w.id)
                         } else {
                             format!("Workspace {}", w.name)
                         };
-                        HubRowView {
+                        HubCardView {
+                            is_empty_slot: false,
                             title,
                             subtitle,
                             badge: if w.is_active { "ATIVO" } else { "" }.to_string(),
+                            glyph: if w.is_new_slot {
+                                "+".to_string()
+                            } else {
+                                w.name.clone()
+                            },
+                            image_path: None,
+                            image_is_cover: false,
                             value_percent: -1,
                             max_percent: 100,
                             is_slider: false,
@@ -1035,21 +1151,26 @@ impl HubController {
                     })
                     .collect();
                 (
-                    "Hub › Workspaces".to_string(),
-                    rows,
-                    "Hyprland IPC indisponível para listar workspaces.".to_string(),
+                    "Hub".to_string(),
+                    "Workspaces".to_string(),
+                    cards,
+                    "Hyprland IPC indisponível.".to_string(),
                     "Girar: WS • Knob/K3: Ir • K2: Special • K1: Voltar".to_string(),
                 )
             }
             HubScreen::Brightness => {
-                let rows: Vec<HubRowView> = self
+                let cards: Vec<HubCardView> = self
                     .brightness
                     .monitors
                     .iter()
-                    .map(|m| HubRowView {
+                    .map(|m| HubCardView {
+                        is_empty_slot: false,
                         title: m.title.clone(),
                         subtitle: m.subtitle.clone(),
                         badge: format!("{}%", m.percent),
+                        glyph: "☀".to_string(),
+                        image_path: None,
+                        image_is_cover: false,
                         value_percent: m.percent,
                         max_percent: 100,
                         is_slider: true,
@@ -1063,27 +1184,30 @@ impl HubController {
                     "Girar: Monitor • Knob/K3: Ajustar • K2: Sincronizar • K1: Voltar".to_string()
                 };
                 (
-                    "Hub › Brilho".to_string(),
-                    rows,
-                    "Nenhum monitor/backlight disponível (Caelestia/brightnessctl).".to_string(),
+                    "Hub".to_string(),
+                    "Brilho".to_string(),
+                    cards,
+                    "Nenhum monitor/backlight disponível.".to_string(),
                     hint,
                 )
             }
             HubScreen::CaelestiaWallpapers => {
-                let rows: Vec<HubRowView> = self
+                let cards: Vec<HubCardView> = self
                     .wallpapers
                     .items
                     .iter()
-                    .map(|w| HubRowView {
+                    .map(|w| HubCardView {
+                        is_empty_slot: false,
                         title: w.title.clone(),
                         subtitle: w.category.clone(),
-                        badge: if w.is_random {
-                            "🎲".to_string()
-                        } else if w.is_current {
+                        badge: if w.is_current {
                             "ATUAL".to_string()
                         } else {
                             String::new()
                         },
+                        glyph: if w.is_random { "🎲" } else { "▣" }.to_string(),
+                        image_path: if show_images { w.path.clone() } else { None },
+                        image_is_cover: true,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
@@ -1092,14 +1216,15 @@ impl HubController {
                     })
                     .collect();
                 (
-                    "Hub › Wallpapers (Caelestia)".to_string(),
-                    rows,
+                    "Hub".to_string(),
+                    "Wallpapers".to_string(),
+                    cards,
                     "Nenhum wallpaper encontrado via Caelestia IPC.".to_string(),
                     "Girar: Lista • Knob/K3: Aplicar • K2: Aleatório • K1: Voltar".to_string(),
                 )
             }
             HubScreen::CaelestiaToggles => {
-                let rows: Vec<HubRowView> = self
+                let cards: Vec<HubCardView> = self
                     .caelestia_toggles
                     .items
                     .iter()
@@ -1109,10 +1234,14 @@ impl HubController {
                             Some(false) => "OFF",
                             None => "▶",
                         };
-                        HubRowView {
+                        HubCardView {
+                            is_empty_slot: false,
                             title: t.title.clone(),
                             subtitle: t.subtitle.clone(),
                             badge: badge.to_string(),
+                            glyph: "⚡".to_string(),
+                            image_path: None,
+                            image_is_cover: false,
                             value_percent: -1,
                             max_percent: 100,
                             is_slider: false,
@@ -1122,40 +1251,62 @@ impl HubController {
                     })
                     .collect();
                 (
-                    "Hub › Caelestia".to_string(),
-                    rows,
+                    "Hub".to_string(),
+                    "Caelestia".to_string(),
+                    cards,
                     "Caelestia Shell IPC indisponível.".to_string(),
                     "Girar: Controle • Knob/K3: Alternar • K1: Voltar".to_string(),
                 )
             }
             HubScreen::CustomGroup { item_id, title } => {
-                let rows: Vec<HubRowView> = config
+                let entries = config
                     .overlay
                     .items
                     .iter()
-                    .find(|i| i.id == *item_id)
+                    .find(|i| i.id == item_id)
                     .and_then(|i| match &i.kind {
-                        OverlayItemKind::CustomGroup { entries } => Some(
-                            entries
-                                .iter()
-                                .map(|e| HubRowView {
-                                    title: e.label.clone(),
-                                    subtitle: e.action.to_display_string(),
-                                    badge: "▶".to_string(),
-                                    value_percent: -1,
-                                    max_percent: 100,
-                                    is_slider: false,
-                                    is_active: false,
-                                    is_muted: false,
-                                })
-                                .collect(),
-                        ),
+                        OverlayItemKind::CustomGroup { entries } => Some(entries.clone()),
                         _ => None,
                     })
                     .unwrap_or_default();
+                let mut cards = Vec::with_capacity(entries.len());
+                for e in entries {
+                    let auto_hint = match &e.action {
+                        ActionConfig::Launch { desktop_file } => Some(desktop_file.clone()),
+                        _ => None,
+                    };
+                    let image_path = if show_images {
+                        e.icon
+                            .as_deref()
+                            .and_then(|p| self.resolve_icon_cached(p))
+                            .or_else(|| {
+                                auto_hint
+                                    .as_deref()
+                                    .and_then(|h| self.resolve_icon_cached(h))
+                            })
+                    } else {
+                        None
+                    };
+                    let image_is_cover = e.icon.is_some() && image_path.is_some();
+                    cards.push(HubCardView {
+                        is_empty_slot: false,
+                        title: e.label,
+                        subtitle: e.action.to_display_string(),
+                        badge: "▶".to_string(),
+                        glyph: "▶".to_string(),
+                        image_path,
+                        image_is_cover,
+                        value_percent: -1,
+                        max_percent: 100,
+                        is_slider: false,
+                        is_active: false,
+                        is_muted: false,
+                    });
+                }
                 (
-                    format!("Hub › {title}"),
-                    rows,
+                    "Hub".to_string(),
+                    title,
+                    cards,
                     "Grupo vazio. Adicione ações nas Configurações.".to_string(),
                     "Girar: Escolher • Knob/K3: Executar • K1: Voltar".to_string(),
                 )
@@ -1163,13 +1314,17 @@ impl HubController {
             HubScreen::CustomSlider { item_id, title } => {
                 let val = self
                     .custom_slider_values
-                    .get(item_id)
+                    .get(&item_id)
                     .copied()
                     .unwrap_or(50);
-                let rows = vec![HubRowView {
+                let cards = vec![HubCardView {
+                    is_empty_slot: false,
                     title: title.clone(),
                     subtitle: "Gire o knob para ajustar".to_string(),
                     badge: format!("{val}%"),
+                    glyph: "━".to_string(),
+                    image_path: None,
+                    image_is_cover: false,
                     value_percent: val,
                     max_percent: 100,
                     is_slider: true,
@@ -1181,7 +1336,7 @@ impl HubController {
                 } else {
                     "Knob/K3: Ajustar • K2: Toggle • K1: Voltar".to_string()
                 };
-                (format!("Hub › {title}"), rows, String::new(), hint)
+                ("Hub".to_string(), title, cards, String::new(), hint)
             }
         };
 
@@ -1189,57 +1344,104 @@ impl HubController {
             HubScreen::Root => self.root_cursor,
             _ => self.sub_cursor,
         };
-        let total = all_rows.len();
-        let (rows, highlighted_visible_index, scroll_indicator) =
-            slice_visible_window(all_rows, cursor, VISIBLE_HUB_ROWS);
+        let total = all_cards.len();
+        let (cards, prefetch_requests, scroll_indicator) =
+            build_centered_carousel(&all_cards, cursor);
+
+        let status_pill = if self.interaction == InteractionMode::Adjusting {
+            "● AJUSTANDO".to_string()
+        } else if !scroll_indicator.is_empty() {
+            scroll_indicator.clone()
+        } else {
+            context_badge
+        };
 
         HubViewModel {
-            breadcrumb,
-            context_badge,
+            parent_pill,
+            active_pill,
+            status_pill,
             adjusting: self.interaction == InteractionMode::Adjusting,
             loading: self.loading && total == 0,
             empty_message,
-            rows,
-            highlighted_visible_index,
+            cards,
+            prefetch_requests,
             scroll_indicator,
             footer_hint,
         }
     }
 }
 
-fn slice_visible_window(
-    items: Vec<HubRowView>,
+fn card_thumbnail_request(card: &HubCardView) -> Option<ThumbnailRequest> {
+    let path = card.image_path.as_ref()?;
+    let mode = if card.image_is_cover {
+        ThumbnailMode::Cover {
+            width: THUMB_COVER_WIDTH,
+            height: THUMB_COVER_HEIGHT,
+        }
+    } else {
+        ThumbnailMode::Contain {
+            size: THUMB_ICON_SIZE,
+        }
+    };
+    Some(ThumbnailRequest {
+        path: path.clone(),
+        mode,
+    })
+}
+
+/// Constrói exatamente 5 slots horizontais com o item `cursor` fixo no centro (`index = 2`).
+///
+/// - Se `total >= 5`: carrossel circular contínuo (`cursor - 2 ..= cursor + 2`) + pre-fetch de `±3`.
+/// - Se `total < 5`: centraliza os itens disponíveis sem duplicá-los, preenchendo pontas com `HubCardView::empty()`.
+pub fn build_centered_carousel(
+    items: &[HubCardView],
     cursor: usize,
-    window_size: usize,
-) -> (Vec<HubRowView>, usize, String) {
+) -> (Vec<HubCardView>, Vec<ThumbnailRequest>, String) {
     let total = items.len();
     if total == 0 {
-        return (Vec::new(), 0, String::new());
+        return (Vec::new(), Vec::new(), String::new());
     }
+
     let clamped = cursor.min(total - 1);
-    if total <= window_size {
-        return (items, clamped, format!("{} / {total}", clamped + 1));
-    }
-    let half = window_size / 2;
-    let start = if clamped <= half {
-        0
-    } else if clamped + (window_size - half) >= total {
-        total - window_size
+    let indicator = format!("{} / {total}", clamped + 1);
+    let mut slots = vec![HubCardView::empty(); CAROUSEL_SLOTS];
+    let mut prefetch = Vec::new();
+
+    if total >= CAROUSEL_SLOTS {
+        for (slot_idx, offset) in (-2isize..=2isize).enumerate() {
+            let idx = (clamped as isize + offset).rem_euclid(total as isize) as usize;
+            slots[slot_idx] = items[idx].clone();
+        }
+        // Pre-fetch dos vizinhos imediatos (-3 e +3)
+        for offset in [-3isize, 3isize] {
+            let idx = (clamped as isize + offset).rem_euclid(total as isize) as usize;
+            if let Some(req) = card_thumbnail_request(&items[idx]) {
+                prefetch.push(req);
+            }
+        }
     } else {
-        clamped - half
-    };
-    let end = (start + window_size).min(total);
-    let visible = items.into_iter().skip(start).take(end - start).collect();
-    (
-        visible,
-        clamped - start,
-        format!("{} / {total}", clamped + 1),
-    )
+        // Sem duplicação: item selecionado no slot 2; anteriores em 1, 0; próximos em 3, 4
+        slots[2] = items[clamped].clone();
+        if clamped >= 1 {
+            slots[1] = items[clamped - 1].clone();
+        }
+        if clamped >= 2 {
+            slots[0] = items[clamped - 2].clone();
+        }
+        if clamped + 1 < total {
+            slots[3] = items[clamped + 1].clone();
+        }
+        if clamped + 2 < total {
+            slots[4] = items[clamped + 2].clone();
+        }
+    }
+
+    (slots, prefetch, indicator)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{HubController, HubEffect};
+    use super::{build_centered_carousel, HubCardView, HubController, HubEffect};
     use crate::config::Config;
     use crate::context::ProfileMode;
     use crate::input::KnobEvent;
@@ -1249,11 +1451,55 @@ mod tests {
     use crate::system::{SystemRequest, SystemResponse};
     use std::time::{Duration, Instant};
 
+    fn dummy_card(name: &str) -> HubCardView {
+        HubCardView {
+            is_empty_slot: false,
+            title: name.to_string(),
+            subtitle: String::new(),
+            badge: String::new(),
+            glyph: String::new(),
+            image_path: None,
+            image_is_cover: false,
+            value_percent: -1,
+            max_percent: 100,
+            is_slider: false,
+            is_active: false,
+            is_muted: false,
+        }
+    }
+
+    #[test]
+    fn centered_carousel_handles_small_and_circular_lists() {
+        // 3 itens com cursor no meio (1): [0, 1, 2] nos slots [1, 2, 3], pontas vazias
+        let three = vec![dummy_card("A"), dummy_card("B"), dummy_card("C")];
+        let (slots, _, ind) = build_centered_carousel(&three, 1);
+        assert_eq!(ind, "2 / 3");
+        assert!(slots[0].is_empty_slot);
+        assert_eq!(slots[1].title, "A");
+        assert_eq!(slots[2].title, "B");
+        assert_eq!(slots[3].title, "C");
+        assert!(slots[4].is_empty_slot);
+
+        // 6 itens com cursor no 0: wrap circular -> [E, F, A, B, C]
+        let six = vec![
+            dummy_card("A"),
+            dummy_card("B"),
+            dummy_card("C"),
+            dummy_card("D"),
+            dummy_card("E"),
+            dummy_card("F"),
+        ];
+        let (slots, _, ind) = build_centered_carousel(&six, 0);
+        assert_eq!(ind, "1 / 6");
+        let titles: Vec<&str> = slots.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, vec!["E", "F", "A", "B", "C"]);
+    }
+
     #[test]
     fn full_audio_mixer_navigation_lock_adjust_mute_unlock_back_flow() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
-        let mut hub = HubController::new();
+        let mut hub = HubController::with_desktop_apps(Vec::new());
         let t0 = Instant::now();
 
         assert_eq!(
@@ -1264,7 +1510,7 @@ mod tests {
         let fx = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "firefox");
         assert!(hub.is_open());
         assert!(
-            matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.breadcrumb == "KnobContext Hub")
+            matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.active_pill == "KnobContext" && vm.cards.len() == 5)
         );
 
         let _ = hub.handle_event(
@@ -1370,7 +1616,7 @@ mod tests {
             "firefox",
         );
         assert!(
-            matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.breadcrumb == "KnobContext Hub")
+            matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.active_pill == "KnobContext")
         );
 
         let fx = hub.handle_event(
@@ -1388,10 +1634,9 @@ mod tests {
     fn brightness_adjusting_and_wallpaper_apply_only_on_confirm() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
-        let mut hub = HubController::new();
+        let mut hub = HubController::with_desktop_apps(Vec::new());
         let t0 = Instant::now();
 
-        // Abre Hub e vai até Brilho (índice 4)
         let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
         for i in 1..=4 {
             let _ = hub.handle_event(
@@ -1426,7 +1671,6 @@ mod tests {
             &mode,
             "global",
         );
-        // Entra em Adjusting e aumenta +5%
         let _ = hub.handle_event(
             KnobEvent::KnobPress,
             t0 + Duration::from_millis(350),
@@ -1448,7 +1692,6 @@ mod tests {
             }))
         );
 
-        // Solta -> volta ao Hub -> entra em Wallpapers (índice 5)
         let _ = hub.handle_event(
             KnobEvent::Key1,
             t0 + Duration::from_millis(450),
@@ -1503,7 +1746,6 @@ mod tests {
             "global",
         );
 
-        // Girar NÃO aplica wallpaper (só navega)
         let fx_rot = hub.handle_event(
             KnobEvent::RotateCw,
             t0 + Duration::from_millis(650),
@@ -1515,7 +1757,6 @@ mod tests {
             .iter()
             .any(|e| matches!(e, HubEffect::System(SystemRequest::SetWallpaper { .. }))));
 
-        // Confirmar APLICA wallpaper
         let fx_ok = hub.handle_event(
             KnobEvent::KnobPress,
             t0 + Duration::from_millis(700),
@@ -1534,7 +1775,7 @@ mod tests {
     fn timeout_is_longer_in_adjusting_mode() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
-        let mut hub = HubController::new();
+        let mut hub = HubController::with_desktop_apps(Vec::new());
         let t0 = Instant::now();
 
         let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");

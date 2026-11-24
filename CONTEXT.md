@@ -41,7 +41,11 @@
   - `src/system/brightness.rs`: brilho por monitor (`DP-3`, `HDMI-A-1`, *Todos*) via `qs -c caelestia ipc call brightness` (com fallback `brightnessctl`).
   - `src/system/caelestia.rs`: lista/seleção de wallpapers (aplicado apenas ao confirmar) + aleatório (`K2` / `caelestia wallpaper -r`) + toggles DND, Game Mode, Inibir Idle e Ciclar Saída.
 - **v2 — Fase D (Customização do Hub nas Configurações)**:
-  - Nova aba **Overlay / Hub** em `settings.slint` / `settings_mod.rs` para reordenar, renomear, ocultar/exibir módulos, configurar passos/timeouts/`Key3`, e criar **Ações Rápidas**, **Sliders Customizados** e **Submenus Customizados** com hot-reload e persistência TOML.
+  - Nova aba **Overlay / Hub** em `settings.slint` / `settings_mod.rs` para reordenar, renomear, ocultar/exibir módulos, configurar passos/timeouts/`Key3`, toggle `Imagens: SIM/NÃO`, escolher imagem opcional por item (`rfd`), e criar **Ações Rápidas**, **Sliders Customizados** e **Submenus Customizados** com hot-reload e persistência TOML.
+- **v2.1 — Overlay Carrossel Horizontal Estilo Caelestia & Thumbnails Opcionais**:
+  - Novo `ui/overlay.slint` panorâmico (`960×256px`, 5 cards horizontais com foco central elevado em moldura translúcida, pílulas centralizadas no topo e rodapé discreto).
+  - Posicionamento automático na parte inferior central do monitor focado (respeitando `scale` e `transform` para monitor vertical) via `.socket.sock` do Hyprland (`position_overlay_bottom_center`, margem flutuante padrão `20px`).
+  - Pipeline assíncrono leve de imagens/ícones opcionais: `system/icons.rs` (resolução `.desktop` → tema de ícones Linux), `system/thumbs.rs` (`image 0.25` redimensionando para `240×140` / `96×96` + cache em disco `~/.cache/knobcontext/thumbs/`), e cache LRU em RAM (`ui/mod.rs`, máx. 32 imagens ≈ ~4 MB) + pre-fetch dos vizinhos do carrossel.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):

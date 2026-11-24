@@ -140,6 +140,7 @@ pub struct DesktopApp {
     pub desktop_file: String,
     pub name: String,
     pub exec: String,
+    pub icon: Option<String>,
 }
 
 pub fn action_type_title(action: &ActionType) -> &'static str {
@@ -513,6 +514,7 @@ fn parse_desktop_entry(desktop_file: &str, content: &str) -> Option<DesktopApp> 
     let mut in_desktop_entry = false;
     let mut name: Option<String> = None;
     let mut exec: Option<String> = None;
+    let mut icon: Option<String> = None;
     let mut no_display = false;
     let mut hidden = false;
 
@@ -536,6 +538,7 @@ fn parse_desktop_entry(desktop_file: &str, content: &str) -> Option<DesktopApp> 
         match key {
             "Name" if name.is_none() => name = Some(value.to_string()),
             "Exec" if exec.is_none() => exec = Some(value.to_string()),
+            "Icon" if icon.is_none() && !value.is_empty() => icon = Some(value.to_string()),
             "NoDisplay" => no_display = value.eq_ignore_ascii_case("true"),
             "Hidden" => hidden = value.eq_ignore_ascii_case("true"),
             _ => {}
@@ -550,6 +553,7 @@ fn parse_desktop_entry(desktop_file: &str, content: &str) -> Option<DesktopApp> 
         desktop_file: desktop_file.to_string(),
         name: name?,
         exec: exec?,
+        icon,
     })
 }
 

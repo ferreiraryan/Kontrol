@@ -15,10 +15,10 @@ use crate::context::{spawn_hyprland_listener, ContextState, ProfileMode};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
 use crate::overlay_hub::{HubController, HubEffect};
-use crate::system::SystemWorker;
+use crate::system::{SystemRequest, SystemResponse, SystemWorker};
 use crate::tray::{TrayCommand, TrayController};
 use crate::ui::settings_mod::SettingsController;
-use crate::ui::OverlayWindow;
+use crate::ui::{OverlayWindow, OVERLAY_HEIGHT_PX, OVERLAY_WIDTH_PX};
 use env_logger::Env;
 use log::{debug, error, info, warn};
 use slint::{Timer, TimerMode};
@@ -159,11 +159,23 @@ impl AppRuntime {
                         }
                     }
                 }
-                HubEffect::RenderOverlay(vm) => {
-                    if let Err(err) = self.overlay.render(&vm) {
+                HubEffect::RenderOverlay(vm) => match self.overlay.render(&vm) {
+                    Ok(outcome) => {
+                        if outcome.just_opened {
+                            self.system.send(SystemRequest::PositionOverlay {
+                                width: OVERLAY_WIDTH_PX,
+                                height: OVERLAY_HEIGHT_PX,
+                                bottom_margin: self.config.overlay.bottom_margin_px,
+                            });
+                        }
+                        for req in outcome.missing_thumbnails {
+                            self.system.send(SystemRequest::LoadThumbnail(req));
+                        }
+                    }
+                    Err(err) => {
                         warn!("Falha ao renderizar overlay: {err}");
                     }
-                }
+                },
                 HubEffect::CloseOverlay => {
                     if let Err(err) = self.overlay.hide() {
                         warn!("Falha ao fechar overlay: {err}");
@@ -204,6 +216,12 @@ impl AppRuntime {
 
     fn drain_system_responses(&mut self) {
         while let Some(resp) = self.system.try_recv() {
+            if let SystemResponse::ThumbnailReady(decoded) = resp {
+                if let Err(err) = self.overlay.on_thumbnail_ready(decoded) {
+                    warn!("Falha ao atualizar thumbnail no overlay: {err}");
+                }
+                continue;
+            }
             let (mode, contextual) = self.current_mode_and_contextual();
             if let Some(effect) =
                 self.hub
