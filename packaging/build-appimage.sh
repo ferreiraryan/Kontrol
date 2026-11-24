@@ -3,8 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 APPIMAGE_ASSETS="${ROOT_DIR}/packaging/appimage"
+SYSTEMD_ASSETS="${ROOT_DIR}/packaging/systemd"
 APPDIR="${ROOT_DIR}/packaging/KnobContext.AppDir"
 OUTPUT="${ROOT_DIR}/KnobContext-x86_64.AppImage"
+
+export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
 
 echo "==> Compilando KnobContext em modo release..."
 (cd "${ROOT_DIR}/knobcontext" && cargo build --release --bin knobcontext)
@@ -27,6 +30,9 @@ cp "${APPIMAGE_ASSETS}/knobcontext.png" "${APPDIR}/knobcontext.png"
 cp "${APPIMAGE_ASSETS}/knobcontext.png" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/knobcontext.png"
 cp "${APPIMAGE_ASSETS}/99-knobcontext.rules" "${APPDIR}/99-knobcontext.rules"
 cp "${APPIMAGE_ASSETS}/install.sh" "${APPDIR}/install.sh"
+if [[ -f "${SYSTEMD_ASSETS}/knobcontext.service" ]]; then
+    cp "${SYSTEMD_ASSETS}/knobcontext.service" "${APPDIR}/knobcontext.service"
+fi
 
 chmod +x "${APPDIR}/AppRun" "${APPDIR}/install.sh" "${APPDIR}/usr/bin/knobcontext"
 

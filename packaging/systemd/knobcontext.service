@@ -1,0 +1,14 @@
+[Unit]
+Description=KnobContext — knob context-aware mapper
+After=graphical-session.target hyprland-session.target
+
+[Service]
+# Pequena pausa no login para garantir que o Hyprland exporte WAYLAND_DISPLAY e HYPRLAND_INSTANCE_SIGNATURE.
+ExecStartPre=/bin/sleep 2
+ExecStart=%h/.local/bin/knobcontext
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
