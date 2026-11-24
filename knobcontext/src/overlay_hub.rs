@@ -4,6 +4,9 @@ use crate::config::{
 use crate::context::ProfileMode;
 use crate::input::KnobEvent;
 use crate::system::audio::{AudioMixerSnapshot, AudioOutputsSnapshot};
+use crate::system::brightness::BrightnessSnapshot;
+use crate::system::caelestia::{CaelestiaTogglesSnapshot, WallpapersSnapshot};
+use crate::system::hyprland::WorkspacesSnapshot;
 use crate::system::{SystemRequest, SystemResponse};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -83,6 +86,10 @@ pub struct HubController {
     loading: bool,
     audio_mixer: AudioMixerSnapshot,
     audio_outputs: AudioOutputsSnapshot,
+    workspaces: WorkspacesSnapshot,
+    brightness: BrightnessSnapshot,
+    wallpapers: WallpapersSnapshot,
+    caelestia_toggles: CaelestiaTogglesSnapshot,
     custom_slider_values: HashMap<String, i32>,
 }
 
@@ -99,6 +106,10 @@ impl HubController {
             loading: false,
             audio_mixer: AudioMixerSnapshot::default(),
             audio_outputs: AudioOutputsSnapshot::default(),
+            workspaces: WorkspacesSnapshot::default(),
+            brightness: BrightnessSnapshot::default(),
+            wallpapers: WallpapersSnapshot::default(),
+            caelestia_toggles: CaelestiaTogglesSnapshot::default(),
             custom_slider_values: HashMap::new(),
         }
     }
@@ -161,7 +172,6 @@ impl HubController {
             return vec![HubEffect::DispatchNormal(event)];
         }
 
-        // Overlay aberto
         self.last_interaction = Some(now);
 
         if event == KnobEvent::Key3 && config.overlay.key3_behavior == OverlayKey3Behavior::Close {
@@ -200,13 +210,7 @@ impl HubController {
                 self.audio_mixer = snap;
                 if matches!(self.screen, HubScreen::AudioMixer) {
                     self.loading = false;
-                    let len = self.audio_mixer.streams.len();
-                    if len == 0 {
-                        self.sub_cursor = 0;
-                        self.interaction = InteractionMode::Browsing;
-                    } else {
-                        self.sub_cursor = self.sub_cursor.min(len - 1);
-                    }
+                    self.clamp_sub_cursor(self.audio_mixer.streams.len());
                     true
                 } else {
                     false
@@ -216,12 +220,64 @@ impl HubController {
                 self.audio_outputs = snap;
                 if matches!(self.screen, HubScreen::AudioOutputs) {
                     self.loading = false;
-                    let len = self.audio_outputs.outputs.len();
-                    if len == 0 {
-                        self.sub_cursor = 0;
-                    } else {
-                        self.sub_cursor = self.sub_cursor.min(len - 1);
+                    self.clamp_sub_cursor(self.audio_outputs.outputs.len());
+                    true
+                } else {
+                    false
+                }
+            }
+            SystemResponse::Workspaces(snap) => {
+                let first_load = self.loading && matches!(self.screen, HubScreen::Workspaces);
+                self.workspaces = snap;
+                if matches!(self.screen, HubScreen::Workspaces) {
+                    self.loading = false;
+                    if first_load {
+                        if let Some(active_pos) =
+                            self.workspaces.workspaces.iter().position(|w| w.is_active)
+                        {
+                            self.sub_cursor = active_pos;
+                        }
                     }
+                    self.clamp_sub_cursor(self.workspaces.workspaces.len());
+                    true
+                } else {
+                    false
+                }
+            }
+            SystemResponse::Brightness(snap) => {
+                self.brightness = snap;
+                if matches!(self.screen, HubScreen::Brightness) {
+                    self.loading = false;
+                    self.clamp_sub_cursor(self.brightness.monitors.len());
+                    true
+                } else {
+                    false
+                }
+            }
+            SystemResponse::Wallpapers(snap) => {
+                let first_load =
+                    self.loading && matches!(self.screen, HubScreen::CaelestiaWallpapers);
+                self.wallpapers = snap;
+                if matches!(self.screen, HubScreen::CaelestiaWallpapers) {
+                    self.loading = false;
+                    if first_load {
+                        if let Some(cur_pos) =
+                            self.wallpapers.items.iter().position(|w| w.is_current)
+                        {
+                            self.sub_cursor = cur_pos;
+                        }
+                    }
+                    self.clamp_sub_cursor(self.wallpapers.items.len());
+                    true
+                } else {
+                    false
+                }
+            }
+            SystemResponse::CaelestiaToggles(snap) => {
+                self.caelestia_toggles = snap;
+                if matches!(self.screen, HubScreen::CaelestiaToggles) {
+                    self.loading = false;
+                    self.clamp_sub_cursor(self.caelestia_toggles.items.len());
                     true
                 } else {
                     false
@@ -255,6 +311,15 @@ impl HubController {
             )))
         } else {
             None
+        }
+    }
+
+    fn clamp_sub_cursor(&mut self, len: usize) {
+        if len == 0 {
+            self.sub_cursor = 0;
+            self.interaction = InteractionMode::Browsing;
+        } else {
+            self.sub_cursor = self.sub_cursor.min(len - 1);
         }
     }
 
@@ -365,6 +430,24 @@ impl HubController {
                     }
                 }
             }
+            HubScreen::Brightness => {
+                let step = config.overlay.brightness_step.max(1);
+                if let Some(mon) = self.brightness.monitors.get_mut(self.sub_cursor) {
+                    let next = (mon.percent + dir * step).clamp(0, 100);
+                    let is_all = mon.is_all;
+                    let monitor_name = mon.monitor_name.clone();
+                    mon.percent = next;
+                    if is_all {
+                        for other in &mut self.brightness.monitors {
+                            other.percent = next;
+                        }
+                    }
+                    effects.push(HubEffect::System(SystemRequest::SetBrightness {
+                        monitor_name,
+                        percent: next,
+                    }));
+                }
+            }
             HubScreen::CustomSlider { item_id, .. } => {
                 let id_clone = item_id.clone();
                 if let Some(OverlayItemConfig {
@@ -431,6 +514,34 @@ impl HubController {
                     )));
                 }
             }
+            HubScreen::Brightness => {
+                // Sincroniza o percentual do monitor destacado para todos os monitores
+                if let Some(pct) = self
+                    .brightness
+                    .monitors
+                    .get(self.sub_cursor)
+                    .map(|m| m.percent)
+                {
+                    for mon in &mut self.brightness.monitors {
+                        mon.percent = pct;
+                    }
+                    effects.push(HubEffect::System(SystemRequest::SetBrightness {
+                        monitor_name: None,
+                        percent: pct,
+                    }));
+                    effects.push(HubEffect::RenderOverlay(self.build_view_model(
+                        config,
+                        mode,
+                        contextual_profile,
+                    )));
+                }
+            }
+            HubScreen::Workspaces => {
+                effects.push(HubEffect::System(SystemRequest::ToggleSpecialWorkspace));
+            }
+            HubScreen::CaelestiaWallpapers => {
+                effects.push(HubEffect::System(SystemRequest::SetRandomWallpaper));
+            }
             HubScreen::CustomSlider { item_id, .. } => {
                 if let Some(OverlayItemConfig {
                     kind:
@@ -459,7 +570,6 @@ impl HubController {
         mode: &ProfileMode,
         contextual_profile: &str,
     ) -> Vec<HubEffect> {
-        // Se está travado ajustando, confirmar solta o ajuste!
         if self.interaction == InteractionMode::Adjusting {
             self.interaction = InteractionMode::Browsing;
             return vec![HubEffect::RenderOverlay(self.build_view_model(
@@ -522,6 +632,75 @@ impl HubController {
                     Vec::new()
                 }
             }
+            HubScreen::Workspaces => {
+                if let Some(ws) = self.workspaces.workspaces.get(self.sub_cursor).cloned() {
+                    for item in &mut self.workspaces.workspaces {
+                        item.is_active = item.id == ws.id;
+                    }
+                    vec![
+                        HubEffect::System(SystemRequest::SwitchWorkspace { id: ws.id }),
+                        HubEffect::RenderOverlay(self.build_view_model(
+                            config,
+                            mode,
+                            contextual_profile,
+                        )),
+                    ]
+                } else {
+                    Vec::new()
+                }
+            }
+            HubScreen::Brightness => {
+                if self.brightness.monitors.get(self.sub_cursor).is_some() {
+                    self.interaction = InteractionMode::Adjusting;
+                    vec![HubEffect::RenderOverlay(self.build_view_model(
+                        config,
+                        mode,
+                        contextual_profile,
+                    ))]
+                } else {
+                    Vec::new()
+                }
+            }
+            HubScreen::CaelestiaWallpapers => {
+                let Some(wp) = self.wallpapers.items.get(self.sub_cursor).cloned() else {
+                    return Vec::new();
+                };
+                if wp.is_random {
+                    vec![HubEffect::System(SystemRequest::SetRandomWallpaper)]
+                } else if let Some(path) = wp.path {
+                    for item in &mut self.wallpapers.items {
+                        item.is_current = item.path.as_deref() == Some(path.as_str());
+                    }
+                    vec![
+                        HubEffect::System(SystemRequest::SetWallpaper { path }),
+                        HubEffect::RenderOverlay(self.build_view_model(
+                            config,
+                            mode,
+                            contextual_profile,
+                        )),
+                    ]
+                } else {
+                    Vec::new()
+                }
+            }
+            HubScreen::CaelestiaToggles => {
+                if let Some(toggle) = self.caelestia_toggles.items.get_mut(self.sub_cursor) {
+                    let kind = toggle.kind;
+                    if let Some(state) = toggle.enabled.as_mut() {
+                        *state = !*state;
+                    }
+                    vec![
+                        HubEffect::System(SystemRequest::TriggerCaelestiaToggle { kind }),
+                        HubEffect::RenderOverlay(self.build_view_model(
+                            config,
+                            mode,
+                            contextual_profile,
+                        )),
+                    ]
+                } else {
+                    Vec::new()
+                }
+            }
             HubScreen::CustomGroup { item_id, .. } => {
                 let action = config
                     .overlay
@@ -549,10 +728,6 @@ impl HubController {
                     contextual_profile,
                 ))]
             }
-            HubScreen::Workspaces
-            | HubScreen::Brightness
-            | HubScreen::CaelestiaWallpapers
-            | HubScreen::CaelestiaToggles => Vec::new(),
         }
     }
 
@@ -593,19 +768,23 @@ impl HubController {
             }
             OverlayItemKind::Workspaces => {
                 self.screen = HubScreen::Workspaces;
-                self.loading = false;
+                self.loading = true;
+                effects.push(HubEffect::System(SystemRequest::FetchWorkspaces));
             }
             OverlayItemKind::Brightness => {
                 self.screen = HubScreen::Brightness;
-                self.loading = false;
+                self.loading = true;
+                effects.push(HubEffect::System(SystemRequest::FetchBrightness));
             }
             OverlayItemKind::CaelestiaWallpapers => {
                 self.screen = HubScreen::CaelestiaWallpapers;
-                self.loading = false;
+                self.loading = true;
+                effects.push(HubEffect::System(SystemRequest::FetchWallpapers));
             }
             OverlayItemKind::CaelestiaToggles => {
                 self.screen = HubScreen::CaelestiaToggles;
-                self.loading = false;
+                self.loading = true;
+                effects.push(HubEffect::System(SystemRequest::FetchCaelestiaToggles));
             }
             OverlayItemKind::QuickAction { action } => {
                 self.close_internal();
@@ -648,6 +827,10 @@ impl HubController {
             HubScreen::Profiles => config.profiles.len() + 1,
             HubScreen::AudioMixer => self.audio_mixer.streams.len(),
             HubScreen::AudioOutputs => self.audio_outputs.outputs.len(),
+            HubScreen::Workspaces => self.workspaces.workspaces.len(),
+            HubScreen::Brightness => self.brightness.monitors.len(),
+            HubScreen::CaelestiaWallpapers => self.wallpapers.items.len(),
+            HubScreen::CaelestiaToggles => self.caelestia_toggles.items.len(),
             HubScreen::CustomGroup { item_id, .. } => config
                 .overlay
                 .items
@@ -659,10 +842,6 @@ impl HubController {
                 })
                 .unwrap_or(0),
             HubScreen::CustomSlider { .. } => 1,
-            HubScreen::Workspaces
-            | HubScreen::Brightness
-            | HubScreen::CaelestiaWallpapers
-            | HubScreen::CaelestiaToggles => 0,
         }
     }
 
@@ -825,6 +1004,130 @@ impl HubController {
                     "Girar: Saída • Knob/K3: Ativar • K1: Voltar".to_string(),
                 )
             }
+            HubScreen::Workspaces => {
+                let rows: Vec<HubRowView> = self
+                    .workspaces
+                    .workspaces
+                    .iter()
+                    .map(|w| {
+                        let subtitle = if w.is_new_slot {
+                            w.monitor.clone()
+                        } else if w.windows == 1 {
+                            format!("{} • 1 janela", w.monitor)
+                        } else {
+                            format!("{} • {} janelas", w.monitor, w.windows)
+                        };
+                        let title = if w.is_new_slot {
+                            format!("+ {}", w.name)
+                        } else {
+                            format!("Workspace {}", w.name)
+                        };
+                        HubRowView {
+                            title,
+                            subtitle,
+                            badge: if w.is_active { "ATIVO" } else { "" }.to_string(),
+                            value_percent: -1,
+                            max_percent: 100,
+                            is_slider: false,
+                            is_active: w.is_active,
+                            is_muted: false,
+                        }
+                    })
+                    .collect();
+                (
+                    "Hub › Workspaces".to_string(),
+                    rows,
+                    "Hyprland IPC indisponível para listar workspaces.".to_string(),
+                    "Girar: WS • Knob/K3: Ir • K2: Special • K1: Voltar".to_string(),
+                )
+            }
+            HubScreen::Brightness => {
+                let rows: Vec<HubRowView> = self
+                    .brightness
+                    .monitors
+                    .iter()
+                    .map(|m| HubRowView {
+                        title: m.title.clone(),
+                        subtitle: m.subtitle.clone(),
+                        badge: format!("{}%", m.percent),
+                        value_percent: m.percent,
+                        max_percent: 100,
+                        is_slider: true,
+                        is_active: m.is_all,
+                        is_muted: false,
+                    })
+                    .collect();
+                let hint = if self.interaction == InteractionMode::Adjusting {
+                    "Girar: Brilho • Knob/K3/K1: Soltar • K2: Sincronizar".to_string()
+                } else {
+                    "Girar: Monitor • Knob/K3: Ajustar • K2: Sincronizar • K1: Voltar".to_string()
+                };
+                (
+                    "Hub › Brilho".to_string(),
+                    rows,
+                    "Nenhum monitor/backlight disponível (Caelestia/brightnessctl).".to_string(),
+                    hint,
+                )
+            }
+            HubScreen::CaelestiaWallpapers => {
+                let rows: Vec<HubRowView> = self
+                    .wallpapers
+                    .items
+                    .iter()
+                    .map(|w| HubRowView {
+                        title: w.title.clone(),
+                        subtitle: w.category.clone(),
+                        badge: if w.is_random {
+                            "🎲".to_string()
+                        } else if w.is_current {
+                            "ATUAL".to_string()
+                        } else {
+                            String::new()
+                        },
+                        value_percent: -1,
+                        max_percent: 100,
+                        is_slider: false,
+                        is_active: w.is_current,
+                        is_muted: false,
+                    })
+                    .collect();
+                (
+                    "Hub › Wallpapers (Caelestia)".to_string(),
+                    rows,
+                    "Nenhum wallpaper encontrado via Caelestia IPC.".to_string(),
+                    "Girar: Lista • Knob/K3: Aplicar • K2: Aleatório • K1: Voltar".to_string(),
+                )
+            }
+            HubScreen::CaelestiaToggles => {
+                let rows: Vec<HubRowView> = self
+                    .caelestia_toggles
+                    .items
+                    .iter()
+                    .map(|t| {
+                        let badge = match t.enabled {
+                            Some(true) => "ON",
+                            Some(false) => "OFF",
+                            None => "▶",
+                        };
+                        HubRowView {
+                            title: t.title.clone(),
+                            subtitle: t.subtitle.clone(),
+                            badge: badge.to_string(),
+                            value_percent: -1,
+                            max_percent: 100,
+                            is_slider: false,
+                            is_active: t.enabled == Some(true),
+                            is_muted: false,
+                        }
+                    })
+                    .collect();
+                (
+                    "Hub › Caelestia".to_string(),
+                    rows,
+                    "Caelestia Shell IPC indisponível.".to_string(),
+                    "Girar: Controle • Knob/K3: Alternar • K1: Voltar".to_string(),
+                )
+            }
             HubScreen::CustomGroup { item_id, title } => {
                 let rows: Vec<HubRowView> = config
                     .overlay
@@ -880,30 +1183,6 @@ impl HubController {
                 };
                 (format!("Hub › {title}"), rows, String::new(), hint)
             }
-            HubScreen::Workspaces => (
-                "Hub › Workspaces".to_string(),
-                Vec::new(),
-                "Módulo Workspaces será ativado na Fase C.".to_string(),
-                "K1: Voltar".to_string(),
-            ),
-            HubScreen::Brightness => (
-                "Hub › Brilho".to_string(),
-                Vec::new(),
-                "Módulo Brilho será ativado na Fase C.".to_string(),
-                "K1: Voltar".to_string(),
-            ),
-            HubScreen::CaelestiaWallpapers => (
-                "Hub › Wallpapers".to_string(),
-                Vec::new(),
-                "Módulo Wallpapers será ativado na Fase C.".to_string(),
-                "K1: Voltar".to_string(),
-            ),
-            HubScreen::CaelestiaToggles => (
-                "Hub › Caelestia".to_string(),
-                Vec::new(),
-                "Módulo Caelestia será ativado na Fase C.".to_string(),
-                "K1: Voltar".to_string(),
-            ),
         };
 
         let cursor = match self.screen {
@@ -965,6 +1244,8 @@ mod tests {
     use crate::context::ProfileMode;
     use crate::input::KnobEvent;
     use crate::system::audio::{AudioMixerSnapshot, AudioStreamItem};
+    use crate::system::brightness::{BrightnessSnapshot, MonitorBrightnessItem};
+    use crate::system::caelestia::{WallpaperItem, WallpapersSnapshot};
     use crate::system::{SystemRequest, SystemResponse};
     use std::time::{Duration, Instant};
 
@@ -975,20 +1256,17 @@ mod tests {
         let mut hub = HubController::new();
         let t0 = Instant::now();
 
-        // 1. Modo normal despacha eventos
         assert_eq!(
             hub.handle_event(KnobEvent::RotateCw, t0, &cfg, &mode, "global"),
             vec![HubEffect::DispatchNormal(KnobEvent::RotateCw)]
         );
 
-        // 2. KnobPress abre o Hub Raiz
         let fx = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "firefox");
         assert!(hub.is_open());
         assert!(
             matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.breadcrumb == "KnobContext Hub")
         );
 
-        // 3. Gira 1x (Perfis -> Sons & Apps) e confirma com Key3
         let _ = hub.handle_event(
             KnobEvent::RotateCw,
             t0 + Duration::from_millis(100),
@@ -1005,7 +1283,6 @@ mod tests {
         );
         assert!(fx.contains(&HubEffect::System(SystemRequest::FetchAudioMixer)));
 
-        // 4. Snapshot chega do SystemWorker (Master + Firefox)
         let snap = AudioMixerSnapshot {
             streams: vec![
                 AudioStreamItem {
@@ -1034,7 +1311,6 @@ mod tests {
             .apply_system_response(SystemResponse::AudioMixer(snap), &cfg, &mode, "firefox")
             .is_some());
 
-        // 5. Gira até Firefox e pressiona KnobPress para entrar em Adjusting
         let _ = hub.handle_event(
             KnobEvent::RotateCw,
             t0 + Duration::from_millis(300),
@@ -1051,7 +1327,6 @@ mod tests {
         );
         assert!(matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.adjusting));
 
-        // 6. Gira no modo Adjusting -> altera volume do Firefox de 60% -> 65%
         let fx = hub.handle_event(
             KnobEvent::RotateCw,
             t0 + Duration::from_millis(500),
@@ -1065,7 +1340,6 @@ mod tests {
             max_percent: 150,
         })));
 
-        // 7. Key2 alterna Mute do Firefox
         let fx = hub.handle_event(
             KnobEvent::Key2,
             t0 + Duration::from_millis(600),
@@ -1079,7 +1353,6 @@ mod tests {
             }))
         );
 
-        // 8. KnobPress solta Adjusting -> volta para navegação no Mixer
         let fx = hub.handle_event(
             KnobEvent::KnobPress,
             t0 + Duration::from_millis(700),
@@ -1089,7 +1362,6 @@ mod tests {
         );
         assert!(matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if !vm.adjusting));
 
-        // 9. Key1 volta ao Hub Raiz; Key1 novamente fecha o overlay
         let fx = hub.handle_event(
             KnobEvent::Key1,
             t0 + Duration::from_millis(800),
@@ -1113,6 +1385,152 @@ mod tests {
     }
 
     #[test]
+    fn brightness_adjusting_and_wallpaper_apply_only_on_confirm() {
+        let cfg = Config::default();
+        let mode = ProfileMode::Auto;
+        let mut hub = HubController::new();
+        let t0 = Instant::now();
+
+        // Abre Hub e vai até Brilho (índice 4)
+        let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
+        for i in 1..=4 {
+            let _ = hub.handle_event(
+                KnobEvent::RotateCw,
+                t0 + Duration::from_millis(i * 50),
+                &cfg,
+                &mode,
+                "global",
+            );
+        }
+        let fx = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(300),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(fx.contains(&HubEffect::System(SystemRequest::FetchBrightness)));
+
+        let _ = hub.apply_system_response(
+            SystemResponse::Brightness(BrightnessSnapshot {
+                monitors: vec![MonitorBrightnessItem {
+                    id: "mon:DP-3".into(),
+                    is_all: false,
+                    monitor_name: Some("DP-3".into()),
+                    title: "DP-3".into(),
+                    subtitle: "GA271".into(),
+                    percent: 30,
+                }],
+            }),
+            &cfg,
+            &mode,
+            "global",
+        );
+        // Entra em Adjusting e aumenta +5%
+        let _ = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(350),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let fx = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(400),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx.contains(&HubEffect::System(SystemRequest::SetBrightness {
+                monitor_name: Some("DP-3".into()),
+                percent: 35,
+            }))
+        );
+
+        // Solta -> volta ao Hub -> entra em Wallpapers (índice 5)
+        let _ = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(450),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let _ = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(500),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let _ = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(550),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let fx = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(600),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(fx.contains(&HubEffect::System(SystemRequest::FetchWallpapers)));
+
+        let _ = hub.apply_system_response(
+            SystemResponse::Wallpapers(WallpapersSnapshot {
+                items: vec![
+                    WallpaperItem {
+                        path: None,
+                        is_random: true,
+                        title: "Aleatório".into(),
+                        category: "Caelestia".into(),
+                        is_current: false,
+                    },
+                    WallpaperItem {
+                        path: Some("/wp/a.png".into()),
+                        is_random: false,
+                        title: "a".into(),
+                        category: "wp".into(),
+                        is_current: false,
+                    },
+                ],
+            }),
+            &cfg,
+            &mode,
+            "global",
+        );
+
+        // Girar NÃO aplica wallpaper (só navega)
+        let fx_rot = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(650),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(!fx_rot
+            .iter()
+            .any(|e| matches!(e, HubEffect::System(SystemRequest::SetWallpaper { .. }))));
+
+        // Confirmar APLICA wallpaper
+        let fx_ok = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(700),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx_ok.contains(&HubEffect::System(SystemRequest::SetWallpaper {
+                path: "/wp/a.png".into(),
+            }))
+        );
+    }
+
+    #[test]
     fn timeout_is_longer_in_adjusting_mode() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
@@ -1120,7 +1538,6 @@ mod tests {
         let t0 = Instant::now();
 
         let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
-        // Em Browsing (default 5s): 4s não fecha, 5s fecha
         assert_eq!(
             hub.check_timeout(t0 + Duration::from_secs(4), &cfg.overlay),
             None

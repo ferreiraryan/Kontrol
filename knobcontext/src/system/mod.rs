@@ -1,9 +1,20 @@
 pub mod audio;
+pub mod brightness;
+pub mod caelestia;
+pub mod hyprland;
 
 use crate::system::audio::{
     fetch_audio_mixer, fetch_audio_outputs, set_app_volume, set_default_audio_output,
     set_master_volume, toggle_app_mute, toggle_master_mute, AudioMixerSnapshot,
     AudioOutputsSnapshot,
+};
+use crate::system::brightness::{fetch_brightness, set_brightness, BrightnessSnapshot};
+use crate::system::caelestia::{
+    fetch_caelestia_toggles, fetch_wallpapers, set_random_wallpaper, set_wallpaper,
+    trigger_caelestia_toggle, CaelestiaToggleKind, CaelestiaTogglesSnapshot, WallpapersSnapshot,
+};
+use crate::system::hyprland::{
+    fetch_workspaces, switch_workspace, toggle_special_workspace, WorkspacesSnapshot,
 };
 use log::warn;
 use std::collections::VecDeque;
@@ -16,6 +27,10 @@ use std::thread::{self, JoinHandle};
 pub enum SystemRequest {
     FetchAudioMixer,
     FetchAudioOutputs,
+    FetchWorkspaces,
+    FetchBrightness,
+    FetchWallpapers,
+    FetchCaelestiaToggles,
     SetMasterVolume {
         sink_name: String,
         percent: i32,
@@ -35,6 +50,21 @@ pub enum SystemRequest {
     SetDefaultAudioOutput {
         sink_name: String,
     },
+    SwitchWorkspace {
+        id: i32,
+    },
+    ToggleSpecialWorkspace,
+    SetBrightness {
+        monitor_name: Option<String>,
+        percent: i32,
+    },
+    SetWallpaper {
+        path: String,
+    },
+    SetRandomWallpaper,
+    TriggerCaelestiaToggle {
+        kind: CaelestiaToggleKind,
+    },
     RunShellCommand {
         command: String,
     },
@@ -50,6 +80,10 @@ pub enum SystemRequest {
 pub enum SystemResponse {
     AudioMixer(AudioMixerSnapshot),
     AudioOutputs(AudioOutputsSnapshot),
+    Workspaces(WorkspacesSnapshot),
+    Brightness(BrightnessSnapshot),
+    Wallpapers(WallpapersSnapshot),
+    CaelestiaToggles(CaelestiaTogglesSnapshot),
     CustomSliderValue { item_id: String, percent: i32 },
     Error(String),
 }
@@ -67,6 +101,14 @@ pub fn coalesce_request(queue: &mut VecDeque<SystemRequest>, incoming: SystemReq
                 |req| !matches!(req, SystemRequest::SetAppVolume { index: i, .. } if i == index),
             );
         }
+        SystemRequest::SetBrightness { monitor_name, .. } => {
+            queue.retain(|req| {
+                !matches!(req, SystemRequest::SetBrightness { monitor_name: m, .. } if m == monitor_name)
+            });
+        }
+        SystemRequest::SwitchWorkspace { .. } => {
+            queue.retain(|req| !matches!(req, SystemRequest::SwitchWorkspace { .. }));
+        }
         SystemRequest::FetchAudioMixer
             if queue
                 .iter()
@@ -78,6 +120,34 @@ pub fn coalesce_request(queue: &mut VecDeque<SystemRequest>, incoming: SystemReq
             if queue
                 .iter()
                 .any(|r| matches!(r, SystemRequest::FetchAudioOutputs)) =>
+        {
+            return;
+        }
+        SystemRequest::FetchWorkspaces
+            if queue
+                .iter()
+                .any(|r| matches!(r, SystemRequest::FetchWorkspaces)) =>
+        {
+            return;
+        }
+        SystemRequest::FetchBrightness
+            if queue
+                .iter()
+                .any(|r| matches!(r, SystemRequest::FetchBrightness)) =>
+        {
+            return;
+        }
+        SystemRequest::FetchWallpapers
+            if queue
+                .iter()
+                .any(|r| matches!(r, SystemRequest::FetchWallpapers)) =>
+        {
+            return;
+        }
+        SystemRequest::FetchCaelestiaToggles
+            if queue
+                .iter()
+                .any(|r| matches!(r, SystemRequest::FetchCaelestiaToggles)) =>
         {
             return;
         }
@@ -164,6 +234,34 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
                 Some(SystemResponse::Error(err.to_string()))
             }
         },
+        SystemRequest::FetchWorkspaces => match fetch_workspaces() {
+            Ok(snap) => Some(SystemResponse::Workspaces(snap)),
+            Err(err) => {
+                warn!("Erro ao carregar workspaces do Hyprland: {err}");
+                Some(SystemResponse::Error(err.to_string()))
+            }
+        },
+        SystemRequest::FetchBrightness => match fetch_brightness() {
+            Ok(snap) => Some(SystemResponse::Brightness(snap)),
+            Err(err) => {
+                warn!("Erro ao carregar brilho dos monitores: {err}");
+                Some(SystemResponse::Error(err.to_string()))
+            }
+        },
+        SystemRequest::FetchWallpapers => match fetch_wallpapers() {
+            Ok(snap) => Some(SystemResponse::Wallpapers(snap)),
+            Err(err) => {
+                warn!("Erro ao listar wallpapers do Caelestia: {err}");
+                Some(SystemResponse::Error(err.to_string()))
+            }
+        },
+        SystemRequest::FetchCaelestiaToggles => match fetch_caelestia_toggles() {
+            Ok(snap) => Some(SystemResponse::CaelestiaToggles(snap)),
+            Err(err) => {
+                warn!("Erro ao consultar controles do Caelestia: {err}");
+                Some(SystemResponse::Error(err.to_string()))
+            }
+        },
         SystemRequest::SetMasterVolume {
             sink_name,
             percent,
@@ -207,6 +305,53 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
             }
             fetch_audio_outputs().ok().map(SystemResponse::AudioOutputs)
         }
+        SystemRequest::SwitchWorkspace { id } => {
+            if let Err(err) = switch_workspace(id) {
+                warn!("Erro ao trocar para workspace {id}: {err}");
+                return Some(SystemResponse::Error(err.to_string()));
+            }
+            fetch_workspaces().ok().map(SystemResponse::Workspaces)
+        }
+        SystemRequest::ToggleSpecialWorkspace => {
+            if let Err(err) = toggle_special_workspace() {
+                warn!("Erro ao alternar special workspace: {err}");
+                return Some(SystemResponse::Error(err.to_string()));
+            }
+            None
+        }
+        SystemRequest::SetBrightness {
+            monitor_name,
+            percent,
+        } => {
+            if let Err(err) = set_brightness(monitor_name.as_deref(), percent) {
+                warn!("Erro ao ajustar brilho: {err}");
+                return Some(SystemResponse::Error(err.to_string()));
+            }
+            None
+        }
+        SystemRequest::SetWallpaper { path } => {
+            if let Err(err) = set_wallpaper(&path) {
+                warn!("Erro ao aplicar wallpaper '{path}': {err}");
+                return Some(SystemResponse::Error(err.to_string()));
+            }
+            fetch_wallpapers().ok().map(SystemResponse::Wallpapers)
+        }
+        SystemRequest::SetRandomWallpaper => {
+            if let Err(err) = set_random_wallpaper() {
+                warn!("Erro ao aplicar wallpaper aleatório: {err}");
+                return Some(SystemResponse::Error(err.to_string()));
+            }
+            fetch_wallpapers().ok().map(SystemResponse::Wallpapers)
+        }
+        SystemRequest::TriggerCaelestiaToggle { kind } => {
+            if let Err(err) = trigger_caelestia_toggle(kind) {
+                warn!("Erro ao alternar controle Caelestia {kind:?}: {err}");
+                return Some(SystemResponse::Error(err.to_string()));
+            }
+            fetch_caelestia_toggles()
+                .ok()
+                .map(SystemResponse::CaelestiaToggles)
+        }
         SystemRequest::RunShellCommand { command } => {
             if let Err(err) = Command::new("sh").arg("-c").arg(&command).status() {
                 warn!("Erro ao executar comando customizado '{command}': {err}");
@@ -240,7 +385,7 @@ mod tests {
     use std::collections::VecDeque;
 
     #[test]
-    fn coalesces_repeated_volume_updates_for_same_target() {
+    fn coalesces_repeated_volume_and_brightness_updates_for_same_target() {
         let mut queue = VecDeque::new();
         coalesce_request(
             &mut queue,
@@ -254,24 +399,22 @@ mod tests {
             &mut queue,
             SystemRequest::SetAppVolume {
                 index: 10,
-                percent: 60,
-                max_percent: 150,
-            },
-        );
-        coalesce_request(
-            &mut queue,
-            SystemRequest::SetAppVolume {
-                index: 20,
-                percent: 80,
-                max_percent: 150,
-            },
-        );
-        coalesce_request(
-            &mut queue,
-            SystemRequest::SetAppVolume {
-                index: 10,
                 percent: 70,
                 max_percent: 150,
+            },
+        );
+        coalesce_request(
+            &mut queue,
+            SystemRequest::SetBrightness {
+                monitor_name: Some("DP-3".into()),
+                percent: 40,
+            },
+        );
+        coalesce_request(
+            &mut queue,
+            SystemRequest::SetBrightness {
+                monitor_name: Some("DP-3".into()),
+                percent: 55,
             },
         );
 
@@ -279,17 +422,16 @@ mod tests {
         assert_eq!(
             queue[0],
             SystemRequest::SetAppVolume {
-                index: 20,
-                percent: 80,
+                index: 10,
+                percent: 70,
                 max_percent: 150,
             }
         );
         assert_eq!(
             queue[1],
-            SystemRequest::SetAppVolume {
-                index: 10,
-                percent: 70,
-                max_percent: 150,
+            SystemRequest::SetBrightness {
+                monitor_name: Some("DP-3".into()),
+                percent: 55,
             }
         );
     }
