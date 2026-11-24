@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod error;
 mod input;
+mod tray;
 mod ui;
 
 use crate::action::{ActionDispatcher, DispatchOutcome, EnigoExecutor};
@@ -11,6 +12,7 @@ use crate::config::Config;
 use crate::context::{spawn_hyprland_listener, ContextState, ProfileMode};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
+use crate::tray::{TrayCommand, TrayController};
 use crate::ui::settings_mod::SettingsController;
 use crate::ui::state::{OverlayController, OverlayTransition, DEFAULT_OVERLAY_TIMEOUT};
 use crate::ui::OverlayWindow;
@@ -32,9 +34,53 @@ struct AppRuntime {
     controller: OverlayController,
     dispatcher: ActionDispatcher<EnigoExecutor>,
     overlay: OverlayWindow,
+    tray: TrayController,
 }
 
 impl AppRuntime {
+    fn sync_tray(&mut self) {
+        let (mode, contextual) = if let Ok(ctx) = self.context.read() {
+            (
+                ctx.mode().clone(),
+                ctx.contextual_profile_for_window(&self.config),
+            )
+        } else {
+            (ProfileMode::Auto, self.config.active_profile.clone())
+        };
+        let profile_names: Vec<String> = self
+            .config
+            .profiles
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        self.tray
+            .sync_if_changed(&mode, &contextual, &profile_names);
+    }
+
+    fn handle_tray_command(
+        &mut self,
+        cmd: TrayCommand,
+        settings: &SettingsController,
+        running: &Arc<AtomicBool>,
+    ) {
+        match cmd {
+            TrayCommand::OpenSettings => self.open_settings(settings),
+            TrayCommand::SetMode(new_mode) => {
+                self.persist_mode(new_mode.clone());
+                let resolved = self.sync_context();
+                self.sync_tray();
+                info!(
+                    "Modo alterado via tray: {:?} (perfil: '{resolved}')",
+                    new_mode
+                );
+            }
+            TrayCommand::Quit => {
+                info!("Encerramento solicitado pelo menu do tray.");
+                running.store(false, Ordering::SeqCst);
+                let _ = slint::quit_event_loop();
+            }
+        }
+    }
     fn overlay_active_index_and_subtitle(&self) -> (usize, String) {
         if let Ok(ctx) = self.context.read() {
             match ctx.mode() {
@@ -285,6 +331,19 @@ fn run() -> Result<(), KnobError> {
         // `input` é descartado aqui ao sair do loop, executando `Drop` -> `ungrab()`.
     });
 
+    let initial_contextual = context
+        .read()
+        .map(|ctx| ctx.contextual_profile_for_window(&config))
+        .unwrap_or_else(|_| config.active_profile.clone());
+    let tray_profile_names: Vec<String> = config.profiles.iter().map(|p| p.name.clone()).collect();
+    let (tray_tx, tray_rx) = mpsc::channel::<TrayCommand>();
+    let tray = TrayController::spawn(
+        initial_mode.clone(),
+        initial_contextual,
+        tray_profile_names,
+        tray_tx,
+    );
+
     let initial_config_for_settings = config.clone();
     let runtime = Rc::new(RefCell::new(AppRuntime {
         config,
@@ -292,6 +351,7 @@ fn run() -> Result<(), KnobError> {
         controller,
         dispatcher,
         overlay,
+        tray,
     }));
 
     let runtime_on_saved = Rc::clone(&runtime);
@@ -326,22 +386,31 @@ fn run() -> Result<(), KnobError> {
 
     let runtime_for_timer = Rc::clone(&runtime);
     let settings_for_timer = Rc::clone(&settings);
+    let running_for_timer = Arc::clone(&running);
     let poll_timer = Timer::default();
     poll_timer.start(TimerMode::Repeated, Duration::from_millis(20), move || {
         let mut rt = runtime_for_timer.borrow_mut();
         while let Ok(ev) = rx.try_recv() {
             rt.handle_knob_event(ev, &settings_for_timer);
         }
+        while let Ok(cmd) = tray_rx.try_recv() {
+            rt.handle_tray_command(cmd, &settings_for_timer, &running_for_timer);
+        }
+        rt.sync_tray();
         rt.check_timeout();
     });
 
     let loop_result =
         slint::run_event_loop_until_quit().map_err(|err| KnobError::UiRun(err.to_string()));
 
-    // Encerramento gracioso: fecha janelas, encerra listener e faz `ungrab()` dos dispositivos.
+    // Encerramento gracioso: fecha janelas, encerra tray/listener e faz `ungrab()` dos dispositivos.
     running.store(false, Ordering::SeqCst);
     let _ = settings.hide();
-    let _ = runtime.borrow().overlay.hide();
+    {
+        let rt = runtime.borrow();
+        let _ = rt.overlay.hide();
+        rt.tray.shutdown();
+    }
     let _ = input_thread.join();
     if let Some(handle) = hyprland_thread {
         let _ = handle.join();
