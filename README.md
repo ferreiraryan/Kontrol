@@ -2,20 +2,21 @@
 
 Mapeador global leve em Rust para dispositivos knob USB (3 teclas + botão rotativo), com overlay minimalista escuro em Slint.
 
-## Escopo atual (v1.0 — Linux Wayland)
+## Recursos principais (Linux Wayland / Hyprland + Caelestia Dots)
 
-- Captura exclusiva (`evdev::grab()`) das interfaces do knob em `/dev/input/by-id/` (sem precisar regravar o firmware).
-- Perfis globais configuráveis em `~/.config/knobcontext/config.toml` (padrão embutido: `Volume`, `Pincel`, `Scroll`).
-- Simulação de entrada nativa no Wayland via `enigo` (backend `wayland`).
-- Overlay minimalista escuro em Slint (`backend-winit-wayland` + `renderer-software` para baixo consumo de memória):
-  - **Pressionar o knob (`KnobPress`)** é reservado para abrir/fechar o overlay (não é configurável como ação de perfil).
-  - A primeira opção do overlay é **Automático** (segue a janela ativa via Hyprland); escolher um perfil nomeado trava em modo **Manual** até voltar para **Automático**.
+- **Captura exclusiva (`evdev::grab()`)** das interfaces do knob em `/dev/input/by-id/` (sem precisar regravar o firmware).
+- **Modo Automático Adaptativo ao Contexto (Hyprland)**:
+  - Monitora `WINDOWCLASS`, **título da janela** e **estado fullscreen** em tempo real via sockets do Hyprland.
+  - Regras compostas com múltiplos padrões (`firefox|zen|chromium`), filtro por título (`YouTube|Twitch|Netflix`), prioridade explícita, herança de perfil (`inherits = "global"`), botão **Capturar janela** e biblioteca de presets prontos.
   - O modo escolhido (`mode = "auto"` ou `mode = "manual:<perfil>"`) é **persistido** no `config.toml` entre sessões.
-  - **Inatividade de 3s** fecha o overlay automaticamente sem alterar o modo/perfil ativo.
+- **Hub Interativo Hierárquico no Overlay (`KnobPress`)**:
+  - **Navegação pelo hardware**: girar navega, **`KnobPress` ou `Key3`** entra/confirma/trava ajuste (`AJUSTANDO`), **`Key1`** volta/solta/fecha e **`Key2`** dispara a ação secundária contextual (*Mudo* no áudio, *Wallpaper aleatório* no Caelestia, *Sincronizar monitores* no brilho, *Special Workspace* nos workspaces).
+  - **Módulos nativos**: **Perfis**, **Sons & Apps** (volume global + individual por aplicativo via `pactl`), **Saída de Som** (troca sink padrão + migra streams), **Workspaces** (Hyprland `.socket.sock`), **Brilho por Monitor** (Caelestia IPC + fallback `brightnessctl`), **Wallpapers** (Caelestia IPC, aplicado ao confirmar + aleatório) e **Controles Caelestia** (DND, Game Mode, Inibir Idle).
+  - **Customizável pela UI**: aba **Overlay / Hub** na janela de Configurações para reordenar/ocultar módulos e criar **Ações Rápidas**, **Sliders Customizados** e **Submenus Customizados**.
+- **Simulação de entrada nativa no Wayland** via `enigo` (backend `wayland`) com proteção RAII contra tecla presa.
 - **Ícone no tray via StatusNotifierItem (SNI)**:
   - Exposto via D-Bus (`org.kde.StatusNotifierItem` com `ksni`) — compatível nativamente com **Caelestia dots** (Quickshell), Waybar (`tray` module) e outros hosts SNI no Wayland.
   - Exibe tooltip dinâmico (`KnobContext — Automático (firefox)` ou `KnobContext — Manual: global`) e menu rápido (*Abrir configurações*, *Modo Automático*, *Modo Manual → perfis*, *Sair*).
-- **Limitação conhecida**: a v1.0 no Linux Wayland opera em modo global (sem detecção de janela em primeiro plano). A detecção de aplicativo em foco está prevista para a Fase 3 (Windows/X11).
 
 ## Requisitos de permissão no Linux
 

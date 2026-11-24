@@ -19,20 +19,29 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-Fase 5 (persistência de `ProfileMode`, ícone no tray via StatusNotifierItem/`ksni`, e estrutura/scripts de empacotamento AppImage para Arch) implementada e validada.
+**v2 (Fases A, B, C e D)** concluída e validada: Modo Automático Adaptativo por contexto (`class` + `title` + `fullscreen` + `priority` + `inherits` + captura de janela + presets), Hub Interativo Hierárquico no overlay com modo `Adjusting` travado, `SystemWorker` assíncrono com coalescing, módulos nativos de **Áudio (Global + por App)**, **Saída de Som**, **Workspaces Hyprland**, **Brilho (Caelestia IPC + fallback `brightnessctl`)**, **Wallpapers & Controles Caelestia**, e aba **Overlay / Hub** totalmente customizável nas Configurações.
 
 ## Concluído
 - **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
 - **Fase 1 (núcleo sem UI)**: `error.rs`, `config.rs`, `input.rs` (`evdev::grab()` + `ungrab()` + ordem física confirmada `Key1`/`Key2`/`Key3`), `action.rs` (`enigo` Wayland).
-- **Fase 2 (UI Overlay Slint)**: `ui/state.rs`, `ui/overlay.slint`, `ui/mod.rs` (overlay minimalista escuro com timeout de 3s).
-- **Fase 3 (Contexto Hyprland + Settings Slint)**: `context.rs` (listener `socket2` em `UnixStream`), `ui/settings.slint`, `ui/settings_mod.rs` (hot-reload sem liberar `grab()`, sem conflito com overlay).
+- **Fase 2 (UI Overlay Slint)**: overlay minimalista escuro e ciclo de vida seguro no Wayland.
+- **Fase 3 (Contexto Hyprland + Settings Slint)**: `context.rs` (listener `socket2` em `UnixStream`), `ui/settings.slint`, `ui/settings_mod.rs` (hot-reload sem liberar `grab()`).
 - **Fase 4C + 4C-fix**: construtor visual de ações (9 tipos, captura ao vivo, apps `.desktop`, `rfd`, macros), `KeyReleaseGuard` (RAII), `device.scroll_step`, `KnobPress` reservado ao overlay, e modo `Automático` / `Manual`.
 - **Fase 5 (Distribuição, Tray SNI e Persistência)**:
-  - **Persistência de `ProfileMode`**: campo `mode = "auto"` ou `"manual:<perfil>"` no `config.toml`, salvo automaticamente ao alternar modo no overlay ou no tray, com fallback seguro para `Auto` + warning se o perfil não existir.
-  - **Tray SNI (`src/tray.rs`)**: `KnobTray` usando `ksni 0.3` (`blocking` + `async-io`, sem GTK/Qt/tokio), ícone 24×24 ARGB32 embutido via `include_bytes!`, tooltip dinâmico, menu (*Abrir configurações*, *Modo Automático*, *Modo Manual → perfis*, *Sair* com `ungrab()` gracioso).
-  - **Empacotamento AppImage (`packaging/`)**: `AppRun`, `knobcontext.desktop`, `knobcontext.png` (256×256), `99-knobcontext.rules`, `install.sh`, `build-appimage.sh` (verifica `linuxdeploy`/`appimagetool`), e aviso não-bloqueante no startup caso `/etc/udev/rules.d/99-knobcontext.rules` não exista.
-  - **Fix Wayland/Hyprland (floating consistente)**: `OverlayWindow` e `SettingsController` agora recriam a instância Slint (`Overlay` / `SettingsWindow`, ambas com `width`/`height` fixos → `resizable = false` no Wayland) a cada abertura, contornando o reset de `WindowAttributes` no `suspend()` do `i-slint-backend-winit` após `hide()` no Wayland (que fazia reaberturas perderem `min/max_inner_size` e abrirem em modo tile no Hyprland).
-  - Validação: `cargo test` (44/44), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
+  - Persistência de `ProfileMode` (`mode = "auto"` ou `"manual:<perfil>"`) no `config.toml`.
+  - Tray SNI (`src/tray.rs` via `ksni 0.3`), AppImage (`packaging/`), aviso udev e recriação de janela Slint ao abrir (garantindo floating consistente no Hyprland).
+- **v2 — Fase A (Contexto Adaptativo)**:
+  - `ActiveWindowInfo { class, title, fullscreen }` via `j/activewindow` + eventos `activewindow>>` e `fullscreen>>` do Hyprland.
+  - Regras compostas (`window_class` com múltiplos padrões `|`/wildcards `*`, `window_title`, `fullscreen`, `priority`, `inherits` com detecção de ciclo), botão *"Capturar"* última janela ativa e biblioteca de presets contextuais prontos.
+- **v2 — Fase B (Hub Interativo + Áudio PipeWire/`pactl`)**:
+  - `src/overlay_hub.rs` (`HubController`: navegação em camadas + modo `Adjusting` travado com atualização otimista e timeout adaptativo) e novo `ui/overlay.slint` com breadcrumb, barras de progresso e rodapé contextual de teclas (`Knob/K3` confirmar/travar, `K1` voltar/fechar, `K2` ação secundária).
+  - `src/system/mod.rs` (`SystemWorker` assíncrono com coalescing de rajadas) e `src/system/audio.rs` (`pactl -f json`: Volume Global + por App + Mute + troca de saída padrão com migração de streams).
+- **v2 — Fase C (Workspaces, Brilho e Caelestia Dots)**:
+  - `src/system/hyprland.rs`: consulta `j/workspaces`/`j/monitors` e troca direta via `.socket.sock` + `K2` special workspace.
+  - `src/system/brightness.rs`: brilho por monitor (`DP-3`, `HDMI-A-1`, *Todos*) via `qs -c caelestia ipc call brightness` (com fallback `brightnessctl`).
+  - `src/system/caelestia.rs`: lista/seleção de wallpapers (aplicado apenas ao confirmar) + aleatório (`K2` / `caelestia wallpaper -r`) + toggles DND, Game Mode, Inibir Idle e Ciclar Saída.
+- **v2 — Fase D (Customização do Hub nas Configurações)**:
+  - Nova aba **Overlay / Hub** em `settings.slint` / `settings_mod.rs` para reordenar, renomear, ocultar/exibir módulos, configurar passos/timeouts/`Key3`, e criar **Ações Rápidas**, **Sliders Customizados** e **Submenus Customizados** com hot-reload e persistência TOML.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):

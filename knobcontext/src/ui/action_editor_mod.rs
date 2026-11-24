@@ -78,7 +78,9 @@ fn map_slint_key_text(text: &str) -> Option<String> {
 /// Sincroniza todo o estado do `ActionEditorState` para as propriedades do popover na `SettingsWindow`.
 pub fn sync_editor_to_ui(win: &SettingsWindow, editor: &ActionEditorState, apps: &[DesktopApp]) {
     win.set_editor_open(editor.is_open);
-    if let Some(slot) = editor.target_slot {
+    if let Some(ref title) = editor.custom_title {
+        win.set_editor_control_title(SharedString::from(title.as_str()));
+    } else if let Some(slot) = editor.target_slot {
         win.set_editor_control_title(SharedString::from(slot.display_name()));
     }
     win.set_editor_type_index(editor.selected_type_index as i32);

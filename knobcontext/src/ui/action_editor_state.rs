@@ -43,6 +43,7 @@ impl ControlSlot {
 pub struct ActionEditorState {
     pub is_open: bool,
     pub target_slot: Option<ControlSlot>,
+    pub custom_title: Option<String>,
     pub selected_type_index: usize,
     pub shortcut_text: String,
     pub capturing_shortcut: bool,
@@ -65,6 +66,7 @@ impl Default for ActionEditorState {
         Self {
             is_open: false,
             target_slot: None,
+            custom_title: None,
             selected_type_index: 8, // Nenhuma ação
             shortcut_text: String::new(),
             capturing_shortcut: false,
@@ -86,9 +88,23 @@ impl Default for ActionEditorState {
 
 impl ActionEditorState {
     pub fn open(&mut self, slot: ControlSlot, initial: &ActionType) {
+        self.open_internal(Some(slot), None, initial);
+    }
+
+    pub fn open_custom(&mut self, title: String, initial: &ActionType) {
+        self.open_internal(None, Some(title), initial);
+    }
+
+    fn open_internal(
+        &mut self,
+        slot: Option<ControlSlot>,
+        custom_title: Option<String>,
+        initial: &ActionType,
+    ) {
         *self = Self::default();
         self.is_open = true;
-        self.target_slot = Some(slot);
+        self.target_slot = slot;
+        self.custom_title = custom_title;
         self.selected_type_index = action_type_index(initial);
 
         match initial {

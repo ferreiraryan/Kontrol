@@ -76,6 +76,23 @@ pub enum OverlayItemKind {
     },
 }
 
+impl OverlayItemKind {
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Profiles => "Perfis / Modo",
+            Self::AudioMixer => "Mixer de Áudio",
+            Self::AudioOutputs => "Saída de Som",
+            Self::Workspaces => "Workspaces (Hyprland)",
+            Self::Brightness => "Brilho dos Monitores",
+            Self::CaelestiaWallpapers => "Wallpapers (Caelestia)",
+            Self::CaelestiaToggles => "Controles Caelestia",
+            Self::QuickAction { .. } => "Ação Rápida",
+            Self::CustomGroup { .. } => "Submenu Customizado",
+            Self::CustomSlider { .. } => "Slider Customizado",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlayItemConfig {
     pub id: String,
@@ -1229,5 +1246,58 @@ knob_cw = "VolumeUp"
         let _ = fs::remove_file(&path);
 
         assert!(matches!(err, KnobError::ConfigValidation(_)));
+    }
+
+    #[test]
+    fn overlay_config_custom_items_roundtrip_toml() {
+        use super::{CustomGroupEntry, OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior};
+
+        let path = unique_temp_path("overlay_roundtrip");
+        let mut cfg = Config::default();
+        cfg.overlay.browse_timeout_ms = 6_000;
+        cfg.overlay.adjust_timeout_ms = 12_000;
+        cfg.overlay.volume_step = 10;
+        cfg.overlay.brightness_step = 5;
+        cfg.overlay.key3_behavior = OverlayKey3Behavior::Close;
+        cfg.overlay.items.push(OverlayItemConfig {
+            id: "quick_term".to_string(),
+            title: "Abrir Terminal".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::QuickAction {
+                action: ActionConfig::Exec {
+                    command: "kitty".to_string(),
+                },
+            },
+        });
+        cfg.overlay.items.push(OverlayItemConfig {
+            id: "custom_group_1".to_string(),
+            title: "Ferramentas".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::CustomGroup {
+                entries: vec![CustomGroupEntry {
+                    label: "Copiar".to_string(),
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "C".into()],
+                    },
+                }],
+            },
+        });
+        cfg.overlay.items.push(OverlayItemConfig {
+            id: "custom_slider_1".to_string(),
+            title: "Zoom Hyprland".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::CustomSlider {
+                step: 5,
+                up_command: "hyprctl keyword cursor:zoom_factor 2".to_string(),
+                down_command: "hyprctl keyword cursor:zoom_factor 1".to_string(),
+                toggle_command: Some("hyprctl keyword cursor:zoom_factor 1".to_string()),
+                read_command: Some("echo 50".to_string()),
+            },
+        });
+
+        cfg.save_to_path(&path).expect("salvar overlay config");
+        let reloaded = Config::load_from_path(&path).expect("recarregar overlay config");
+        let _ = fs::remove_file(&path);
+        assert_eq!(cfg.overlay, reloaded.overlay);
     }
 }

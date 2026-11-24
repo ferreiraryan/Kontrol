@@ -56,7 +56,7 @@ component DarkButton inherits Rectangle {
     in property <bool> danger: false;
     callback clicked();
 
-    height: 32px;
+    height: 30px;
     border-radius: 6px;
     background: root.primary
         ? (touch.has-hover ? #3b82f6 : #2563eb)
@@ -69,8 +69,8 @@ component DarkButton inherits Rectangle {
         : (root.danger ? rgba(248, 113, 113, 0.35) : rgba(255, 255, 255, 0.12));
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
+        padding-left: 10px;
+        padding-right: 10px;
         alignment: center;
 
         Text {
@@ -93,7 +93,7 @@ component ActionRow inherits Rectangle {
     in property <string> action-summary;
     callback edit-clicked();
 
-    height: 40px;
+    height: 38px;
     border-radius: 7px;
     background: rgba(18, 18, 20, 0.85);
     border-width: 1px;
@@ -125,7 +125,7 @@ component ActionRow inherits Rectangle {
 
         DarkButton {
             width: 68px;
-            height: 26px;
+            height: 25px;
             text: "Editar";
             clicked => { root.edit-clicked(); }
         }
@@ -134,10 +134,14 @@ component ActionRow inherits Rectangle {
 
 export component SettingsWindow inherits Window {
     title: "KnobContext Settings";
-    width: 820px;
-    height: 620px;
-    background: rgba(20, 20, 20, 0.92);
+    width: 840px;
+    height: 650px;
+    background: rgba(20, 20, 20, 0.94);
 
+    // Aba ativa: 0 = Perfis & Contexto, 1 = Overlay / Hub
+    in property <int> active-tab: 0;
+
+    // --- Aba 0: Perfis & Contexto ---
     in property <[string]> profile-names: ["global"];
     in property <[string]> preset-labels: [];
     in property <bool> preset-picker-open: false;
@@ -154,10 +158,36 @@ export component SettingsWindow inherits Window {
     in property <string> summary-key1: "Nenhuma";
     in property <string> summary-key2: "Nenhuma";
     in property <string> summary-key3: "Nenhuma";
+
+    // --- Aba 1: Overlay / Hub ---
+    in property <[string]> hub-item-labels: [];
+    in property <int> hub-selected-index: 0;
+    in-out property <string> hub-item-title: "";
+    in property <string> hub-item-kind-label: "";
+    in property <bool> hub-item-enabled: true;
+    // 0 = Builtin, 1 = QuickAction, 2 = CustomSlider, 3 = CustomGroup
+    in property <int> hub-item-editor-mode: 0;
+    in property <string> hub-quick-action-summary: "Nenhuma";
+    in-out property <string> hub-slider-up: "";
+    in-out property <string> hub-slider-down: "";
+    in-out property <string> hub-slider-toggle: "";
+    in-out property <string> hub-slider-read: "";
+    in property <int> hub-slider-step: 5;
+    in property <[string]> hub-group-entry-labels: [];
+    in property <int> hub-group-selected-entry: 0;
+    in-out property <string> hub-group-entry-name: "";
+    in property <string> hub-group-entry-action-summary: "Nenhuma";
+    in property <int> hub-volume-step: 5;
+    in property <int> hub-brightness-step: 5;
+    in property <int> hub-browse-timeout-sec: 5;
+    in property <int> hub-adjust-timeout-sec: 10;
+    in property <bool> hub-key3-is-confirm: true;
+
+    // --- Estado geral ---
     in property <bool> has-unsaved-changes: false;
     in-out property <string> error-message;
 
-    // Estado do Popover de edição de ação
+    // --- Popover de edição de ação ---
     in property <bool> editor-open: false;
     in property <string> editor-control-title;
     in property <[string]> editor-type-titles;
@@ -179,6 +209,8 @@ export component SettingsWindow inherits Window {
     in property <bool> editor-capturing-macro: false;
     in property <string> editor-error-message;
 
+    // Callbacks gerais e Aba 0
+    callback select-tab(int);
     callback select-profile(int);
     callback add-profile();
     callback toggle-preset-picker();
@@ -191,7 +223,28 @@ export component SettingsWindow inherits Window {
     callback save-requested();
     callback cancel-requested();
 
-    // Callbacks do Popover
+    // Callbacks Aba 1: Overlay / Hub
+    callback hub-select-item(int);
+    callback hub-move-item(int);
+    callback hub-toggle-enabled();
+    callback hub-add-quick-action();
+    callback hub-add-custom-slider();
+    callback hub-add-custom-group();
+    callback hub-remove-item();
+    callback hub-reset-defaults();
+    callback hub-edit-quick-action();
+    callback hub-change-slider-step(int);
+    callback hub-group-select-entry(int);
+    callback hub-group-add-entry();
+    callback hub-group-remove-entry();
+    callback hub-group-edit-entry-action();
+    callback hub-change-volume-step(int);
+    callback hub-change-brightness-step(int);
+    callback hub-change-browse-timeout(int);
+    callback hub-change-adjust-timeout(int);
+    callback hub-toggle-key3-behavior();
+
+    // Callbacks Popover
     callback editor-select-type(int);
     callback editor-toggle-shortcut-capture();
     callback editor-shortcut-key-captured(string, bool, bool, bool, bool);
@@ -209,288 +262,688 @@ export component SettingsWindow inherits Window {
     callback editor-save();
     callback editor-cancel();
 
-    HorizontalLayout {
-        padding: 16px;
-        spacing: 16px;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
 
-        // Coluna esquerda: lista de perfis
-        Rectangle {
-            width: 200px;
-            border-radius: 10px;
-            background: rgba(30, 30, 30, 0.9);
-            border-width: 1px;
-            border-color: rgba(255, 255, 255, 0.1);
+        // Barra superior de abas + indicador de alterações
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: stretch;
 
-            VerticalLayout {
-                padding: 12px;
-                spacing: 8px;
+            DarkButton {
+                width: 170px;
+                primary: root.active-tab == 0;
+                text: "Perfis & Contexto";
+                clicked => { root.select-tab(0); }
+            }
 
-                Text {
-                    text: "Perfis";
-                    color: #f5f5f7;
-                    font-size: 15px;
-                    font-weight: 700;
-                }
+            DarkButton {
+                width: 170px;
+                primary: root.active-tab == 1;
+                text: "Overlay / Hub";
+                clicked => { root.select-tab(1); }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: transparent;
+            }
+
+            if root.has-unsaved-changes: Text {
+                text: "• alterações não salvas";
+                color: #fbbf24;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        // ==================== ABA 0: PERFIS & CONTEXTO ====================
+        if root.active-tab == 0: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 14px;
+
+            // Coluna esquerda: lista de perfis
+            Rectangle {
+                width: 210px;
+                border-radius: 10px;
+                background: rgba(30, 30, 30, 0.9);
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.1);
 
                 VerticalLayout {
-                    spacing: 6px;
-                    vertical-stretch: 1;
+                    padding: 12px;
+                    spacing: 8px;
 
-                    for name[idx] in root.profile-names: Rectangle {
-                        height: 34px;
-                        border-radius: 7px;
-                        background: idx == root.selected-index
-                            ? rgba(255, 255, 255, 0.18)
-                            : (item-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
-                        border-width: 1px;
-                        border-color: idx == root.selected-index
-                            ? rgba(255, 255, 255, 0.35)
-                            : rgba(255, 255, 255, 0.06);
+                    Text {
+                        text: "Perfis";
+                        color: #f5f5f7;
+                        font-size: 15px;
+                        font-weight: 700;
+                    }
+
+                    Flickable {
+                        vertical-stretch: 1;
+                        content-height: root.profile-names.length * 40px;
+
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            for name[idx] in root.profile-names: Rectangle {
+                                height: 34px;
+                                border-radius: 7px;
+                                background: idx == root.selected-index
+                                    ? rgba(255, 255, 255, 0.18)
+                                    : (item-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
+                                border-width: 1px;
+                                border-color: idx == root.selected-index
+                                    ? rgba(255, 255, 255, 0.35)
+                                    : rgba(255, 255, 255, 0.06);
+
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+
+                                    Text {
+                                        text: name;
+                                        color: idx == root.selected-index ? #ffffff : #d4d4d8;
+                                        font-size: 13px;
+                                        font-weight: idx == root.selected-index ? 600 : 400;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                item-touch := TouchArea {
+                                    clicked => { root.select-profile(idx); }
+                                }
+                            }
+                        }
+                    }
+
+                    DarkButton {
+                        text: "+ Adicionar perfil";
+                        clicked => { root.add-profile(); }
+                    }
+
+                    DarkButton {
+                        text: root.preset-picker-open ? "Fechar presets" : "+ Preset contextual";
+                        clicked => { root.toggle-preset-picker(); }
+                    }
+
+                    DarkButton {
+                        text: "Remover perfil";
+                        danger: true;
+                        clicked => { root.remove-profile(); }
+                    }
+                }
+            }
+
+            // Coluna direita: editor do perfil selecionado
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 10px;
+                background: rgba(30, 30, 30, 0.9);
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.1);
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 7px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        DarkField {
+                            horizontal-stretch: 1;
+                            label: "Nome do perfil";
+                            placeholder: "ex: video_web";
+                            value <=> root.field-name;
+                        }
+
+                        DarkField {
+                            horizontal-stretch: 2;
+                            label: "Janela (WINDOWCLASS, use | para várias)";
+                            placeholder: "ex: firefox|zen|chromium";
+                            value <=> root.field-window-class;
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "Detectar";
+                                color: #a1a1aa;
+                                font-size: 11px;
+                                font-weight: 500;
+                            }
+                            DarkButton {
+                                width: 100px;
+                                height: 32px;
+                                text: "Capturar";
+                                clicked => { root.capture-active-window(); }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        DarkField {
+                            horizontal-stretch: 2;
+                            label: "Título contém (opcional, use |)";
+                            placeholder: "ex: YouTube|Twitch|Netflix";
+                            value <=> root.field-window-title;
+                        }
+
+                        DarkField {
+                            horizontal-stretch: 1;
+                            label: "Herdar de (opcional)";
+                            placeholder: "ex: global";
+                            value <=> root.field-inherits;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
 
                         HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-
+                            spacing: 6px;
                             Text {
-                                text: name;
-                                color: idx == root.selected-index ? #ffffff : #d4d4d8;
-                                font-size: 13px;
-                                font-weight: idx == root.selected-index ? 600 : 400;
+                                text: "Prioridade:";
+                                color: #a1a1aa;
+                                font-size: 11px;
                                 vertical-alignment: center;
+                            }
+                            DarkButton {
+                                width: 28px;
+                                height: 26px;
+                                text: "-";
+                                clicked => { root.change-priority(-5); }
+                            }
+                            Text {
+                                width: 30px;
+                                text: root.field-priority;
+                                color: #f5f5f7;
+                                font-size: 12px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            DarkButton {
+                                width: 28px;
+                                height: 26px;
+                                text: "+";
+                                clicked => { root.change-priority(5); }
                             }
                         }
 
-                        item-touch := TouchArea {
-                            clicked => { root.select-profile(idx); }
+                        DarkButton {
+                            height: 26px;
+                            primary: root.field-fullscreen-only;
+                            text: root.field-fullscreen-only ? "Tela cheia: SIM" : "Tela cheia: Qualquer";
+                            clicked => { root.toggle-fullscreen-only(); }
+                        }
+
+                        if root.captured-window-hint != "": Text {
+                            horizontal-stretch: 1;
+                            text: root.captured-window-hint;
+                            color: #93c5fd;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            overflow: elide;
                         }
                     }
-                }
 
-                DarkButton {
-                    text: "+ Adicionar perfil";
-                    clicked => { root.add-profile(); }
-                }
+                    ActionRow {
+                        control-label: "RotateCw (Horário)";
+                        action-summary: root.summary-rotate-cw;
+                        edit-clicked => { root.open-action-editor(0); }
+                    }
 
-                DarkButton {
-                    text: root.preset-picker-open ? "Fechar presets" : "+ Preset contextual";
-                    clicked => { root.toggle-preset-picker(); }
-                }
+                    ActionRow {
+                        control-label: "RotateCcw (Anti-horário)";
+                        action-summary: root.summary-rotate-ccw;
+                        edit-clicked => { root.open-action-editor(1); }
+                    }
 
-                DarkButton {
-                    text: "Remover perfil";
-                    danger: true;
-                    clicked => { root.remove-profile(); }
+                    ActionRow {
+                        control-label: "Key1 (Esquerda)";
+                        action-summary: root.summary-key1;
+                        edit-clicked => { root.open-action-editor(2); }
+                    }
+
+                    ActionRow {
+                        control-label: "Key2 (Meio)";
+                        action-summary: root.summary-key2;
+                        edit-clicked => { root.open-action-editor(3); }
+                    }
+
+                    ActionRow {
+                        control-label: "Key3 (Direita)";
+                        action-summary: root.summary-key3;
+                        edit-clicked => { root.open-action-editor(4); }
+                    }
+
+                    Text {
+                        text: "Nota: o clique no knob (KnobPress) abre o Hub Interativo; ações 'Nenhuma' herdam do perfil pai.";
+                        color: rgba(255, 255, 255, 0.48);
+                        font-size: 11px;
+                    }
                 }
             }
         }
 
-        // Coluna direita: editor do perfil selecionado
-        Rectangle {
-            horizontal-stretch: 1;
-            border-radius: 10px;
-            background: rgba(30, 30, 30, 0.9);
-            border-width: 1px;
-            border-color: rgba(255, 255, 255, 0.1);
+        // ==================== ABA 1: OVERLAY / HUB ====================
+        if root.active-tab == 1: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 14px;
 
-            VerticalLayout {
-                padding: 14px;
-                spacing: 7px;
+            // Coluna esquerda: itens do Hub
+            Rectangle {
+                width: 240px;
+                border-radius: 10px;
+                background: rgba(30, 30, 30, 0.9);
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.1);
 
-                HorizontalLayout {
-                    spacing: 8px;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 7px;
 
                     Text {
-                        text: "Configuração do Perfil";
+                        text: "Itens do Hub";
                         color: #f5f5f7;
-                        font-size: 16px;
+                        font-size: 15px;
                         font-weight: 700;
-                        vertical-alignment: center;
                     }
 
-                    if root.has-unsaved-changes: Text {
-                        text: "• alterações não salvas";
-                        color: #fbbf24;
-                        font-size: 11px;
-                        vertical-alignment: center;
-                    }
-                }
+                    Flickable {
+                        vertical-stretch: 1;
+                        content-height: root.hub-item-labels.length * 38px;
 
-                HorizontalLayout {
-                    spacing: 10px;
+                        VerticalLayout {
+                            spacing: 5px;
+                            alignment: start;
 
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "Nome do perfil";
-                        placeholder: "ex: video_web";
-                        value <=> root.field-name;
-                    }
+                            for label[idx] in root.hub-item-labels: Rectangle {
+                                height: 33px;
+                                border-radius: 7px;
+                                background: idx == root.hub-selected-index
+                                    ? rgba(255, 255, 255, 0.18)
+                                    : (hub-touch.has-hover ? rgba(255, 255, 255, 0.08) : rgba(255, 255, 255, 0.03));
+                                border-width: 1px;
+                                border-color: idx == root.hub-selected-index
+                                    ? rgba(255, 255, 255, 0.35)
+                                    : rgba(255, 255, 255, 0.06);
 
-                    DarkField {
-                        horizontal-stretch: 2;
-                        label: "Janela (WINDOWCLASS, use | para várias)";
-                        placeholder: "ex: firefox|zen|chromium";
-                        value <=> root.field-window-class;
-                    }
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    Text {
+                                        text: label;
+                                        color: idx == root.hub-selected-index ? #ffffff : #d4d4d8;
+                                        font-size: 12px;
+                                        font-weight: idx == root.hub-selected-index ? 600 : 400;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
 
-                    VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "Detectar";
-                            color: #a1a1aa;
-                            font-size: 11px;
-                            font-weight: 500;
-                        }
-                        DarkButton {
-                            width: 108px;
-                            text: "Capturar";
-                            clicked => { root.capture-active-window(); }
+                                hub-touch := TouchArea {
+                                    clicked => { root.hub-select-item(idx); }
+                                }
+                            }
                         }
                     }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    DarkField {
-                        horizontal-stretch: 2;
-                        label: "Título contém (opcional, use |)";
-                        placeholder: "ex: YouTube|Twitch|Netflix";
-                        value <=> root.field-window-title;
-                    }
-
-                    DarkField {
-                        horizontal-stretch: 1;
-                        label: "Herdar de (opcional)";
-                        placeholder: "ex: global";
-                        value <=> root.field-inherits;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 12px;
-                    alignment: start;
 
                     HorizontalLayout {
                         spacing: 6px;
-                        Text {
-                            text: "Prioridade:";
-                            color: #a1a1aa;
-                            font-size: 11px;
-                            vertical-alignment: center;
+                        DarkButton {
+                            horizontal-stretch: 1;
+                            text: "↑ Subir";
+                            clicked => { root.hub-move-item(-1); }
                         }
                         DarkButton {
-                            width: 28px;
-                            height: 26px;
-                            text: "-";
-                            clicked => { root.change-priority(-5); }
-                        }
-                        Text {
-                            width: 30px;
-                            text: root.field-priority;
-                            color: #f5f5f7;
-                            font-size: 12px;
-                            font-weight: 600;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        DarkButton {
-                            width: 28px;
-                            height: 26px;
-                            text: "+";
-                            clicked => { root.change-priority(5); }
+                            horizontal-stretch: 1;
+                            text: "↓ Descer";
+                            clicked => { root.hub-move-item(1); }
                         }
                     }
-
-                    DarkButton {
-                        height: 26px;
-                        primary: root.field-fullscreen-only;
-                        text: root.field-fullscreen-only ? "Tela cheia: SIM" : "Tela cheia: Qualquer";
-                        clicked => { root.toggle-fullscreen-only(); }
-                    }
-
-                    if root.captured-window-hint != "": Text {
-                        horizontal-stretch: 1;
-                        text: root.captured-window-hint;
-                        color: #93c5fd;
-                        font-size: 11px;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                }
-
-                ActionRow {
-                    control-label: "RotateCw (Horário)";
-                    action-summary: root.summary-rotate-cw;
-                    edit-clicked => { root.open-action-editor(0); }
-                }
-
-                ActionRow {
-                    control-label: "RotateCcw (Anti-horário)";
-                    action-summary: root.summary-rotate-ccw;
-                    edit-clicked => { root.open-action-editor(1); }
-                }
-
-                ActionRow {
-                    control-label: "Key1 (Esquerda)";
-                    action-summary: root.summary-key1;
-                    edit-clicked => { root.open-action-editor(2); }
-                }
-
-                ActionRow {
-                    control-label: "Key2 (Meio)";
-                    action-summary: root.summary-key2;
-                    edit-clicked => { root.open-action-editor(3); }
-                }
-
-                ActionRow {
-                    control-label: "Key3 (Direita)";
-                    action-summary: root.summary-key3;
-                    edit-clicked => { root.open-action-editor(4); }
-                }
-
-                Text {
-                    text: "Nota: o clique no knob (KnobPress) é reservado para abrir/fechar o overlay de perfis.";
-                    color: rgba(255, 255, 255, 0.48);
-                    font-size: 11px;
-                }
-
-                if root.error-message != "": Rectangle {
-                    border-radius: 6px;
-                    background: rgba(220, 38, 38, 0.22);
-                    border-width: 1px;
-                    border-color: rgba(248, 113, 113, 0.45);
 
                     HorizontalLayout {
-                        padding: 8px;
-                        Text {
-                            text: root.error-message;
-                            color: #fca5a5;
-                            font-size: 12px;
-                            wrap: word-wrap;
+                        spacing: 6px;
+                        DarkButton {
+                            horizontal-stretch: 1;
+                            text: "+ Ação";
+                            clicked => { root.hub-add-quick-action(); }
+                        }
+                        DarkButton {
+                            horizontal-stretch: 1;
+                            text: "+ Slider";
+                            clicked => { root.hub-add-custom-slider(); }
+                        }
+                        DarkButton {
+                            horizontal-stretch: 1;
+                            text: "+ Grupo";
+                            clicked => { root.hub-add-custom-group(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        DarkButton {
+                            horizontal-stretch: 1;
+                            text: "Padrão";
+                            clicked => { root.hub-reset-defaults(); }
+                        }
+                        DarkButton {
+                            horizontal-stretch: 1;
+                            danger: true;
+                            text: "Remover";
+                            clicked => { root.hub-remove-item(); }
                         }
                     }
                 }
+            }
 
-                Rectangle {
-                    vertical-stretch: 1;
-                    background: transparent;
-                }
+            // Coluna direita: ajustes gerais + editor do item selecionado
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 10px;
+                background: rgba(30, 30, 30, 0.9);
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.1);
 
-                HorizontalLayout {
-                    alignment: end;
+                VerticalLayout {
+                    padding: 14px;
                     spacing: 10px;
 
-                    DarkButton {
-                        text: "Cancelar";
-                        clicked => { root.cancel-requested(); }
+                    // Ajustes gerais do Hub
+                    Rectangle {
+                        border-radius: 8px;
+                        background: rgba(18, 18, 20, 0.85);
+                        border-width: 1px;
+                        border-color: rgba(255, 255, 255, 0.08);
+
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "Comportamento do Hub";
+                                color: #f5f5f7;
+                                font-size: 13px;
+                                font-weight: 700;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: "Vol passo:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-volume-step(-1); } }
+                                    Text { width: 32px; text: root.hub-volume-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-volume-step(1); } }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: "Brilho passo:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-brightness-step(-1); } }
+                                    Text { width: 32px; text: root.hub-brightness-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-brightness-step(1); } }
+                                }
+
+                                DarkButton {
+                                    height: 24px;
+                                    primary: root.hub-key3-is-confirm;
+                                    text: root.hub-key3-is-confirm ? "K3: Confirmar" : "K3: Fechar";
+                                    clicked => { root.hub-toggle-key3-behavior(); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 14px;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: "Timeout navegar:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-browse-timeout(-1); } }
+                                    Text { width: 28px; text: root.hub-browse-timeout-sec + "s"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-browse-timeout(1); } }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: "Timeout ajustando:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-adjust-timeout(-1); } }
+                                    Text { width: 32px; text: root.hub-adjust-timeout-sec + "s"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                    DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-adjust-timeout(1); } }
+                                }
+                            }
+                        }
                     }
 
-                    DarkButton {
-                        text: "Salvar";
-                        primary: true;
-                        clicked => { root.save-requested(); }
+                    // Editor do item selecionado
+                    HorizontalLayout {
+                        spacing: 10px;
+                        DarkField {
+                            horizontal-stretch: 1;
+                            label: "Título do item (" + root.hub-item-kind-label + ")";
+                            placeholder: "ex: Sons & Apps";
+                            value <=> root.hub-item-title;
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "Estado"; color: #a1a1aa; font-size: 11px; }
+                            DarkButton {
+                                width: 110px;
+                                height: 32px;
+                                primary: root.hub-item-enabled;
+                                text: root.hub-item-enabled ? "Ativo no Hub" : "Oculto";
+                                clicked => { root.hub-toggle-enabled(); }
+                            }
+                        }
+                    }
+
+                    // Modo 0: Módulo nativo embutido
+                    if root.hub-item-editor-mode == 0: Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 8px;
+                        background: rgba(18, 18, 20, 0.65);
+                        border-width: 1px;
+                        border-color: rgba(255, 255, 255, 0.06);
+
+                        VerticalLayout {
+                            padding: 14px;
+                            alignment: center;
+                            spacing: 6px;
+                            Text {
+                                text: "Módulo nativo: " + root.hub-item-kind-label;
+                                color: #f5f5f7;
+                                font-size: 13px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "Você pode renomear, reordenar ou ocultar este módulo no Hub.";
+                                color: #a1a1aa;
+                                font-size: 11px;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    // Modo 1: Ação Rápida
+                    if root.hub-item-editor-mode == 1: VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: 8px;
+                        ActionRow {
+                            control-label: "Ação ao confirmar";
+                            action-summary: root.hub-quick-action-summary;
+                            edit-clicked => { root.hub-edit-quick-action(); }
+                        }
+                    }
+
+                    // Modo 2: Slider Customizado
+                    if root.hub-item-editor-mode == 2: VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: 6px;
+
+                        DarkField {
+                            label: "Comando ao girar horário (+)";
+                            placeholder: "ex: hyprctl keyword cursor:zoom_factor 2";
+                            value <=> root.hub-slider-up;
+                        }
+                        DarkField {
+                            label: "Comando ao girar anti-horário (-)";
+                            placeholder: "ex: hyprctl keyword cursor:zoom_factor 1";
+                            value <=> root.hub-slider-down;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            DarkField {
+                                horizontal-stretch: 1;
+                                label: "Comando K2 (opcional)";
+                                placeholder: "ex: toggle / reset";
+                                value <=> root.hub-slider-toggle;
+                            }
+                            DarkField {
+                                horizontal-stretch: 1;
+                                label: "Comando leitura 0-100 (opcional)";
+                                placeholder: "ex: echo 50";
+                                value <=> root.hub-slider-read;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            Text { text: "Passo visual:"; color: #a1a1aa; font-size: 11px; vertical-alignment: center; }
+                            DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-slider-step(-1); } }
+                            Text { width: 32px; text: root.hub-slider-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                            DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-slider-step(1); } }
+                        }
+                    }
+
+                    // Modo 3: Submenu Customizado (Grupo de Ações)
+                    if root.hub-item-editor-mode == 3: VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: 8px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                horizontal-stretch: 1;
+                                text: "Entradas do submenu:";
+                                color: #d4d4d8;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            DarkButton {
+                                height: 25px;
+                                text: "+ Entrada";
+                                clicked => { root.hub-group-add-entry(); }
+                            }
+                            DarkButton {
+                                height: 25px;
+                                danger: true;
+                                text: "Remover";
+                                clicked => { root.hub-group-remove-entry(); }
+                            }
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            content-height: root.hub-group-entry-labels.length * 34px;
+
+                            VerticalLayout {
+                                spacing: 4px;
+                                alignment: start;
+                                for elabel[eidx] in root.hub-group-entry-labels: Rectangle {
+                                    height: 30px;
+                                    border-radius: 6px;
+                                    background: eidx == root.hub-group-selected-entry
+                                        ? rgba(59, 130, 246, 0.25)
+                                        : rgba(255, 255, 255, 0.04);
+                                    border-width: 1px;
+                                    border-color: eidx == root.hub-group-selected-entry
+                                        ? rgba(96, 165, 250, 0.6)
+                                        : rgba(255, 255, 255, 0.06);
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        Text {
+                                            text: elabel;
+                                            color: #f5f5f7;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    TouchArea {
+                                        clicked => { root.hub-group-select-entry(eidx); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.hub-group-entry-labels.length > 0: VerticalLayout {
+                            spacing: 6px;
+                            DarkField {
+                                label: "Nome da entrada selecionada";
+                                placeholder: "ex: Abrir Obsidian";
+                                value <=> root.hub-group-entry-name;
+                            }
+                            ActionRow {
+                                control-label: "Ação da entrada";
+                                action-summary: root.hub-group-entry-action-summary;
+                                edit-clicked => { root.hub-group-edit-entry-action(); }
+                            }
+                        }
                     }
                 }
+            }
+        }
+
+        // Mensagem de erro global
+        if root.error-message != "": Rectangle {
+            border-radius: 6px;
+            background: rgba(220, 38, 38, 0.22);
+            border-width: 1px;
+            border-color: rgba(248, 113, 113, 0.45);
+
+            HorizontalLayout {
+                padding: 8px;
+                Text {
+                    text: root.error-message;
+                    color: #fca5a5;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // Rodapé global: Cancelar / Salvar
+        HorizontalLayout {
+            alignment: end;
+            spacing: 10px;
+
+            DarkButton {
+                text: "Cancelar";
+                clicked => { root.cancel-requested(); }
+            }
+
+            DarkButton {
+                text: "Salvar";
+                primary: true;
+                clicked => { root.save-requested(); }
             }
         }
     }
