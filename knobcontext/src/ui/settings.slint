@@ -91,7 +91,9 @@ component DarkButton inherits Rectangle {
 component ActionRow inherits Rectangle {
     in property <string> control-label;
     in property <string> action-summary;
+    in property <bool> show-learn: false;
     callback edit-clicked();
+    callback learn-clicked();
 
     height: 38px;
     border-radius: 7px;
@@ -102,11 +104,11 @@ component ActionRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 8px;
-        spacing: 10px;
+        spacing: 8px;
         alignment: stretch;
 
         Text {
-            width: 155px;
+            width: 150px;
             text: root.control-label;
             color: #d4d4d8;
             font-size: 12px;
@@ -123,8 +125,15 @@ component ActionRow inherits Rectangle {
             overflow: elide;
         }
 
+        if root.show-learn: DarkButton {
+            width: 82px;
+            height: 25px;
+            text: "Aprender";
+            clicked => { root.learn-clicked(); }
+        }
+
         DarkButton {
-            width: 68px;
+            width: 64px;
             height: 25px;
             text: "Editar";
             clicked => { root.edit-clicked(); }
@@ -238,6 +247,7 @@ export component SettingsWindow inherits Window {
     callback change-priority(int);
     callback toggle-fullscreen-only();
     callback open-action-editor(int);
+    callback learn-action-slot(int);
     callback select-profile-subtab(int);
     callback profile-hub-customize();
     callback profile-hub-reset-inherit();
@@ -278,6 +288,7 @@ export component SettingsWindow inherits Window {
     callback editor-select-type(int);
     callback editor-toggle-shortcut-capture();
     callback editor-shortcut-key-captured(string, bool, bool, bool, bool);
+    callback editor-open-learn-shortcut();
     callback editor-select-media(int);
     callback editor-app-search-changed(string);
     callback editor-select-app(int);
@@ -616,30 +627,40 @@ export component SettingsWindow inherits Window {
                         ActionRow {
                             control-label: "RotateCw (Horário)";
                             action-summary: root.summary-rotate-cw;
+                            show-learn: true;
+                            learn-clicked => { root.learn-action-slot(0); }
                             edit-clicked => { root.open-action-editor(0); }
                         }
 
                         ActionRow {
                             control-label: "RotateCcw (Anti-horário)";
                             action-summary: root.summary-rotate-ccw;
+                            show-learn: true;
+                            learn-clicked => { root.learn-action-slot(1); }
                             edit-clicked => { root.open-action-editor(1); }
                         }
 
                         ActionRow {
                             control-label: "Key1 (Esquerda)";
                             action-summary: root.summary-key1;
+                            show-learn: true;
+                            learn-clicked => { root.learn-action-slot(2); }
                             edit-clicked => { root.open-action-editor(2); }
                         }
 
                         ActionRow {
                             control-label: "Key2 (Meio)";
                             action-summary: root.summary-key2;
+                            show-learn: true;
+                            learn-clicked => { root.learn-action-slot(3); }
                             edit-clicked => { root.open-action-editor(3); }
                         }
 
                         ActionRow {
                             control-label: "Key3 (Direita)";
                             action-summary: root.summary-key3;
+                            show-learn: true;
+                            learn-clicked => { root.learn-action-slot(4); }
                             edit-clicked => { root.open-action-editor(4); }
                         }
 
@@ -1460,6 +1481,7 @@ export component SettingsWindow inherits Window {
         select-type(i) => { root.editor-select-type(i); }
         toggle-shortcut-capture => { root.editor-toggle-shortcut-capture(); }
         shortcut-key-captured(t, c, a, s, m) => { root.editor-shortcut-key-captured(t, c, a, s, m); }
+        open-learn-shortcut => { root.editor-open-learn-shortcut(); }
         select-media(i) => { root.editor-select-media(i); }
         app-search-changed(q) => { root.editor-app-search-changed(q); }
         select-app(i) => { root.editor-select-app(i); }

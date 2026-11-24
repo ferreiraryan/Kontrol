@@ -11,6 +11,7 @@ use crate::context::ActiveWindowInfo;
 use crate::error::KnobError;
 use crate::ui::action_editor_mod::{format_captured_key, pick_file_uri, sync_editor_to_ui};
 use crate::ui::action_editor_state::{ActionEditorState, ControlSlot};
+use crate::ui::learn_mod::LearnController;
 use crate::ui::SettingsWindow;
 use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -50,6 +51,7 @@ type OnCaptureWindowCallback = Rc<dyn Fn() -> Option<ActiveWindowInfo>>;
 /// `WindowAttributes` do backend `winit` do Slint após `hide()` no Wayland.
 pub struct SettingsController {
     window: RefCell<Option<SettingsWindow>>,
+    learn: Rc<LearnController>,
     draft: Rc<RefCell<SettingsDraft>>,
     is_open: Rc<RefCell<bool>>,
     on_saved: OnSavedCallback,
@@ -86,6 +88,7 @@ impl SettingsController {
 
         Ok(Self {
             window: RefCell::new(None),
+            learn: Rc::new(LearnController::new()),
             draft,
             is_open,
             on_saved: Rc::new(on_saved),
@@ -622,6 +625,99 @@ impl SettingsController {
             });
         }
 
+        // Modo Aprender direto em um slot de ação do perfil
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            let learn_ref = Rc::clone(&self.learn);
+            let release_cb = Rc::clone(&on_release_modifiers);
+            window.on_learn_action_slot(move |slot_idx| {
+                let Some(win) = weak.upgrade() else { return };
+                let Some(slot) = ControlSlot::from_index(slot_idx.max(0) as usize) else {
+                    return;
+                };
+                {
+                    let mut d = draft_ref.borrow_mut();
+                    if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                        win.set_error_message(SharedString::from(err.to_string()));
+                        return;
+                    }
+                }
+                let weak_inner = win.as_weak();
+                let draft_inner = Rc::clone(&draft_ref);
+                let rel_ok = Rc::clone(&release_cb);
+                let rel_cancel = Rc::clone(&release_cb);
+                if let Err(err) = learn_ref.open(
+                    slot.display_name(),
+                    move |combo| {
+                        let Some(w) = weak_inner.upgrade() else {
+                            return;
+                        };
+                        match ActionConfig::parse_from_str(&combo) {
+                            Ok(action) => {
+                                let mut d = draft_inner.borrow_mut();
+                                let pidx = d.selected_index;
+                                if let Some(profile) = d.base_config.profiles.get_mut(pidx) {
+                                    set_slot_action(profile, slot, action);
+                                    d.dirty = true;
+                                }
+                                w.set_error_message(SharedString::from(""));
+                                sync_all_to_ui(&w, &d);
+                            }
+                            Err(e) => {
+                                w.set_error_message(SharedString::from(e.to_string()));
+                            }
+                        }
+                        rel_ok();
+                    },
+                    move || {
+                        rel_cancel();
+                    },
+                ) {
+                    win.set_error_message(SharedString::from(format!(
+                        "Falha ao abrir Modo Aprender: {err}"
+                    )));
+                }
+            });
+        }
+
+        // Modo Aprender a partir do popover de Atalho de Teclado
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            let learn_ref = Rc::clone(&self.learn);
+            let release_cb = Rc::clone(&on_release_modifiers);
+            window.on_editor_open_learn_shortcut(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let title = win.get_editor_control_title().to_string();
+                let weak_inner = win.as_weak();
+                let draft_inner = Rc::clone(&draft_ref);
+                let rel_ok = Rc::clone(&release_cb);
+                let rel_cancel = Rc::clone(&release_cb);
+                if let Err(err) = learn_ref.open(
+                    &title,
+                    move |combo| {
+                        let Some(w) = weak_inner.upgrade() else {
+                            return;
+                        };
+                        let mut d = draft_inner.borrow_mut();
+                        d.editor.shortcut_text = combo;
+                        d.editor.capturing_shortcut = false;
+                        w.set_editor_error_message(SharedString::from(""));
+                        sync_editor_to_ui(&w, &d.editor, &d.desktop_apps);
+                        rel_ok();
+                    },
+                    move || {
+                        rel_cancel();
+                    },
+                ) {
+                    win.set_editor_error_message(SharedString::from(format!(
+                        "Falha ao abrir Modo Aprender: {err}"
+                    )));
+                }
+            });
+        }
+
         wire_hub_tab_callbacks(&window, Rc::clone(&draft));
         wire_action_editor_callbacks(&window, Rc::clone(&draft), Rc::clone(&on_release_modifiers));
 
@@ -678,7 +774,9 @@ impl SettingsController {
             let open_ref = Rc::clone(&is_open);
             let on_closed_cb = Rc::clone(&on_closed);
             let on_release_cb = Rc::clone(&on_release_modifiers);
+            let learn_ref = Rc::clone(&self.learn);
             window.on_cancel_requested(move || {
+                learn_ref.close();
                 *open_ref.borrow_mut() = false;
                 if let Some(win) = weak.upgrade() {
                     win.set_editor_open(false);
@@ -695,7 +793,9 @@ impl SettingsController {
             let open_ref = Rc::clone(&is_open);
             let on_closed_cb = Rc::clone(&on_closed);
             let on_release_cb = Rc::clone(&on_release_modifiers);
+            let learn_ref = Rc::clone(&self.learn);
             window.window().on_close_requested(move || {
+                learn_ref.close();
                 *open_ref.borrow_mut() = false;
                 if let Some(win) = weak.upgrade() {
                     win.set_editor_open(false);

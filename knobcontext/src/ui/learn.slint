@@ -1,0 +1,99 @@
+export component LearnWindow inherits Window {
+    title: "KnobContext — Modo Aprender";
+    width: 420px;
+    height: 144px;
+    always-on-top: true;
+    background: #141418;
+
+    in property <string> target-label: "Key1";
+    in property <string> combo-preview: "";
+    in property <string> status-hint: "Pressione a combinação de teclas (Esc para cancelar)";
+
+    callback key-pressed(string, bool, bool, bool, bool);
+    callback key-released(string, bool, bool, bool, bool);
+    callback cancel-requested();
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #141418;
+        border-width: 1px;
+        border-color: rgba(96, 165, 250, 0.45);
+        border-radius: 10px;
+
+        capture-scope := FocusScope {
+            width: 100%;
+            height: 100%;
+
+            init => {
+                self.focus();
+            }
+
+            key-pressed(ev) => {
+                root.key-pressed(
+                    ev.text,
+                    ev.modifiers.control,
+                    ev.modifiers.alt,
+                    ev.modifiers.shift,
+                    ev.modifiers.meta,
+                );
+                return accept;
+            }
+
+            key-released(ev) => {
+                root.key-released(
+                    ev.text,
+                    ev.modifiers.control,
+                    ev.modifiers.alt,
+                    ev.modifiers.shift,
+                    ev.modifiers.meta,
+                );
+                return accept;
+            }
+        }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            alignment: center;
+
+            Text {
+                text: "Modo Aprender • " + root.target-label;
+                color: #93c5fd;
+                font-size: 12px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 46px;
+                border-radius: 8px;
+                background: rgba(37, 99, 235, 0.16);
+                border-width: 1px;
+                border-color: rgba(96, 165, 250, 0.45);
+
+                Text {
+                    text: root.combo-preview == "" ? "Aguardando teclas..." : root.combo-preview;
+                    color: root.combo-preview == "" ? rgba(255, 255, 255, 0.45) : #ffffff;
+                    font-size: 18px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: root.status-hint;
+                    color: #a1a1aa;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

@@ -114,6 +114,7 @@ export component ActionEditorPopover inherits Rectangle {
     callback select-type(int);
     callback toggle-shortcut-capture();
     callback shortcut-key-captured(string, bool, bool, bool, bool);
+    callback open-learn-shortcut();
     callback select-media(int);
     callback app-search-changed(string);
     callback select-app(int);
@@ -214,11 +215,21 @@ export component ActionEditorPopover inherits Rectangle {
                         padding: 14px;
                         spacing: 10px;
 
-                        Text {
-                            text: "Captura de tecla ao vivo";
-                            color: #f5f5f7;
-                            font-size: 13px;
-                            font-weight: 600;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                horizontal-stretch: 1;
+                                text: "Captura de tecla ao vivo";
+                                color: #f5f5f7;
+                                font-size: 13px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            PopoverButton {
+                                primary: true;
+                                text: "⌨ Aprender";
+                                clicked => { root.open-learn-shortcut(); }
+                            }
                         }
 
                         shortcut-capture-box := Rectangle {
