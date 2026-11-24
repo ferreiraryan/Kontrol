@@ -65,6 +65,12 @@ pub enum OverlayItemKind {
     Brightness,
     CaelestiaWallpapers,
     CaelestiaToggles,
+    BrowserTabs,
+    MediaControl,
+    Zoom,
+    ScrollPage,
+    BrushSize,
+    UndoRedo,
     QuickAction {
         action: ActionConfig,
     },
@@ -94,11 +100,165 @@ impl OverlayItemKind {
             Self::Brightness => "Brilho dos Monitores",
             Self::CaelestiaWallpapers => "Wallpapers (Caelestia)",
             Self::CaelestiaToggles => "Controles Caelestia",
+            Self::BrowserTabs => "Abas do Navegador",
+            Self::MediaControl => "Controle de Mídia",
+            Self::Zoom => "Zoom",
+            Self::ScrollPage => "Navegação de Página",
+            Self::BrushSize => "Tamanho do Pincel",
+            Self::UndoRedo => "Desfazer / Refazer",
             Self::QuickAction { .. } => "Ação Rápida",
             Self::CustomGroup { .. } => "Submenu Customizado",
             Self::CustomSlider { .. } => "Slider Customizado",
         }
     }
+}
+
+/// Modelos prontos de módulos nativos disponíveis no seletor "+ Adicionar módulo".
+pub fn builtin_hub_module_templates() -> Vec<OverlayItemConfig> {
+    vec![
+        OverlayItemConfig {
+            id: "browser_tabs".to_string(),
+            title: "Abas".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::BrowserTabs,
+        },
+        OverlayItemConfig {
+            id: "media_control".to_string(),
+            title: "Mídia".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::MediaControl,
+        },
+        OverlayItemConfig {
+            id: "zoom".to_string(),
+            title: "Zoom".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::Zoom,
+        },
+        OverlayItemConfig {
+            id: "scroll_page".to_string(),
+            title: "Página".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::ScrollPage,
+        },
+        OverlayItemConfig {
+            id: "brush_size".to_string(),
+            title: "Pincel".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::BrushSize,
+        },
+        OverlayItemConfig {
+            id: "undo_redo".to_string(),
+            title: "Desfazer".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::UndoRedo,
+        },
+        OverlayItemConfig {
+            id: "profiles".to_string(),
+            title: "Perfis".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::Profiles,
+        },
+        OverlayItemConfig {
+            id: "audio_mixer".to_string(),
+            title: "Sons & Apps".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::AudioMixer,
+        },
+        OverlayItemConfig {
+            id: "audio_outputs".to_string(),
+            title: "Saída de Som".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::AudioOutputs,
+        },
+        OverlayItemConfig {
+            id: "workspaces".to_string(),
+            title: "Workspaces".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::Workspaces,
+        },
+        OverlayItemConfig {
+            id: "brightness".to_string(),
+            title: "Brilho".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::Brightness,
+        },
+        OverlayItemConfig {
+            id: "caelestia_wallpapers".to_string(),
+            title: "Wallpapers".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::CaelestiaWallpapers,
+        },
+        OverlayItemConfig {
+            id: "caelestia_toggles".to_string(),
+            title: "Caelestia".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::CaelestiaToggles,
+        },
+    ]
+}
+
+fn deserialize_resilient_hub_modules<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<OverlayItemConfig>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: Option<Vec<toml::Value>> = Option::deserialize(deserializer)?;
+    let Some(entries) = raw else {
+        return Ok(None);
+    };
+
+    let mut parsed = Vec::with_capacity(entries.len());
+    for (idx, value) in entries.into_iter().enumerate() {
+        let toml::Value::Table(mut table) = value else {
+            log::warn!(
+                "Entrada inválida em `hub_modules` (índice {idx}): esperado tabela TOML, ignorando."
+            );
+            continue;
+        };
+
+        // Aceita aliases amigáveis `type` -> `kind` e `label` -> `title`
+        if !table.contains_key("kind") {
+            if let Some(ty) = table.remove("type") {
+                table.insert("kind".to_string(), ty);
+            }
+        }
+        if !table.contains_key("title") {
+            if let Some(lbl) = table.remove("label") {
+                table.insert("title".to_string(), lbl);
+            }
+        }
+        if !table.contains_key("id") {
+            let fallback_id = table
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .map(|k| format!("{k}_{idx}"))
+                .unwrap_or_else(|| format!("module_{idx}"));
+            table.insert("id".to_string(), toml::Value::String(fallback_id));
+        }
+
+        match toml::Value::Table(table).try_into::<OverlayItemConfig>() {
+            Ok(item) => parsed.push(item),
+            Err(err) => {
+                log::warn!("Módulo do Hub desconhecido ou inválido ignorado no TOML: {err}");
+            }
+        }
+    }
+
+    Ok(Some(parsed))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +424,18 @@ pub struct ProfileConfig {
     pub key2: ActionConfig,
     #[serde(default)]
     pub key3: ActionConfig,
+    /// Módulos do Hub exibidos quando este perfil está ativo.
+    ///
+    /// Semântica de herança:
+    /// - `None` (omitido no TOML): herda da cadeia `inherits` até `global` / `overlay.items`.
+    /// - `Some(vec![])`: lista vazia explícita (Hub vazio para este perfil).
+    /// - `Some(vec![...])`: substitui os módulos do Hub para este perfil.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_resilient_hub_modules"
+    )]
+    pub hub_modules: Option<Vec<OverlayItemConfig>>,
 }
 
 impl ProfileConfig {
@@ -314,6 +486,36 @@ pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
                 key3: ActionConfig::Shortcut {
                     keys: vec!["Ctrl".into(), "R".into()],
                 },
+                hub_modules: Some(vec![
+                    OverlayItemConfig {
+                        id: "browser_tabs".to_string(),
+                        title: "Abas".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::BrowserTabs,
+                    },
+                    OverlayItemConfig {
+                        id: "media_control".to_string(),
+                        title: "Mídia".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::MediaControl,
+                    },
+                    OverlayItemConfig {
+                        id: "zoom".to_string(),
+                        title: "Zoom".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::Zoom,
+                    },
+                    OverlayItemConfig {
+                        id: "audio_mixer".to_string(),
+                        title: "Sons & Apps".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::AudioMixer,
+                    },
+                ]),
             },
         },
         ProfilePreset {
@@ -341,6 +543,29 @@ pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
                 key3: ActionConfig::Shortcut {
                     keys: vec!["Space".into()],
                 },
+                hub_modules: Some(vec![
+                    OverlayItemConfig {
+                        id: "media_control".to_string(),
+                        title: "Mídia".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::MediaControl,
+                    },
+                    OverlayItemConfig {
+                        id: "audio_mixer".to_string(),
+                        title: "Sons & Apps".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::AudioMixer,
+                    },
+                    OverlayItemConfig {
+                        id: "brightness".to_string(),
+                        title: "Brilho".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::Brightness,
+                    },
+                ]),
             },
         },
         ProfilePreset {
@@ -368,6 +593,36 @@ pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
                 key3: ActionConfig::Shortcut {
                     keys: vec!["Ctrl".into(), "S".into()],
                 },
+                hub_modules: Some(vec![
+                    OverlayItemConfig {
+                        id: "undo_redo".to_string(),
+                        title: "Desfazer".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::UndoRedo,
+                    },
+                    OverlayItemConfig {
+                        id: "zoom".to_string(),
+                        title: "Zoom".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::Zoom,
+                    },
+                    OverlayItemConfig {
+                        id: "scroll_page".to_string(),
+                        title: "Página".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::ScrollPage,
+                    },
+                    OverlayItemConfig {
+                        id: "workspaces".to_string(),
+                        title: "Workspaces".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::Workspaces,
+                    },
+                ]),
             },
         },
         ProfilePreset {
@@ -395,6 +650,36 @@ pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
                 key3: ActionConfig::Shortcut {
                     keys: vec!["B".into()],
                 },
+                hub_modules: Some(vec![
+                    OverlayItemConfig {
+                        id: "brush_size".to_string(),
+                        title: "Pincel".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::BrushSize,
+                    },
+                    OverlayItemConfig {
+                        id: "undo_redo".to_string(),
+                        title: "Desfazer".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::UndoRedo,
+                    },
+                    OverlayItemConfig {
+                        id: "zoom".to_string(),
+                        title: "Zoom".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::Zoom,
+                    },
+                    OverlayItemConfig {
+                        id: "audio_mixer".to_string(),
+                        title: "Sons & Apps".to_string(),
+                        enabled: true,
+                        icon: None,
+                        kind: OverlayItemKind::AudioMixer,
+                    },
+                ]),
             },
         },
         ProfilePreset {
@@ -422,6 +707,7 @@ pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
                     keys: vec!["Ctrl".into(), "Shift".into(), "V".into()],
                 },
                 key3: ActionConfig::None,
+                hub_modules: None,
             },
         },
         ProfilePreset {
@@ -439,6 +725,7 @@ pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
                 key1: ActionConfig::MediaPrev,
                 key2: ActionConfig::MediaNext,
                 key3: ActionConfig::MediaPlayPause,
+                hub_modules: None,
             },
         },
     ]
@@ -728,6 +1015,7 @@ impl Default for Config {
                     key1: ActionConfig::MediaPrev,
                     key2: ActionConfig::MediaNext,
                     key3: ActionConfig::MediaPlayPause,
+                    hub_modules: None,
                 },
                 ProfileConfig {
                     name: "firefox".to_string(),
@@ -752,6 +1040,7 @@ impl Default for Config {
                     key3: ActionConfig::Shortcut {
                         keys: vec!["Ctrl".to_string(), "R".to_string()],
                     },
+                    hub_modules: None,
                 },
                 ProfileConfig {
                     name: "gimp".to_string(),
@@ -776,6 +1065,7 @@ impl Default for Config {
                     key3: ActionConfig::Shortcut {
                         keys: vec!["B".to_string()],
                     },
+                    hub_modules: None,
                 },
             ],
         }
@@ -945,6 +1235,25 @@ impl Config {
             ] {
                 action.validate()?;
             }
+            if let Some(ref modules) = profile.hub_modules {
+                for item in modules {
+                    if item.id.trim().is_empty() || item.title.trim().is_empty() {
+                        return Err(KnobError::ConfigValidation(format!(
+                            "módulos do Hub no perfil '{}' devem possuir `id` e `title` não vazios",
+                            profile.name
+                        )));
+                    }
+                    match &item.kind {
+                        OverlayItemKind::QuickAction { action } => action.validate()?,
+                        OverlayItemKind::CustomGroup { entries } => {
+                            for entry in entries {
+                                entry.action.validate()?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
         if !self.profiles.iter().any(|p| p.name == self.active_profile) {
@@ -1008,6 +1317,76 @@ impl Config {
             .iter()
             .position(|p| p.name == self.active_profile)
             .unwrap_or(0)
+    }
+
+    /// Resolve a lista de módulos do Hub efetiva para um perfil, seguindo a cadeia `inherits`.
+    ///
+    /// Retorna `(módulos_efetivos, herdado_de)`:
+    /// - `herdado_de == None`: o próprio perfil define `hub_modules` (ou é `global` usando `overlay.items`).
+    /// - `herdado_de == Some(nome)`: herdado do perfil pai `nome` (ou `"global"`).
+    ///
+    /// Semântica:
+    /// - `None` em `hub_modules` → sobe pela cadeia `inherits` até encontrar `Some(...)`, caindo para `global` / `overlay.items`.
+    /// - `Some(vec![])` → lista vazia explícita (não herda).
+    /// - `Some(vec![...])` → substitui os módulos do pai.
+    pub fn resolve_hub_modules(
+        &self,
+        profile_name: &str,
+    ) -> (Vec<OverlayItemConfig>, Option<String>) {
+        let mut visited = HashSet::new();
+        let mut current = Some(profile_name.to_string());
+        let mut is_first = true;
+
+        while let Some(name) = current {
+            let key = name.to_ascii_lowercase();
+            if !visited.insert(key) {
+                break;
+            }
+            let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(&name))
+            else {
+                break;
+            };
+
+            if let Some(ref mods) = profile.hub_modules {
+                let inherited_from = if is_first {
+                    None
+                } else {
+                    Some(profile.name.clone())
+                };
+                return (mods.clone(), inherited_from);
+            }
+
+            is_first = false;
+            current = profile
+                .inherits
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+        }
+
+        // Fallback para `global.hub_modules` se existir e não foi visitado ainda
+        if !visited.contains(GLOBAL_PROFILE_NAME) {
+            if let Some(global) = self
+                .profiles
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(GLOBAL_PROFILE_NAME))
+            {
+                if let Some(ref mods) = global.hub_modules {
+                    return (mods.clone(), Some(global.name.clone()));
+                }
+            }
+        }
+
+        let inherited_from = if profile_name.eq_ignore_ascii_case(GLOBAL_PROFILE_NAME) {
+            None
+        } else {
+            Some(GLOBAL_PROFILE_NAME.to_string())
+        };
+        (self.overlay.items.clone(), inherited_from)
     }
 
     /// Resolve o `ProfileMode` a partir do campo persistido `mode` (`"auto"` ou `"manual:<nome>"`).
@@ -1164,6 +1543,7 @@ key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
             key1: ActionConfig::None,
             key2: ActionConfig::None,
             key3: ActionConfig::None,
+            hub_modules: None,
         });
         assert!(matches!(
             cfg.validate(),
@@ -1336,5 +1716,89 @@ knob_cw = "VolumeUp"
         let reloaded = Config::load_from_path(&path).expect("recarregar overlay config");
         let _ = fs::remove_file(&path);
         assert_eq!(cfg.overlay, reloaded.overlay);
+    }
+
+    #[test]
+    fn resolves_contextual_hub_modules_with_inheritance_and_explicit_empty() {
+        use super::{OverlayItemConfig, OverlayItemKind};
+
+        let mut cfg = Config::default();
+        // Sem `hub_modules` em `firefox` -> herda do `global` (overlay.items)
+        let (mods_default, inherited) = cfg.resolve_hub_modules("firefox");
+        assert_eq!(mods_default.len(), cfg.overlay.items.len());
+        assert_eq!(inherited.as_deref(), Some("global"));
+
+        // `firefox` define lista customizada -> substitui o pai
+        cfg.profiles[1].hub_modules = Some(vec![
+            OverlayItemConfig {
+                id: "browser_tabs".to_string(),
+                title: "Abas".to_string(),
+                enabled: true,
+                icon: None,
+                kind: OverlayItemKind::BrowserTabs,
+            },
+            OverlayItemConfig {
+                id: "zoom".to_string(),
+                title: "Zoom".to_string(),
+                enabled: true,
+                icon: None,
+                kind: OverlayItemKind::Zoom,
+            },
+        ]);
+        let (mods_ff, inherited_ff) = cfg.resolve_hub_modules("firefox");
+        assert_eq!(mods_ff.len(), 2);
+        assert_eq!(mods_ff[0].title, "Abas");
+        assert_eq!(inherited_ff, None);
+
+        // `gimp` herda de `firefox` sem definir `hub_modules` -> herda os 2 módulos de `firefox`
+        cfg.profiles[2].inherits = Some("firefox".to_string());
+        let (mods_gimp, inherited_gimp) = cfg.resolve_hub_modules("gimp");
+        assert_eq!(mods_gimp.len(), 2);
+        assert_eq!(inherited_gimp.as_deref(), Some("firefox"));
+
+        // `gimp` define lista vazia explícita -> Hub vazio (não herda!)
+        cfg.profiles[2].hub_modules = Some(Vec::new());
+        let (mods_empty, inherited_empty) = cfg.resolve_hub_modules("gimp");
+        assert!(mods_empty.is_empty());
+        assert_eq!(inherited_empty, None);
+    }
+
+    #[test]
+    fn ignores_unknown_hub_module_types_in_toml() {
+        let toml_text = r#"
+active_profile = "global"
+
+[[profiles]]
+name = "global"
+knob_cw = "VolumeUp"
+knob_ccw = "VolumeDown"
+
+[[profiles]]
+name = "firefox"
+window_class = "firefox"
+inherits = "global"
+
+[[profiles.hub_modules]]
+type = "browser_tabs"
+label = "Abas"
+
+[[profiles.hub_modules]]
+type = "modulo_que_nao_existe"
+label = "Invalido"
+
+[[profiles.hub_modules]]
+type = "undo_redo"
+label = "Desfazer"
+"#;
+        let path = unique_temp_path("unknown_hub_mod");
+        fs::write(&path, toml_text).expect("gravar toml");
+        let cfg = Config::load_from_path(&path).expect("carregar ignorando inválido");
+        let _ = fs::remove_file(&path);
+
+        let (mods, inherited) = cfg.resolve_hub_modules("firefox");
+        assert_eq!(inherited, None);
+        assert_eq!(mods.len(), 2);
+        assert_eq!(mods[0].title, "Abas");
+        assert_eq!(mods[1].title, "Desfazer");
     }
 }

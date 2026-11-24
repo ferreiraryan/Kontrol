@@ -19,6 +19,186 @@ pub const THUMB_COVER_WIDTH: u32 = 240;
 pub const THUMB_COVER_HEIGHT: u32 = 140;
 pub const THUMB_ICON_SIZE: u32 = 96;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextModuleKind {
+    BrowserTabs,
+    MediaControl,
+    Zoom,
+    ScrollPage,
+    BrushSize,
+    UndoRedo,
+}
+
+struct ContextModuleAction {
+    title: &'static str,
+    subtitle: &'static str,
+    glyph: &'static str,
+    action: ActionConfig,
+}
+
+impl ContextModuleKind {
+    fn actions(self) -> Vec<ContextModuleAction> {
+        match self {
+            Self::BrowserTabs => vec![
+                ContextModuleAction {
+                    title: "Próxima Aba",
+                    subtitle: "Ctrl+Tab",
+                    glyph: "⇥",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "Tab".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Aba Anterior",
+                    subtitle: "Ctrl+Shift+Tab",
+                    glyph: "⇤",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "Shift".into(), "Tab".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Nova Aba",
+                    subtitle: "Ctrl+T",
+                    glyph: "+",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "T".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Fechar Aba",
+                    subtitle: "Ctrl+W",
+                    glyph: "✕",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "W".into()],
+                    },
+                },
+            ],
+            Self::MediaControl => vec![
+                ContextModuleAction {
+                    title: "Play / Pause",
+                    subtitle: "playerctl",
+                    glyph: "⏯",
+                    action: ActionConfig::Exec {
+                        command: "playerctl play-pause".to_string(),
+                    },
+                },
+                ContextModuleAction {
+                    title: "Próxima Faixa",
+                    subtitle: "playerctl",
+                    glyph: "⏭",
+                    action: ActionConfig::Exec {
+                        command: "playerctl next".to_string(),
+                    },
+                },
+                ContextModuleAction {
+                    title: "Faixa Anterior",
+                    subtitle: "playerctl",
+                    glyph: "⏮",
+                    action: ActionConfig::Exec {
+                        command: "playerctl previous".to_string(),
+                    },
+                },
+            ],
+            Self::Zoom => vec![
+                ContextModuleAction {
+                    title: "Aumentar Zoom",
+                    subtitle: "Ctrl++",
+                    glyph: "+",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "Plus".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Diminuir Zoom",
+                    subtitle: "Ctrl+-",
+                    glyph: "−",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "Minus".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Resetar Zoom",
+                    subtitle: "Ctrl+0",
+                    glyph: "◎",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "0".into()],
+                    },
+                },
+            ],
+            Self::ScrollPage => vec![
+                ContextModuleAction {
+                    title: "Página Acima",
+                    subtitle: "PageUp",
+                    glyph: "↑",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["PageUp".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Página Abaixo",
+                    subtitle: "PageDown",
+                    glyph: "↓",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["PageDown".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Início",
+                    subtitle: "Home",
+                    glyph: "⤒",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Home".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Fim",
+                    subtitle: "End",
+                    glyph: "⤓",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["End".into()],
+                    },
+                },
+            ],
+            Self::BrushSize => vec![
+                ContextModuleAction {
+                    title: "Aumentar Pincel",
+                    subtitle: "]",
+                    glyph: "●",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["]".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Diminuir Pincel",
+                    subtitle: "[",
+                    glyph: "•",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["[".into()],
+                    },
+                },
+            ],
+            Self::UndoRedo => vec![
+                ContextModuleAction {
+                    title: "Desfazer",
+                    subtitle: "Ctrl+Z",
+                    glyph: "↶",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "Z".into()],
+                    },
+                },
+                ContextModuleAction {
+                    title: "Refazer",
+                    subtitle: "Ctrl+Shift+Z",
+                    glyph: "↷",
+                    action: ActionConfig::Shortcut {
+                        keys: vec!["Ctrl".into(), "Shift".into(), "Z".into()],
+                    },
+                },
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubScreen {
     Root,
@@ -29,8 +209,18 @@ pub enum HubScreen {
     Brightness,
     CaelestiaWallpapers,
     CaelestiaToggles,
-    CustomGroup { item_id: String, title: String },
-    CustomSlider { item_id: String, title: String },
+    ContextModule {
+        kind: ContextModuleKind,
+        title: String,
+    },
+    CustomGroup {
+        item_id: String,
+        title: String,
+    },
+    CustomSlider {
+        item_id: String,
+        title: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +321,9 @@ pub struct HubController {
     custom_slider_values: HashMap<String, i32>,
     desktop_apps: Vec<DesktopApp>,
     icon_path_cache: HashMap<String, Option<String>>,
+    /// Snapshot dos módulos habilitados do perfil ativo no momento da abertura do Hub.
+    /// Permanece travado até o Hub fechar para não trocar módulos no meio da interação.
+    active_modules: Vec<OverlayItemConfig>,
 }
 
 impl HubController {
@@ -157,6 +350,7 @@ impl HubController {
             custom_slider_values: HashMap::new(),
             desktop_apps,
             icon_path_cache: HashMap::new(),
+            active_modules: Vec::new(),
         }
     }
 
@@ -178,10 +372,24 @@ impl HubController {
         self.interaction = InteractionMode::Browsing;
         self.last_interaction = None;
         self.loading = false;
+        self.active_modules.clear();
     }
 
-    fn enabled_root_items<'a>(&self, overlay: &'a OverlayConfig) -> Vec<&'a OverlayItemConfig> {
-        overlay.items.iter().filter(|i| i.enabled).collect()
+    fn enabled_root_items(&self) -> &[OverlayItemConfig] {
+        &self.active_modules
+    }
+
+    fn resolve_enabled_modules(
+        config: &Config,
+        mode: &ProfileMode,
+        contextual_profile: &str,
+    ) -> Vec<OverlayItemConfig> {
+        let effective_profile = match mode {
+            ProfileMode::Manual(name) => name.as_str(),
+            ProfileMode::Auto => contextual_profile,
+        };
+        let (modules, _) = config.resolve_hub_modules(effective_profile);
+        modules.into_iter().filter(|i| i.enabled).collect()
     }
 
     fn is_confirm_event(event: KnobEvent, overlay: &OverlayConfig) -> bool {
@@ -216,14 +424,17 @@ impl HubController {
     ) -> Vec<HubEffect> {
         if !self.open {
             if event == KnobEvent::KnobPress && !self.settings_open {
-                let items = self.enabled_root_items(&config.overlay);
+                let items = Self::resolve_enabled_modules(config, mode, contextual_profile);
                 if items.is_empty() {
                     return Vec::new();
                 }
+                self.active_modules = items;
                 self.open = true;
                 self.screen = HubScreen::Root;
                 self.interaction = InteractionMode::Browsing;
-                self.root_cursor = self.root_cursor.min(items.len().saturating_sub(1));
+                self.root_cursor = self
+                    .root_cursor
+                    .min(self.active_modules.len().saturating_sub(1));
                 self.last_interaction = Some(now);
                 self.loading = false;
                 let vm = self.build_view_model(config, mode, contextual_profile);
@@ -518,7 +729,7 @@ impl HubController {
                             ..
                         },
                     ..
-                }) = config.overlay.items.iter().find(|i| i.id == id_clone)
+                }) = self.active_modules.iter().find(|i| i.id == id_clone)
                 {
                     let cur = self
                         .custom_slider_values
@@ -608,7 +819,7 @@ impl HubController {
                             ..
                         },
                     ..
-                }) = config.overlay.items.iter().find(|i| i.id == *item_id)
+                }) = self.active_modules.iter().find(|i| i.id == *item_id)
                 {
                     if !cmd.trim().is_empty() {
                         effects.push(HubEffect::System(SystemRequest::RunShellCommand {
@@ -639,8 +850,7 @@ impl HubController {
 
         match self.screen.clone() {
             HubScreen::Root => {
-                let items = self.enabled_root_items(&config.overlay);
-                let Some(item) = items.get(self.root_cursor).copied().cloned() else {
+                let Some(item) = self.enabled_root_items().get(self.root_cursor).cloned() else {
                     return Vec::new();
                 };
                 self.enter_root_item(item, config, mode, contextual_profile)
@@ -759,10 +969,24 @@ impl HubController {
                     Vec::new()
                 }
             }
+            HubScreen::ContextModule { kind, .. } => {
+                let actions = kind.actions();
+                if let Some(entry) = actions.get(self.sub_cursor) {
+                    vec![
+                        HubEffect::ExecuteAction(entry.action.clone()),
+                        HubEffect::RenderOverlay(self.build_view_model(
+                            config,
+                            mode,
+                            contextual_profile,
+                        )),
+                    ]
+                } else {
+                    Vec::new()
+                }
+            }
             HubScreen::CustomGroup { item_id, .. } => {
-                let action = config
-                    .overlay
-                    .items
+                let action = self
+                    .active_modules
                     .iter()
                     .find(|i| i.id == item_id)
                     .and_then(|item| match &item.kind {
@@ -844,6 +1068,48 @@ impl HubController {
                 self.loading = true;
                 effects.push(HubEffect::System(SystemRequest::FetchCaelestiaToggles));
             }
+            OverlayItemKind::BrowserTabs => {
+                self.screen = HubScreen::ContextModule {
+                    kind: ContextModuleKind::BrowserTabs,
+                    title: item.title,
+                };
+                self.loading = false;
+            }
+            OverlayItemKind::MediaControl => {
+                self.screen = HubScreen::ContextModule {
+                    kind: ContextModuleKind::MediaControl,
+                    title: item.title,
+                };
+                self.loading = false;
+            }
+            OverlayItemKind::Zoom => {
+                self.screen = HubScreen::ContextModule {
+                    kind: ContextModuleKind::Zoom,
+                    title: item.title,
+                };
+                self.loading = false;
+            }
+            OverlayItemKind::ScrollPage => {
+                self.screen = HubScreen::ContextModule {
+                    kind: ContextModuleKind::ScrollPage,
+                    title: item.title,
+                };
+                self.loading = false;
+            }
+            OverlayItemKind::BrushSize => {
+                self.screen = HubScreen::ContextModule {
+                    kind: ContextModuleKind::BrushSize,
+                    title: item.title,
+                };
+                self.loading = false;
+            }
+            OverlayItemKind::UndoRedo => {
+                self.screen = HubScreen::ContextModule {
+                    kind: ContextModuleKind::UndoRedo,
+                    title: item.title,
+                };
+                self.loading = false;
+            }
             OverlayItemKind::QuickAction { action } => {
                 self.close_internal();
                 return vec![HubEffect::ExecuteAction(action), HubEffect::CloseOverlay];
@@ -879,7 +1145,7 @@ impl HubController {
 
     fn current_item_count(&self, config: &Config) -> usize {
         match &self.screen {
-            HubScreen::Root => self.enabled_root_items(&config.overlay).len(),
+            HubScreen::Root => self.enabled_root_items().len(),
             HubScreen::Profiles => config.profiles.len() + 1,
             HubScreen::AudioMixer => self.audio_mixer.streams.len(),
             HubScreen::AudioOutputs => self.audio_outputs.outputs.len(),
@@ -887,9 +1153,9 @@ impl HubController {
             HubScreen::Brightness => self.brightness.monitors.len(),
             HubScreen::CaelestiaWallpapers => self.wallpapers.items.len(),
             HubScreen::CaelestiaToggles => self.caelestia_toggles.items.len(),
-            HubScreen::CustomGroup { item_id, .. } => config
-                .overlay
-                .items
+            HubScreen::ContextModule { kind, .. } => kind.actions().len(),
+            HubScreen::CustomGroup { item_id, .. } => self
+                .active_modules
                 .iter()
                 .find(|i| i.id == *item_id)
                 .and_then(|i| match &i.kind {
@@ -918,11 +1184,7 @@ impl HubController {
             .clone()
         {
             HubScreen::Root => {
-                let items: Vec<OverlayItemConfig> = self
-                    .enabled_root_items(&config.overlay)
-                    .into_iter()
-                    .cloned()
-                    .collect();
+                let items: Vec<OverlayItemConfig> = self.enabled_root_items().to_vec();
                 let mut cards = Vec::with_capacity(items.len());
                 for item in items {
                     let (subtitle, glyph, auto_icon_hint) = match &item.kind {
@@ -935,6 +1197,14 @@ impl HubController {
                             ("Caelestia".to_string(), "▣", None)
                         }
                         OverlayItemKind::CaelestiaToggles => ("Sistema".to_string(), "⚡", None),
+                        OverlayItemKind::BrowserTabs => {
+                            ("Abas do Navegador".to_string(), "⇥", None)
+                        }
+                        OverlayItemKind::MediaControl => ("playerctl".to_string(), "⏯", None),
+                        OverlayItemKind::Zoom => ("Zoom +/-/0".to_string(), "⊕", None),
+                        OverlayItemKind::ScrollPage => ("Página".to_string(), "⇕", None),
+                        OverlayItemKind::BrushSize => ("Pincel [ / ]".to_string(), "●", None),
+                        OverlayItemKind::UndoRedo => ("Ctrl+Z / Shift+Z".to_string(), "↶", None),
                         OverlayItemKind::QuickAction { action } => {
                             let hint = match action {
                                 ActionConfig::Launch { desktop_file } => Some(desktop_file.clone()),
@@ -1260,10 +1530,36 @@ impl HubController {
                     "Girar: Controle • Knob/K3: Alternar • K1: Voltar".to_string(),
                 )
             }
+            HubScreen::ContextModule { kind, title } => {
+                let cards: Vec<HubCardView> = kind
+                    .actions()
+                    .into_iter()
+                    .map(|act| HubCardView {
+                        is_empty_slot: false,
+                        title: act.title.to_string(),
+                        subtitle: act.subtitle.to_string(),
+                        badge: "▶".to_string(),
+                        glyph: act.glyph.to_string(),
+                        image_path: None,
+                        image_is_cover: false,
+                        value_percent: -1,
+                        max_percent: 100,
+                        is_slider: false,
+                        is_active: false,
+                        is_muted: false,
+                    })
+                    .collect();
+                (
+                    "Hub".to_string(),
+                    title,
+                    cards,
+                    "Nenhuma ação disponível.".to_string(),
+                    "Girar: Escolher • Knob/K3: Executar • K1: Voltar".to_string(),
+                )
+            }
             HubScreen::CustomGroup { item_id, title } => {
-                let entries = config
-                    .overlay
-                    .items
+                let entries = self
+                    .active_modules
                     .iter()
                     .find(|i| i.id == item_id)
                     .and_then(|i| match &i.kind {
@@ -1802,6 +2098,104 @@ mod tests {
             hub.check_timeout(t0 + Duration::from_secs(5), &cfg.overlay),
             Some(HubEffect::CloseOverlay)
         );
+        assert!(!hub.is_open());
+    }
+
+    #[test]
+    fn contextual_hub_uses_profile_modules_locks_snapshot_while_open_and_executes_native_actions() {
+        use crate::config::{ActionConfig, OverlayItemConfig, OverlayItemKind};
+
+        let mut cfg = Config::default();
+        cfg.profiles[1].hub_modules = Some(vec![
+            OverlayItemConfig {
+                id: "browser_tabs".to_string(),
+                title: "Abas".to_string(),
+                enabled: true,
+                icon: None,
+                kind: OverlayItemKind::BrowserTabs,
+            },
+            OverlayItemConfig {
+                id: "zoom".to_string(),
+                title: "Zoom".to_string(),
+                enabled: true,
+                icon: None,
+                kind: OverlayItemKind::Zoom,
+            },
+        ]);
+        cfg.profiles[2].hub_modules = Some(Vec::new()); // gimp com lista vazia explícita
+
+        let mode = ProfileMode::Auto;
+        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let t0 = Instant::now();
+
+        // 1) Abrir no Firefox -> mostra módulos do Firefox ("Abas" no centro)
+        let fx_open = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "firefox");
+        let Some(HubEffect::RenderOverlay(vm)) = fx_open.first() else {
+            panic!("esperava RenderOverlay ao abrir no Firefox");
+        };
+        assert_eq!(vm.cards[3].title, "Abas");
+        assert_eq!(vm.scroll_indicator, "1 / 2");
+
+        // 2) Mesmo se o contexto mudar para "global" enquanto o Hub está aberto, mantém snapshot!
+        let fx_rot = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(50),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let Some(HubEffect::RenderOverlay(vm_rot)) = fx_rot.first() else {
+            panic!("esperava RenderOverlay");
+        };
+        assert_eq!(vm_rot.cards[3].title, "Zoom");
+        assert_eq!(vm_rot.scroll_indicator, "2 / 2");
+
+        // 3) Entrar em "Zoom" e confirmar -> executa Ctrl+Plus
+        let _ = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(100),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let fx_exec = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(150),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx_exec.contains(&HubEffect::ExecuteAction(ActionConfig::Shortcut {
+                keys: vec!["Ctrl".into(), "Plus".into()],
+            }))
+        );
+
+        // 4) Fechar e reabrir no GIMP (lista vazia explícita) -> não abre
+        let _ = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(200),
+            &cfg,
+            &mode,
+            "gimp",
+        );
+        let _ = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(250),
+            &cfg,
+            &mode,
+            "gimp",
+        );
+        assert!(!hub.is_open());
+
+        let fx_empty = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(300),
+            &cfg,
+            &mode,
+            "gimp",
+        );
+        assert!(fx_empty.is_empty());
         assert!(!hub.is_open());
     }
 }

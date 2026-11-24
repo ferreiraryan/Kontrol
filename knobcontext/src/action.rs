@@ -362,6 +362,8 @@ pub fn parse_key_name(name: &str) -> Result<Key, KnobError> {
         "end" => Key::End,
         "pageup" => Key::PageUp,
         "pagedown" => Key::PageDown,
+        "plus" => Key::Unicode('+'),
+        "minus" => Key::Unicode('-'),
         "f1" => Key::F1,
         "f2" => Key::F2,
         "f3" => Key::F3,
@@ -584,6 +586,7 @@ mod tests {
             key1: ActionConfig::None,
             key2: ActionConfig::None,
             key3: ActionConfig::None,
+            hub_modules: None,
         });
         let mut dispatcher = ActionDispatcher::new(cfg.profiles, 0, MockExecutor::default());
 

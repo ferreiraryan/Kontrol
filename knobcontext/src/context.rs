@@ -516,6 +516,7 @@ mod tests {
             key1: ActionConfig::None,
             key2: ActionConfig::None,
             key3: ActionConfig::None,
+            hub_modules: None,
         });
         cfg.profiles.push(ProfileConfig {
             name: "games_fs".to_string(),
@@ -530,6 +531,7 @@ mod tests {
             key1: ActionConfig::None,
             key2: ActionConfig::None,
             key3: ActionConfig::None,
+            hub_modules: None,
         });
 
         let mut ctx = ContextState::new();
