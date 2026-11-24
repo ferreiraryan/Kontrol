@@ -1,0 +1,440 @@
+export struct ProfileListItem {
+    name: string,
+    subtitle: string,
+    is-global: bool,
+    has-custom-hub: bool,
+}
+
+export struct ControlSlotView {
+    summary: string,
+    category: int,
+    is-inherited: bool,
+    inherited-from: string,
+    can-clear: bool,
+}
+
+export struct AppListItem {
+    name: string,
+    desktop-file: string,
+}
+
+export struct MacroStepItem {
+    label: string,
+    is-wait: bool,
+}
+
+export global Theme {
+    // Superfícies (alinhadas ao Overlay e Mini-HUD)
+    out property <color> bg-window: #11141b;
+    out property <color> bg-surface: #171b24;
+    out property <color> bg-elevated: #1e2432;
+    out property <color> bg-card: #151922;
+    out property <color> bg-input: #0e1118;
+    out property <color> bg-scrim: rgba(7, 9, 14, 0.72);
+
+    // Bordas
+    out property <color> border-subtle: rgba(255, 255, 255, 0.07);
+    out property <color> border-default: rgba(255, 255, 255, 0.12);
+    out property <color> border-hover: rgba(255, 255, 255, 0.22);
+    out property <color> border-focus: rgba(96, 165, 250, 0.75);
+    out property <color> border-accent: rgba(96, 165, 250, 0.55);
+
+    // Acentos semânticos
+    out property <color> accent: #3b82f6;
+    out property <color> accent-hover: #2563eb;
+    out property <color> accent-soft: rgba(59, 130, 246, 0.18);
+    out property <color> accent-text: #93c5fd;
+    out property <color> success: #22c55e;
+    out property <color> success-soft: rgba(34, 197, 94, 0.16);
+    out property <color> warning: #fbbf24;
+    out property <color> warning-soft: rgba(251, 191, 36, 0.16);
+    out property <color> danger: #ef4444;
+    out property <color> danger-soft: rgba(220, 38, 38, 0.18);
+    out property <color> danger-hover: rgba(220, 38, 38, 0.32);
+    out property <color> danger-border: rgba(248, 113, 113, 0.42);
+    out property <color> danger-text: #fca5a5;
+
+    // Tipografia
+    out property <color> text-primary: #f8fafc;
+    out property <color> text-secondary: #cbd5e1;
+    out property <color> text-muted: #94a3b8;
+    out property <color> text-dim: #64748b;
+}
+
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> active: false;
+    in property <bool> danger: false;
+    in property <bool> ghost: false;
+    in property <bool> enabled: true;
+    in property <length> font-size: 12px;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 7px;
+    opacity: root.enabled ? 1.0 : 0.42;
+    background: !root.enabled
+        ? rgba(255, 255, 255, 0.04)
+        : (root.primary
+            ? (touch.has-hover ? #3b82f6 : #2563eb)
+            : (root.active
+                ? rgba(59, 130, 246, 0.24)
+                : (root.danger
+                    ? (touch.has-hover ? Theme.danger-hover : Theme.danger-soft)
+                    : (root.ghost
+                        ? (touch.has-hover ? rgba(255, 255, 255, 0.09) : transparent)
+                        : (touch.has-hover ? rgba(255, 255, 255, 0.13) : rgba(255, 255, 255, 0.07))))));
+    border-width: root.ghost && !touch.has-hover ? 0px : 1px;
+    border-color: !root.enabled
+        ? Theme.border-subtle
+        : (root.primary
+            ? rgba(147, 197, 253, 0.45)
+            : (root.active
+                ? rgba(96, 165, 250, 0.65)
+                : (root.danger ? Theme.danger-border : Theme.border-default)));
+
+    animate background { duration: 110ms; easing: ease-out; }
+    animate border-color { duration: 110ms; easing: ease-out; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+
+        Text {
+            text: root.text;
+            color: root.danger ? #fecaca : (root.active ? #dbeafe : Theme.text-primary);
+            font-size: root.font-size;
+            font-weight: root.primary || root.active ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled {
+                root.clicked();
+            }
+        }
+    }
+}
+
+export component AppInput inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text;
+    callback edited(string);
+
+    height: 32px;
+    border-radius: 7px;
+    background: Theme.bg-input;
+    border-width: 1px;
+    border-color: ti.has-focus ? Theme.border-focus : Theme.border-default;
+
+    animate border-color { duration: 120ms; easing: ease-out; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: stretch;
+
+        ti := TextInput {
+            text <=> root.text;
+            color: Theme.text-primary;
+            font-size: 12px;
+            vertical-alignment: center;
+            single-line: true;
+            edited => { root.edited(self.text); }
+        }
+    }
+
+    if root.text == "" && !ti.has-focus: Text {
+        x: 10px;
+        text: root.placeholder;
+        color: Theme.text-dim;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+}
+
+export component AppField inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> value;
+    callback edited(string);
+
+    height: 52px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 4px;
+
+        Text {
+            text: root.label;
+            color: Theme.text-muted;
+            font-size: 11px;
+            font-weight: 500;
+            overflow: elide;
+        }
+
+        AppInput {
+            placeholder: root.placeholder;
+            text <=> root.value;
+            edited(v) => { root.edited(v); }
+        }
+    }
+}
+
+export component ToggleSwitch inherits Rectangle {
+    in property <bool> checked: false;
+    in property <bool> enabled: true;
+    callback toggled();
+
+    width: 38px;
+    height: 20px;
+    border-radius: 10px;
+    opacity: root.enabled ? 1.0 : 0.45;
+    background: root.checked ? Theme.accent : rgba(255, 255, 255, 0.14);
+    border-width: 1px;
+    border-color: root.checked ? rgba(147, 197, 253, 0.5) : Theme.border-default;
+
+    animate background { duration: 130ms; easing: ease-out; }
+
+    Rectangle {
+        x: root.checked ? 19px : 2px;
+        y: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: #ffffff;
+
+        animate x { duration: 130ms; easing: ease-out; }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled {
+                root.toggled();
+            }
+        }
+    }
+}
+
+export component SegmentedTwo inherits Rectangle {
+    in property <string> first-label;
+    in property <string> second-label;
+    in property <int> selected-index: 0;
+    callback selected(int);
+
+    height: 32px;
+    border-radius: 8px;
+    background: Theme.bg-input;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 6px;
+            background: root.selected-index == 0
+                ? Theme.bg-elevated
+                : (t0.has-hover ? rgba(255, 255, 255, 0.05) : transparent);
+            border-width: root.selected-index == 0 ? 1px : 0px;
+            border-color: Theme.border-default;
+
+            animate background { duration: 120ms; easing: ease-out; }
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: center;
+                Text {
+                    text: root.first-label;
+                    color: root.selected-index == 0 ? Theme.text-primary : Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: root.selected-index == 0 ? 600 : 500;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            t0 := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected(0); }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 6px;
+            background: root.selected-index == 1
+                ? Theme.bg-elevated
+                : (t1.has-hover ? rgba(255, 255, 255, 0.05) : transparent);
+            border-width: root.selected-index == 1 ? 1px : 0px;
+            border-color: Theme.border-default;
+
+            animate background { duration: 120ms; easing: ease-out; }
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: center;
+                Text {
+                    text: root.second-label;
+                    color: root.selected-index == 1 ? Theme.text-primary : Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: root.selected-index == 1 ? 600 : 500;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            t1 := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected(1); }
+            }
+        }
+    }
+}
+
+export component StepperControl inherits Rectangle {
+    in property <string> value-text;
+    callback decrement();
+    callback increment();
+
+    height: 28px;
+    border-radius: 7px;
+    background: Theme.bg-input;
+    border-width: 1px;
+    border-color: Theme.border-default;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        Rectangle {
+            width: 24px;
+            border-radius: 5px;
+            background: minus-t.has-hover ? rgba(255, 255, 255, 0.12) : transparent;
+
+            Text {
+                text: "−";
+                color: Theme.text-primary;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            minus-t := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.decrement(); }
+            }
+        }
+
+        Text {
+            min-width: 34px;
+            text: root.value-text;
+            color: Theme.text-primary;
+            font-size: 12px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            width: 24px;
+            border-radius: 5px;
+            background: plus-t.has-hover ? rgba(255, 255, 255, 0.12) : transparent;
+
+            Text {
+                text: "+";
+                color: Theme.text-primary;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            plus-t := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.increment(); }
+            }
+        }
+    }
+}
+
+export component ActionCategoryBadge inherits Rectangle {
+    // 0=Atalho, 1=Mídia, 2=App, 3=URL, 4=Arquivo, 5=Comando, 6=Scroll, 7=Macro, 8=Nenhuma
+    in property <int> category: 8;
+    in property <bool> inherited: false;
+
+    height: 20px;
+    border-radius: 5px;
+    background: root.inherited
+        ? rgba(148, 163, 184, 0.12)
+        : (root.category == 0 ? rgba(59, 130, 246, 0.20)
+        : (root.category == 1 ? rgba(168, 85, 247, 0.20)
+        : (root.category == 2 ? rgba(34, 197, 94, 0.18)
+        : (root.category == 3 ? rgba(6, 182, 212, 0.18)
+        : (root.category == 4 ? rgba(20, 184, 166, 0.18)
+        : (root.category == 5 ? rgba(245, 158, 11, 0.18)
+        : (root.category == 6 ? rgba(99, 102, 241, 0.20)
+        : (root.category == 7 ? rgba(244, 63, 94, 0.20)
+        : rgba(255, 255, 255, 0.06)))))))));
+    border-width: 1px;
+    border-color: root.inherited
+        ? rgba(148, 163, 184, 0.25)
+        : (root.category == 0 ? rgba(96, 165, 250, 0.35)
+        : (root.category == 1 ? rgba(192, 132, 252, 0.35)
+        : (root.category == 2 ? rgba(74, 222, 128, 0.35)
+        : (root.category == 3 ? rgba(34, 211, 238, 0.35)
+        : (root.category == 4 ? rgba(45, 212, 191, 0.35)
+        : (root.category == 5 ? rgba(251, 191, 36, 0.35)
+        : (root.category == 6 ? rgba(129, 140, 248, 0.35)
+        : (root.category == 7 ? rgba(251, 113, 133, 0.35)
+        : rgba(255, 255, 255, 0.10)))))))));
+
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        alignment: center;
+
+        Text {
+            text: root.inherited
+                ? "Herdado"
+                : (root.category == 0 ? "Atalho"
+                : (root.category == 1 ? "Mídia"
+                : (root.category == 2 ? "App"
+                : (root.category == 3 ? "URL"
+                : (root.category == 4 ? "Arquivo"
+                : (root.category == 5 ? "Comando"
+                : (root.category == 6 ? "Scroll"
+                : (root.category == 7 ? "Macro"
+                : "Vazio"))))))));
+            color: root.inherited
+                ? Theme.text-muted
+                : (root.category == 0 ? #93c5fd
+                : (root.category == 1 ? #d8b4fe
+                : (root.category == 2 ? #86efac
+                : (root.category == 3 ? #67e8f9
+                : (root.category == 4 ? #5eead4
+                : (root.category == 5 ? #fde68a
+                : (root.category == 6 ? #a5b4fc
+                : (root.category == 7 ? #fda4af
+                : Theme.text-dim))))))));
+            font-size: 10px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+}

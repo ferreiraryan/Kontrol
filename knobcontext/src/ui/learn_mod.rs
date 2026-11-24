@@ -398,6 +398,22 @@ impl LearnController {
             });
         }
 
+        // Cancelamento via botão "Cancelar (Esc)" na interface
+        {
+            let state_ref = Rc::clone(&state);
+            let cancel_cb = Rc::clone(&on_cancel);
+            let win_slot_ref = Rc::clone(&win_slot);
+            let timer_ref = Rc::clone(&timer);
+            win.on_cancel_requested(move || {
+                timer_ref.stop();
+                state_ref.borrow_mut().cancel();
+                if let Some(w) = win_slot_ref.borrow_mut().take() {
+                    let _ = w.hide();
+                }
+                cancel_cb();
+            });
+        }
+
         // Fechamento manual pelo botão X do WM
         {
             let state_ref = Rc::clone(&state);
