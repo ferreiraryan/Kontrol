@@ -202,3 +202,65 @@ key1 = "Launch:firefox.desktop"
 key2 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
 key3 = "Scroll:down:3"
 ```
+
+## Presets de Atalhos por Aplicativo (Fase 8)
+
+No **Seletor de Ações → Atalho de teclado**, o menu **Presets ▾** permite selecionar ações nomeadas por aplicativo (sugerindo automaticamente o app correspondente ao perfil editado). Ao editar manualmente o campo de atalho, o indicador `Preset: <App> — <Ação>` desaparece automaticamente.
+
+| Aplicativo | Ação | Atalho |
+|---|---|---|
+| **Firefox** | Nova aba | `Ctrl+T` |
+| **Firefox** | Reabrir última aba fechada | `Ctrl+Shift+T` |
+| **Firefox** | Próxima aba | `Ctrl+Tab` |
+| **Firefox** | Aba anterior | `Ctrl+Shift+Tab` |
+| **Firefox** | Fechar aba | `Ctrl+W` |
+| **Firefox** | Ir para endereço | `Ctrl+L` |
+| **Firefox** | Atualizar página | `F5` |
+| **VSCode** | Paleta de comandos | `Ctrl+Shift+P` |
+| **VSCode** | Terminal integrado | ``Ctrl+` `` |
+| **VSCode** | Salvar | `Ctrl+S` |
+| **VSCode** | Buscar em arquivos | `Ctrl+Shift+F` |
+| **VSCode** | Ir para linha | `Ctrl+G` |
+| **VSCode** | Comentar linha | `Ctrl+/` |
+| **Terminal** | Limpar tela | `Ctrl+L` |
+| **Terminal** | Interromper processo | `Ctrl+C` |
+| **Terminal** | Suspender processo | `Ctrl+Z` |
+| **Terminal** | Buscar histórico | `Ctrl+R` |
+
+## Integrações Diretas (Providers)
+
+Além da simulação de teclado via `enigo`, o KnobContext suporta **providers de integração direta** (`src/providers/`), permitindo controlar aplicativos via API sem depender de atalhos ou foco de janela.
+
+- **Limitação conhecida**: navegadores como o **Firefox** não expõem API local de controle de abas, portanto continuam usando **presets de atalhos**; **OBS Studio** (WebSocket 5.x) e players **MPRIS** (D-Bus) usam controle direto.
+- Todos os providers usam **conexão preguiçosa** (não abrem WebSocket nem D-Bus até serem usados ou testados na aba **Integrações**).
+
+### Providers e Comandos Disponíveis
+
+| Provider (`id`) | Comando (`command`) | Argumentos | Exemplo no TOML |
+|---|---|---|---|
+| **OBS Studio** (`obs`) | `toggle_record` | — | `Provider:obs:toggle_record` |
+| **OBS Studio** (`obs`) | `start_record` | — | `Provider:obs:start_record` |
+| **OBS Studio** (`obs`) | `stop_record` | — | `Provider:obs:stop_record` |
+| **OBS Studio** (`obs`) | `toggle_stream` | — | `Provider:obs:toggle_stream` |
+| **OBS Studio** (`obs`) | `start_stream` | — | `Provider:obs:start_stream` |
+| **OBS Studio** (`obs`) | `stop_stream` | — | `Provider:obs:stop_stream` |
+| **OBS Studio** (`obs`) | `toggle_input_mute` | `input_name` | `Provider:obs:toggle_input_mute:input_name=Mic/Aux` |
+| **OBS Studio** (`obs`) | `set_scene` | `scene_name` | `Provider:obs:set_scene:scene_name=Live` |
+| **Mídia MPRIS** (`mpris`) | `play_pause` | — | `Provider:mpris:play_pause` |
+| **Mídia MPRIS** (`mpris`) | `next` | — | `Provider:mpris:next` |
+| **Mídia MPRIS** (`mpris`) | `previous` | — | `Provider:mpris:previous` |
+| **Mídia MPRIS** (`mpris`) | `stop` | — | `Provider:mpris:stop` |
+| **Mídia MPRIS** (`mpris`) | `seek` | `seconds` | `Provider:mpris:seek:seconds=10` |
+
+### Configuração do OBS WebSocket (`config.toml`)
+
+Habilite em **Configurações → Integrações** (ou edite diretamente `~/.config/knobcontext/config.toml`). No OBS Studio, ative em **Ferramentas → Configurações do Servidor WebSocket**:
+
+```toml
+[providers.obs]
+enabled = true
+port = 4455
+password = "sua_senha_opcional" # omita se desabilitar autenticação no OBS
+```
+
+O provider **MPRIS** não requer configuração e detecta automaticamente qualquer player Linux compatível em execução (Spotify, Firefox, Chromium, mpv, VLC).
