@@ -3,8 +3,9 @@ use crate::actions_catalog::{
     ACTION_TYPE_TITLES,
 };
 use crate::config::{
-    builtin_profile_presets, default_overlay_items, ActionConfig, Config, CustomGroupEntry,
-    OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior, ProfileConfig, GLOBAL_PROFILE_NAME,
+    builtin_hub_module_templates, builtin_profile_presets, default_overlay_items, ActionConfig,
+    Config, CustomGroupEntry, OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior,
+    ProfileConfig, GLOBAL_PROFILE_NAME,
 };
 use crate::context::ActiveWindowInfo;
 use crate::error::KnobError;
@@ -25,7 +26,10 @@ enum EditorTarget {
 struct SettingsDraft {
     base_config: Config,
     active_tab: usize,
+    profile_subtab: usize,
     selected_index: usize,
+    profile_hub_selected_index: usize,
+    profile_hub_picker_open: bool,
     hub_selected_index: usize,
     hub_group_selected_entry: usize,
     dirty: bool,
@@ -65,7 +69,10 @@ impl SettingsController {
         let draft = Rc::new(RefCell::new(SettingsDraft {
             base_config: initial_config,
             active_tab: 0,
+            profile_subtab: 0,
             selected_index: 0,
+            profile_hub_selected_index: 0,
+            profile_hub_picker_open: false,
             hub_selected_index: 0,
             hub_group_selected_entry: 0,
             dirty: false,
@@ -102,6 +109,14 @@ impl SettingsController {
             .map(|p| SharedString::from(p.label))
             .collect();
         window.set_preset_labels(ModelRc::from(Rc::new(VecModel::from(preset_labels))));
+
+        let template_labels: Vec<SharedString> = builtin_hub_module_templates()
+            .iter()
+            .map(|t| SharedString::from(format!("{} — {}", t.title, t.kind.kind_label())))
+            .collect();
+        window.set_profile_hub_template_labels(ModelRc::from(Rc::new(VecModel::from(
+            template_labels,
+        ))));
 
         let draft = Rc::clone(&self.draft);
         let is_open = Rc::clone(&self.is_open);
@@ -145,7 +160,178 @@ impl SettingsController {
                 let target =
                     (idx.max(0) as usize).min(d.base_config.profiles.len().saturating_sub(1));
                 d.selected_index = target;
+                d.profile_hub_selected_index = 0;
+                d.profile_hub_picker_open = false;
                 win.set_error_message(SharedString::from(""));
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Alternar sub-aba do perfil (0 = Ações do Knob, 1 = Módulos do Hub)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_select_profile_subtab(move |sub| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                    win.set_error_message(SharedString::from(err.to_string()));
+                    return;
+                }
+                d.profile_subtab = if sub == 1 { 1 } else { 0 };
+                win.set_error_message(SharedString::from(""));
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Customizar módulos do Hub para o perfil selecionado (materializa lista herdada)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_customize(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                if materialize_profile_hub_modules(&mut d) {
+                    d.dirty = true;
+                }
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Restaurar herança de módulos do Hub (`hub_modules = None`)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_reset_inherit(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                let idx = d.selected_index;
+                if let Some(profile) = d.base_config.profiles.get_mut(idx) {
+                    if profile.hub_modules.is_some() {
+                        profile.hub_modules = None;
+                        d.profile_hub_selected_index = 0;
+                        d.dirty = true;
+                    }
+                }
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Selecionar módulo na lista do perfil
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_select_module(move |midx| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                apply_profile_hub_title_to_draft(&win, &mut d);
+                d.profile_hub_selected_index = midx.max(0) as usize;
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Reordenar módulo do Hub do perfil (↑/↓)
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_move_module(move |delta| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                apply_profile_hub_title_to_draft(&win, &mut d);
+                materialize_profile_hub_modules(&mut d);
+                let pidx = d.selected_index;
+                let cur = d.profile_hub_selected_index;
+                if let Some(mods) = d
+                    .base_config
+                    .profiles
+                    .get_mut(pidx)
+                    .and_then(|p| p.hub_modules.as_mut())
+                {
+                    let len = mods.len();
+                    if cur < len {
+                        let target = if delta < 0 {
+                            cur.saturating_sub(1)
+                        } else {
+                            (cur + 1).min(len.saturating_sub(1))
+                        };
+                        if target != cur {
+                            mods.swap(cur, target);
+                            d.profile_hub_selected_index = target;
+                            d.dirty = true;
+                        }
+                    }
+                }
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Remover módulo do Hub do perfil
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_remove_module(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                materialize_profile_hub_modules(&mut d);
+                let pidx = d.selected_index;
+                let cur = d.profile_hub_selected_index;
+                if let Some(mods) = d
+                    .base_config
+                    .profiles
+                    .get_mut(pidx)
+                    .and_then(|p| p.hub_modules.as_mut())
+                {
+                    if cur < mods.len() {
+                        mods.remove(cur);
+                        d.profile_hub_selected_index = cur.min(mods.len().saturating_sub(1));
+                        d.dirty = true;
+                    }
+                }
+                sync_all_to_ui(&win, &d);
+            });
+        }
+
+        // Abrir/fechar seletor "+ Adicionar módulo" do perfil
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_toggle_picker(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                d.profile_hub_picker_open = !d.profile_hub_picker_open;
+                win.set_profile_hub_picker_open(d.profile_hub_picker_open);
+            });
+        }
+
+        // Adicionar template de módulo escolhido ao perfil
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_profile_hub_add_template(move |tidx| {
+                let Some(win) = weak.upgrade() else { return };
+                let templates = builtin_hub_module_templates();
+                let Some(mut item) = templates.get(tidx.max(0) as usize).cloned() else {
+                    return;
+                };
+                let mut d = draft_ref.borrow_mut();
+                apply_profile_hub_title_to_draft(&win, &mut d);
+                materialize_profile_hub_modules(&mut d);
+                let pidx = d.selected_index;
+                if let Some(mods) = d
+                    .base_config
+                    .profiles
+                    .get_mut(pidx)
+                    .and_then(|p| p.hub_modules.as_mut())
+                {
+                    if mods.iter().any(|existing| existing.id == item.id) {
+                        item.id = next_unique_hub_id(mods, &item.id);
+                    }
+                    mods.push(item);
+                    d.profile_hub_selected_index = mods.len() - 1;
+                    d.dirty = true;
+                }
+                d.profile_hub_picker_open = false;
+                win.set_profile_hub_picker_open(false);
                 sync_all_to_ui(&win, &d);
             });
         }
@@ -176,6 +362,7 @@ impl SettingsController {
                     key1: ActionConfig::None,
                     key2: ActionConfig::None,
                     key3: ActionConfig::None,
+                    hub_modules: None,
                 });
                 d.selected_index = d.base_config.profiles.len() - 1;
                 d.dirty = true;
@@ -1507,6 +1694,77 @@ fn sync_profile_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         win.set_summary_key1(format_summary(&profile.key1, &draft.desktop_apps));
         win.set_summary_key2(format_summary(&profile.key2, &draft.desktop_apps));
         win.set_summary_key3(format_summary(&profile.key3, &draft.desktop_apps));
+
+        // Módulos do Hub deste perfil (próprios ou herdados)
+        win.set_profile_subtab(draft.profile_subtab as i32);
+        win.set_profile_hub_picker_open(draft.profile_hub_picker_open);
+        let (effective_mods, inherited_from) = draft.base_config.resolve_hub_modules(&profile.name);
+        let is_inherited = profile.hub_modules.is_none();
+        win.set_profile_hub_is_inherited(is_inherited);
+        let status_text = if is_inherited {
+            let parent = inherited_from.as_deref().unwrap_or(GLOBAL_PROFILE_NAME);
+            format!("Herdado de {parent} — clique para customizar")
+        } else {
+            format!("Definido neste perfil ({} módulos)", effective_mods.len())
+        };
+        win.set_profile_hub_status_text(SharedString::from(status_text));
+
+        let mod_labels: Vec<SharedString> = effective_mods
+            .iter()
+            .map(|m| SharedString::from(format!("{}  ({})", m.title, m.kind.kind_label())))
+            .collect();
+        win.set_profile_hub_module_labels(ModelRc::from(Rc::new(VecModel::from(mod_labels))));
+        let clamped_mod_idx = draft
+            .profile_hub_selected_index
+            .min(effective_mods.len().saturating_sub(1));
+        win.set_profile_hub_selected_index(clamped_mod_idx as i32);
+        if let Some(sel) = effective_mods.get(clamped_mod_idx) {
+            win.set_profile_hub_selected_title(SharedString::from(sel.title.as_str()));
+        } else {
+            win.set_profile_hub_selected_title(SharedString::from(""));
+        }
+    }
+}
+
+fn materialize_profile_hub_modules(draft: &mut SettingsDraft) -> bool {
+    let idx = draft.selected_index;
+    let Some(profile_name) = draft.base_config.profiles.get(idx).map(|p| p.name.clone()) else {
+        return false;
+    };
+    if draft
+        .base_config
+        .profiles
+        .get(idx)
+        .is_some_and(|p| p.hub_modules.is_some())
+    {
+        return false;
+    }
+    let (resolved, _) = draft.base_config.resolve_hub_modules(&profile_name);
+    if let Some(profile) = draft.base_config.profiles.get_mut(idx) {
+        profile.hub_modules = Some(resolved);
+        return true;
+    }
+    false
+}
+
+fn apply_profile_hub_title_to_draft(win: &SettingsWindow, draft: &mut SettingsDraft) {
+    let pidx = draft.selected_index;
+    let midx = draft.profile_hub_selected_index;
+    let new_title = win.get_profile_hub_selected_title().trim().to_string();
+    if new_title.is_empty() {
+        return;
+    }
+    if let Some(item) = draft
+        .base_config
+        .profiles
+        .get_mut(pidx)
+        .and_then(|p| p.hub_modules.as_mut())
+        .and_then(|mods| mods.get_mut(midx))
+    {
+        if item.title != new_title {
+            item.title = new_title;
+            draft.dirty = true;
+        }
     }
 }
 
@@ -1644,6 +1902,7 @@ fn apply_profile_header_to_draft(
         }
     }
 
+    apply_profile_hub_title_to_draft(win, draft);
     Ok(())
 }
 
@@ -1732,6 +1991,7 @@ mod tests {
             key1: ActionConfig::None,
             key2: ActionConfig::None,
             key3: ActionConfig::None,
+            hub_modules: None,
         });
 
         // Opções para "firefox" (índice 1): exclui o próprio "firefox" e inicia com "Nenhum"
