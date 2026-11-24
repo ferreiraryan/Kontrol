@@ -19,7 +19,7 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-**Fase 7 (Hub contextual por app em foco + Modo Aprender)** concluída e validada: módulos do Hub por perfil com herança explícita (`None` = herda do pai/`global`; `Some(vec![])` = Hub vazio explícito; `Some(vec![...])` = substitui), 6 novos módulos nativos contextuais (`browser_tabs`, `media_control`, `zoom`, `scroll_page`, `brush_size`, `undo_redo`), snapshot travado durante a interação do Hub, editor de módulos por perfil nas Configurações (`Ações do Knob | Módulos do Hub`), e janela flutuante dedicada de **Modo Aprender** (`src/ui/learn.slint` + `src/ui/learn_mod.rs`). AppImage (`KnobContext-x86_64.AppImage`) regerado e 70/70 testes unitários passando.
+**Fase 7 + Reformulação UX/UI das Configurações e Seletor de Ações** concluídas e validadas: design system unificado (`ui/theme.slint`) alinhado à paleta *cool slate* do Overlay/Mini-HUD, `SettingsWindow` (`920×680`) com mapa físico dos controles (Botão Rotativo + Teclas Físicas K1–K3), preview explícito de ações herdadas, regras de ativação recolhíveis (ocultas em `global`), aba `Overlay / Hub` separada em `Itens Padrão do Hub` e `Aparência e Comportamento`, e `ActionEditorPopover` (`720×500`) redesenhado com keycaps, chips de modificadores/presets, grid 2×3 de mídia em PT-BR e timeline de macro com reordenação e Modo Aprender. AppImage (`KnobContext-x86_64.AppImage`, 10.9 MB) regerado e 73/73 testes unitários passando.
 
 ## Concluído
 - **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
@@ -63,6 +63,19 @@
   - **Modo Aprender (`ui/learn.slint`, `ui/learn_mod.rs`)**: janela flutuante sempre no topo (`420×144px`, com foco de teclado via `wl_keyboard` do Slint) acionada pelo botão **Aprender** em cada `ActionRow` e no popover de atalhos. Exibe a combinação em tempo real, confirma automaticamente `200ms` após soltar todas as teclas (ou imediatamente com `Enter`) e cancela com `Esc`.
     - *Limitação no Wayland*: atalhos interceptados pelo compositor antes de chegar à janela (ex.: `Super+E` no Hyprland) não são entregues ao `wl_keyboard` sem `zwp_keyboard_shortcuts_inhibit_manager_v1` (não exposto pelo Slint 1.19 sem crates extras); o fallback é digitar manualmente no campo de texto do construtor visual.
   - Validação: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (70/70), AppImage regerado.
+- **UX/UI Overhaul — Configurações, Seletor de Ações e Modo Aprender**:
+  - **Design System compartilhado (`ui/theme.slint`)**: paleta *cool slate* (`#11141b` / `#171b24` / `#1e2432` + acento `#3b82f6`) e componentes reutilizáveis (`AppButton`, `AppInput`, `AppField`, `ToggleSwitch`, `SegmentedTwo`, `StepperControl`, `ActionCategoryBadge`), eliminando estilos duplicados.
+  - **`SettingsWindow` (`920×680`, `ui/settings.slint`, `ui/settings_mod.rs`)**:
+    - Sidebar de perfis enriquecida (badge `Padrão`, subtítulo `window_class`, ponto indicador de Hub customizado e `Remover perfil` desabilitado em `global`).
+    - Perfil `global` exibe banner limpo sem campos contextuais irrelevantes; perfis contextuais agrupam regras em card recolhível (`Regras de ativação`) com resumo compacto.
+    - Mapa físico em `Ações do Knob` (2 cards lado a lado para `↺ Anti-horário` / `↻ Horário` + 3 linhas enriquecidas `K1`/`K2`/`K3` clicáveis na linha toda, com badge colorido por categoria, preview de herança `resolve_slot_view`, `⌨ Aprender` e `×` para limpar).
+    - Aba `Overlay / Hub` dividida em 2 sub-abas via `SegmentedTwo` (`Itens Padrão do Hub` com altura livre para editores + `Aparência e Comportamento` com `ToggleSwitch` e `StepperControl`).
+  - **`ActionEditorPopover` (`720×500`, `ui/action_editor.slint`, `ui/action_editor_state.rs`, `ui/action_editor_mod.rs`) & `LearnWindow` (`440×168`)**:
+    - Sidebar agrupada por categoria com ícones e rodapé com `Preview:` ao vivo.
+    - Atalho de teclado unificado com keycaps visuais, botão principal `⌨ Gravar tecla` (Modo Aprender), chips `+ Ctrl`/`+ Shift`/`+ Alt`/`+ Super`, atalhos comuns e edição manual.
+    - Grid 2×3 de Controle de Mídia em português, busca de aplicativos com contador e seleção fixa, Scroll com setas + presets (`1×`/`3×`/`5×`/`10×`), e Macro com badges coloridos, reordenação `↑`/`↓`, `⌨ Aprender` e chips de espera (`+50ms`/`+100ms`/`+250ms`).
+    - `LearnWindow` alinhada ao `Theme` com botão clicável `Cancelar (Esc)`.
+  - Validação: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (73/73), AppImage regerado (`10.9 MB`).
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
