@@ -9,7 +9,7 @@ export component LearnWindow inherits Window {
     in property <string> combo-preview: "";
     in property <string> status-hint: "Pressione a combinação de teclas (Esc para cancelar)";
 
-    callback key-pressed(string, bool, bool, bool, bool);
+    callback key-pressed(string, bool, bool, bool, bool, bool);
     callback key-released(string, bool, bool, bool, bool);
     callback cancel-requested();
 
@@ -36,6 +36,7 @@ export component LearnWindow inherits Window {
                     ev.modifiers.alt,
                     ev.modifiers.shift,
                     ev.modifiers.meta,
+                    ev.repeat,
                 );
                 return accept;
             }

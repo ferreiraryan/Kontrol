@@ -4,6 +4,24 @@ use crate::ui::SettingsWindow;
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
+/// Identifica se o `text` enviado pelo Slint corresponde a uma tecla modificadora pura
+/// (`Shift`, `ShiftR`, `Control`, `ControlR`, `Alt`, `AltGr`, `Meta`, `MetaR`, `CapsLock`).
+pub fn slint_modifier_key_name(text: &str) -> Option<&'static str> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    match ch {
+        '\u{0010}' | '\u{0015}' => Some("Shift"),
+        '\u{0011}' | '\u{0016}' => Some("Ctrl"),
+        '\u{0012}' | '\u{0013}' => Some("Alt"),
+        '\u{0017}' | '\u{0018}' => Some("Super"),
+        '\u{0014}' => Some("CapsLock"),
+        _ => None,
+    }
+}
+
 /// Converte um evento de tecla capturado no Slint (`text` + modificadores) em string do parser
 /// (ex.: `"Ctrl+Shift+Tab"`, `"Super+E"`, `"Alt+F4"`). Retorna `None` para teclas modificadoras puras.
 pub fn format_captured_key(
@@ -13,7 +31,7 @@ pub fn format_captured_key(
     shift: bool,
     meta: bool,
 ) -> Option<String> {
-    let key_name = map_slint_key_text(text)?;
+    let (key_name, implies_shift) = map_slint_key_text(text, ctrl)?;
     let mut parts = Vec::new();
     if ctrl {
         parts.push("Ctrl".to_string());
@@ -21,7 +39,7 @@ pub fn format_captured_key(
     if alt {
         parts.push("Alt".to_string());
     }
-    if shift {
+    if shift || implies_shift {
         parts.push("Shift".to_string());
     }
     if meta {
@@ -31,44 +49,51 @@ pub fn format_captured_key(
     Some(parts.join("+"))
 }
 
-fn map_slint_key_text(text: &str) -> Option<String> {
+fn map_slint_key_text(text: &str, ctrl_held: bool) -> Option<(String, bool)> {
     let mut chars = text.chars();
     let ch = chars.next()?;
     if chars.next().is_some() {
         return None;
     }
 
-    // Mapeamento dos códigos Private Use Area usados pelo Slint (`slint::platform::Key`)
+    // Mapeamento dos códigos usados pelo Slint (`i_slint_common::key_codes`)
     let mapped = match ch {
-        '\u{0008}' => "Backspace".to_string(),
-        '\u{0009}' => "Tab".to_string(),
-        '\u{000a}' | '\u{000d}' => "Return".to_string(),
-        '\u{001b}' => "Escape".to_string(),
-        '\u{0020}' => "Space".to_string(),
-        '\u{007f}' => "Delete".to_string(),
-        '\u{f700}' => "Up".to_string(),
-        '\u{f701}' => "Down".to_string(),
-        '\u{f702}' => "Left".to_string(),
-        '\u{f703}' => "Right".to_string(),
-        '\u{f704}' => "F1".to_string(),
-        '\u{f705}' => "F2".to_string(),
-        '\u{f706}' => "F3".to_string(),
-        '\u{f707}' => "F4".to_string(),
-        '\u{f708}' => "F5".to_string(),
-        '\u{f709}' => "F6".to_string(),
-        '\u{f70a}' => "F7".to_string(),
-        '\u{f70b}' => "F8".to_string(),
-        '\u{f70c}' => "F9".to_string(),
-        '\u{f70d}' => "F10".to_string(),
-        '\u{f70e}' => "F11".to_string(),
-        '\u{f70f}' => "F12".to_string(),
-        '\u{f729}' => "Home".to_string(),
-        '\u{f72b}' => "End".to_string(),
-        '\u{f72c}' => "PageUp".to_string(),
-        '\u{f72d}' => "PageDown".to_string(),
-        // Ignora teclas modificadoras isoladas enviadas pelo Slint (Shift/Control/Alt/Meta)
-        '\u{0010}'..='\u{0014}' => return None,
-        c if c.is_ascii_graphic() => c.to_ascii_uppercase().to_string(),
+        '\u{0008}' => ("Backspace".to_string(), false),
+        '\u{0009}' => ("Tab".to_string(), false),
+        '\u{0019}' => ("Tab".to_string(), true), // Backtab (Shift+Tab)
+        '\u{000a}' | '\u{000d}' => ("Return".to_string(), false),
+        '\u{001b}' => ("Escape".to_string(), false),
+        '\u{0020}' => ("Space".to_string(), false),
+        '\u{007f}' => ("Delete".to_string(), false),
+        '\u{f700}' => ("Up".to_string(), false),
+        '\u{f701}' => ("Down".to_string(), false),
+        '\u{f702}' => ("Left".to_string(), false),
+        '\u{f703}' => ("Right".to_string(), false),
+        '\u{f704}' => ("F1".to_string(), false),
+        '\u{f705}' => ("F2".to_string(), false),
+        '\u{f706}' => ("F3".to_string(), false),
+        '\u{f707}' => ("F4".to_string(), false),
+        '\u{f708}' => ("F5".to_string(), false),
+        '\u{f709}' => ("F6".to_string(), false),
+        '\u{f70a}' => ("F7".to_string(), false),
+        '\u{f70b}' => ("F8".to_string(), false),
+        '\u{f70c}' => ("F9".to_string(), false),
+        '\u{f70d}' => ("F10".to_string(), false),
+        '\u{f70e}' => ("F11".to_string(), false),
+        '\u{f70f}' => ("F12".to_string(), false),
+        '\u{f729}' => ("Home".to_string(), false),
+        '\u{f72b}' => ("End".to_string(), false),
+        '\u{f72c}' => ("PageUp".to_string(), false),
+        '\u{f72d}' => ("PageDown".to_string(), false),
+        // Ignora teclas modificadoras isoladas enviadas pelo Slint
+        // (Shift/Control/Alt/AltGr/CapsLock/ShiftR/ControlR/Meta/MetaR)
+        '\u{0010}'..='\u{0018}' => return None,
+        // Fallback para caracteres de controle ASCII (Ctrl+A..Ctrl+Z) caso o backend envie
+        c @ '\u{0001}'..='\u{001a}' if ctrl_held => {
+            let letter = ((c as u8 - 1) + b'A') as char;
+            (letter.to_string(), false)
+        }
+        c if c.is_ascii_graphic() => (c.to_ascii_uppercase().to_string(), false),
         _ => return None,
     };
 
