@@ -47,9 +47,27 @@ pub enum OverlayKey3Behavior {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomGroupSlider {
+    #[serde(default = "default_slider_step")]
+    pub step: i32,
+    #[serde(default)]
+    pub up_command: String,
+    #[serde(default)]
+    pub down_command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_command: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomGroupEntry {
     pub label: String,
+    #[serde(default)]
     pub action: ActionConfig,
+    /// Quando presente, esta entrada do submenu atua como um Slider interativo no Hub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slider: Option<CustomGroupSlider>,
     /// Caminho opcional de imagem/ícone exibido no carrossel para esta entrada.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -1726,7 +1744,10 @@ knob_cw = "VolumeUp"
 
     #[test]
     fn overlay_config_custom_items_roundtrip_toml() {
-        use super::{CustomGroupEntry, OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior};
+        use super::{
+            CustomGroupEntry, CustomGroupSlider, OverlayItemConfig, OverlayItemKind,
+            OverlayKey3Behavior,
+        };
 
         let path = unique_temp_path("overlay_roundtrip");
         let mut cfg = Config::default();
@@ -1755,13 +1776,28 @@ knob_cw = "VolumeUp"
             enabled: true,
             icon: None,
             kind: OverlayItemKind::CustomGroup {
-                entries: vec![CustomGroupEntry {
-                    label: "Copiar".to_string(),
-                    action: ActionConfig::Shortcut {
-                        keys: vec!["Ctrl".into(), "C".into()],
+                entries: vec![
+                    CustomGroupEntry {
+                        label: "Copiar".to_string(),
+                        action: ActionConfig::Shortcut {
+                            keys: vec!["Ctrl".into(), "C".into()],
+                        },
+                        slider: None,
+                        icon: None,
                     },
-                    icon: None,
-                }],
+                    CustomGroupEntry {
+                        label: "Zoom Tela".to_string(),
+                        action: ActionConfig::None,
+                        slider: Some(CustomGroupSlider {
+                            step: 10,
+                            up_command: "echo up".to_string(),
+                            down_command: "echo down".to_string(),
+                            toggle_command: Some("echo reset".to_string()),
+                            read_command: Some("echo 40".to_string()),
+                        }),
+                        icon: None,
+                    },
+                ],
             },
         });
         cfg.overlay.items.push(OverlayItemConfig {

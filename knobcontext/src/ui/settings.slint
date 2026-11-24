@@ -335,7 +335,13 @@ export component SettingsWindow inherits Window {
     in property <[string]> hub-group-entry-labels: [];
     in property <int> hub-group-selected-entry: 0;
     in-out property <string> hub-group-entry-name: "";
+    in property <bool> hub-group-entry-is-slider: false;
     in property <string> hub-group-entry-action-summary: "Nenhuma";
+    in-out property <string> hub-group-slider-up: "";
+    in-out property <string> hub-group-slider-down: "";
+    in-out property <string> hub-group-slider-toggle: "";
+    in-out property <string> hub-group-slider-read: "";
+    in property <int> hub-group-slider-step: 5;
     in property <int> hub-volume-step: 5;
     in property <int> hub-brightness-step: 5;
     in property <int> hub-browse-timeout-sec: 5;
@@ -440,8 +446,10 @@ export component SettingsWindow inherits Window {
     callback hub-change-slider-step(int);
     callback hub-group-select-entry(int);
     callback hub-group-add-entry();
+    callback hub-group-add-slider();
     callback hub-group-remove-entry();
     callback hub-group-edit-entry-action();
+    callback hub-group-change-slider-step(int);
     callback hub-change-volume-step(int);
     callback hub-change-brightness-step(int);
     callback hub-change-browse-timeout(int);
@@ -1550,8 +1558,15 @@ export component SettingsWindow inherits Window {
                                     height: 26px;
                                     primary: true;
                                     font-size: 11px;
-                                    text: "+ Entrada";
+                                    text: "+ Ação";
                                     clicked => { root.hub-group-add-entry(); }
+                                }
+                                AppButton {
+                                    height: 26px;
+                                    primary: true;
+                                    font-size: 11px;
+                                    text: "+ Slider";
+                                    clicked => { root.hub-group-add-slider(); }
                                 }
                                 AppButton {
                                     height: 26px;
@@ -1600,16 +1615,79 @@ export component SettingsWindow inherits Window {
                             }
 
                             if root.hub-group-entry-labels.length > 0: VerticalLayout {
-                                spacing: 8px;
-                                AppField {
-                                    label: "Nome da entrada selecionada";
-                                    placeholder: "ex: Abrir Obsidian";
-                                    value <=> root.hub-group-entry-name;
+                                spacing: 7px;
+
+                                HorizontalLayout {
+                                    spacing: 10px;
+
+                                    AppField {
+                                        horizontal-stretch: 1;
+                                        label: root.hub-group-entry-is-slider
+                                            ? "Nome do slider selecionado"
+                                            : "Nome da entrada selecionada";
+                                        placeholder: root.hub-group-entry-is-slider
+                                            ? "ex: Zoom da Tela"
+                                            : "ex: Abrir Obsidian";
+                                        value <=> root.hub-group-entry-name;
+                                    }
+
+                                    if root.hub-group-entry-is-slider: VerticalLayout {
+                                        spacing: 4px;
+                                        Text {
+                                            text: "Passo";
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                            font-weight: 500;
+                                        }
+                                        StepperControl {
+                                            height: 32px;
+                                            value-text: root.hub-group-slider-step + "%";
+                                            decrement => { root.hub-group-change-slider-step(-1); }
+                                            increment => { root.hub-group-change-slider-step(1); }
+                                        }
+                                    }
                                 }
-                                SimpleActionRow {
+
+                                if !root.hub-group-entry-is-slider: SimpleActionRow {
                                     control-label: "Ação da entrada";
                                     action-summary: root.hub-group-entry-action-summary;
                                     edit-clicked => { root.hub-group-edit-entry-action(); }
+                                }
+
+                                if root.hub-group-entry-is-slider: VerticalLayout {
+                                    spacing: 6px;
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        AppField {
+                                            horizontal-stretch: 1;
+                                            label: "Comando horário (+)";
+                                            placeholder: "ex: wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+";
+                                            value <=> root.hub-group-slider-up;
+                                        }
+                                        AppField {
+                                            horizontal-stretch: 1;
+                                            label: "Comando anti-horário (-)";
+                                            placeholder: "ex: wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-";
+                                            value <=> root.hub-group-slider-down;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        AppField {
+                                            horizontal-stretch: 1;
+                                            label: "Comando K2 (opcional)";
+                                            placeholder: "ex: toggle / reset";
+                                            value <=> root.hub-group-slider-toggle;
+                                        }
+                                        AppField {
+                                            horizontal-stretch: 1;
+                                            label: "Leitura 0-100 (opcional)";
+                                            placeholder: "ex: echo 50";
+                                            value <=> root.hub-group-slider-read;
+                                        }
+                                    }
                                 }
                             }
                         }

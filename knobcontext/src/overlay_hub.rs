@@ -302,6 +302,11 @@ pub enum HubEffect {
     ExecuteAction(ActionConfig),
 }
 
+/// Chave interna estável usada no mapa `custom_slider_values` para sliders dentro de um `CustomGroup`.
+fn group_slider_key(item_id: &str, entry_idx: usize) -> String {
+    format!("{item_id}::{entry_idx}")
+}
+
 /// Janela pós-fechamento (ms) durante a qual a mesma tecla usada para fechar o Hub
 /// (`Key1` ou `Key3`) é suprimida para não vazar como ação do perfil no app em foco.
 const POST_CLOSE_SUPPRESS_MS: u64 = 350;
@@ -572,8 +577,13 @@ impl HubController {
             }
             SystemResponse::CustomSliderValue { item_id, percent } => {
                 self.custom_slider_values.insert(item_id.clone(), percent);
-                if matches!(&self.screen, HubScreen::CustomSlider { item_id: cur, .. } if cur == &item_id)
-                {
+                let matches_slider = matches!(&self.screen, HubScreen::CustomSlider { item_id: cur, .. } if cur == &item_id);
+                let matches_group_slider = matches!(
+                    &self.screen,
+                    HubScreen::CustomGroup { item_id: cur, .. }
+                        if item_id.starts_with(&format!("{cur}::"))
+                );
+                if matches_slider || matches_group_slider {
                     self.loading = false;
                     true
                 } else {
@@ -764,6 +774,36 @@ impl HubController {
                     }
                 }
             }
+            HubScreen::CustomGroup { item_id, .. } => {
+                let id_clone = item_id.clone();
+                let entry_idx = self.sub_cursor;
+                let slider_cfg = self
+                    .active_modules
+                    .iter()
+                    .find(|i| i.id == id_clone)
+                    .and_then(|item| match &item.kind {
+                        OverlayItemKind::CustomGroup { entries } => {
+                            entries.get(entry_idx).and_then(|e| e.slider.clone())
+                        }
+                        _ => None,
+                    });
+                if let Some(sl) = slider_cfg {
+                    let key = group_slider_key(&id_clone, entry_idx);
+                    let cur = self.custom_slider_values.get(&key).copied().unwrap_or(50);
+                    let next = (cur + dir * sl.step.max(1)).clamp(0, 100);
+                    self.custom_slider_values.insert(key, next);
+                    let cmd = if dir > 0 {
+                        sl.up_command
+                    } else {
+                        sl.down_command
+                    };
+                    if !cmd.trim().is_empty() {
+                        effects.push(HubEffect::System(SystemRequest::RunShellCommand {
+                            command: cmd,
+                        }));
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -844,6 +884,24 @@ impl HubController {
                             command: cmd.clone(),
                         }));
                     }
+                }
+            }
+            HubScreen::CustomGroup { item_id, .. } => {
+                let toggle_cmd = self
+                    .active_modules
+                    .iter()
+                    .find(|i| i.id == *item_id)
+                    .and_then(|item| match &item.kind {
+                        OverlayItemKind::CustomGroup { entries } => entries
+                            .get(self.sub_cursor)
+                            .and_then(|e| e.slider.as_ref())
+                            .and_then(|sl| sl.toggle_command.clone()),
+                        _ => None,
+                    });
+                if let Some(cmd) = toggle_cmd.filter(|s| !s.trim().is_empty()) {
+                    effects.push(HubEffect::System(SystemRequest::RunShellCommand {
+                        command: cmd,
+                    }));
                 }
             }
             _ => {}
@@ -1003,19 +1061,31 @@ impl HubController {
                 }
             }
             HubScreen::CustomGroup { item_id, .. } => {
-                let action = self
+                let entry = self
                     .active_modules
                     .iter()
                     .find(|i| i.id == item_id)
                     .and_then(|item| match &item.kind {
                         OverlayItemKind::CustomGroup { entries } => {
-                            entries.get(self.sub_cursor).map(|e| e.action.clone())
+                            entries.get(self.sub_cursor).cloned()
                         }
                         _ => None,
                     });
-                if let Some(act) = action {
-                    self.close_internal();
-                    vec![HubEffect::ExecuteAction(act), HubEffect::CloseOverlay]
+                if let Some(entry) = entry {
+                    if entry.slider.is_some() {
+                        self.interaction = InteractionMode::Adjusting;
+                        vec![HubEffect::RenderOverlay(self.build_view_model(
+                            config,
+                            mode,
+                            contextual_profile,
+                        ))]
+                    } else {
+                        self.close_internal();
+                        vec![
+                            HubEffect::ExecuteAction(entry.action),
+                            HubEffect::CloseOverlay,
+                        ]
+                    }
                 } else {
                     Vec::new()
                 }
@@ -1132,9 +1202,23 @@ impl HubController {
                 self.close_internal();
                 return vec![HubEffect::ExecuteAction(action), HubEffect::CloseOverlay];
             }
-            OverlayItemKind::CustomGroup { .. } => {
+            OverlayItemKind::CustomGroup { entries } => {
+                let item_id = item.id;
+                for (eidx, entry) in entries.iter().enumerate() {
+                    if let Some(cmd) = entry
+                        .slider
+                        .as_ref()
+                        .and_then(|sl| sl.read_command.as_deref())
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        effects.push(HubEffect::System(SystemRequest::ReadCustomSlider {
+                            item_id: group_slider_key(&item_id, eidx),
+                            read_command: cmd.to_string(),
+                        }));
+                    }
+                }
                 self.screen = HubScreen::CustomGroup {
-                    item_id: item.id,
+                    item_id,
                     title: item.title,
                 };
                 self.loading = false;
@@ -1585,8 +1669,30 @@ impl HubController {
                         _ => None,
                     })
                     .unwrap_or_default();
+                let selected_is_slider = entries
+                    .get(self.sub_cursor)
+                    .is_some_and(|e| e.slider.is_some());
                 let mut cards = Vec::with_capacity(entries.len());
-                for e in entries {
+                for (eidx, e) in entries.into_iter().enumerate() {
+                    if e.slider.is_some() {
+                        let key = group_slider_key(&item_id, eidx);
+                        let val = self.custom_slider_values.get(&key).copied().unwrap_or(50);
+                        cards.push(HubCardView {
+                            is_empty_slot: false,
+                            title: e.label,
+                            subtitle: "Slider • pressione para ajustar".to_string(),
+                            badge: format!("{val}%"),
+                            glyph: "━".to_string(),
+                            image_path: None,
+                            image_is_cover: false,
+                            value_percent: val,
+                            max_percent: 100,
+                            is_slider: true,
+                            is_active: true,
+                            is_muted: false,
+                        });
+                        continue;
+                    }
                     let auto_hint = match &e.action {
                         ActionConfig::Launch { desktop_file } => Some(desktop_file.clone()),
                         _ => None,
@@ -1619,12 +1725,20 @@ impl HubController {
                         is_muted: false,
                     });
                 }
+                let hint = if self.interaction == InteractionMode::Adjusting {
+                    "Girar: Ajustar • Knob/K3/K1: Soltar • K2: Toggle".to_string()
+                } else if selected_is_slider {
+                    "Girar: Escolher • Knob/K3: Ajustar Slider • K2: Toggle • K1: Voltar"
+                        .to_string()
+                } else {
+                    "Girar: Escolher • Knob/K3: Executar • K1: Voltar".to_string()
+                };
                 (
                     "Hub".to_string(),
                     title,
                     cards,
-                    "Grupo vazio. Adicione ações nas Configurações.".to_string(),
-                    "Girar: Escolher • Knob/K3: Executar • K1: Voltar".to_string(),
+                    "Grupo vazio. Adicione ações ou sliders nas Configurações.".to_string(),
+                    hint,
                 )
             }
             HubScreen::CustomSlider { item_id, title } => {
@@ -2259,5 +2373,152 @@ mod tests {
             "firefox",
         );
         assert_eq!(fx_normal, vec![HubEffect::DispatchNormal(KnobEvent::Key1)]);
+    }
+
+    #[test]
+    fn custom_group_supports_embedded_slider_adjusting_toggle_and_read() {
+        use crate::config::{
+            ActionConfig, CustomGroupEntry, CustomGroupSlider, OverlayItemConfig, OverlayItemKind,
+        };
+
+        let mut cfg = Config::default();
+        cfg.overlay.items = vec![OverlayItemConfig {
+            id: "studio".to_string(),
+            title: "Estúdio".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::CustomGroup {
+                entries: vec![
+                    CustomGroupEntry {
+                        label: "Zoom".to_string(),
+                        action: ActionConfig::None,
+                        slider: Some(CustomGroupSlider {
+                            step: 10,
+                            up_command: "zoom +".to_string(),
+                            down_command: "zoom -".to_string(),
+                            toggle_command: Some("zoom reset".to_string()),
+                            read_command: Some("echo 30".to_string()),
+                        }),
+                        icon: None,
+                    },
+                    CustomGroupEntry {
+                        label: "Mudo".to_string(),
+                        action: ActionConfig::VolumeMute,
+                        slider: None,
+                        icon: None,
+                    },
+                ],
+            },
+        }];
+        let mode = ProfileMode::Auto;
+        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let t0 = Instant::now();
+
+        // 1) Abrir Hub e entrar no submenu "Estúdio" -> solicita leitura inicial do slider
+        let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
+        let fx_enter = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(20),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx_enter.contains(&HubEffect::System(SystemRequest::ReadCustomSlider {
+                item_id: "studio::0".to_string(),
+                read_command: "echo 30".to_string(),
+            }))
+        );
+
+        // 2) Aplicar leitura inicial (30%) -> card central reflete slider com 30%
+        let Some(HubEffect::RenderOverlay(vm_read)) = hub.apply_system_response(
+            SystemResponse::CustomSliderValue {
+                item_id: "studio::0".to_string(),
+                percent: 30,
+            },
+            &cfg,
+            &mode,
+            "global",
+        ) else {
+            panic!("esperava RenderOverlay após leitura do slider do grupo");
+        };
+        assert!(vm_read.cards[3].is_slider);
+        assert_eq!(vm_read.cards[3].value_percent, 30);
+
+        // 3) Confirmar na entrada slider -> entra em modo Adjusting sem fechar o Hub
+        let fx_lock = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(40),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(matches!(
+            fx_lock.first(),
+            Some(HubEffect::RenderOverlay(vm)) if vm.adjusting
+        ));
+
+        // 4) Girar sentido horário -> 40% e executa `zoom +`
+        let fx_up = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(60),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx_up.contains(&HubEffect::System(SystemRequest::RunShellCommand {
+                command: "zoom +".to_string(),
+            }))
+        );
+        let Some(HubEffect::RenderOverlay(vm_up)) = fx_up.last() else {
+            panic!("esperava RenderOverlay após girar slider");
+        };
+        assert_eq!(vm_up.cards[3].value_percent, 40);
+
+        // 5) K2 executa toggle_command do slider
+        let fx_k2 = hub.handle_event(
+            KnobEvent::Key2,
+            t0 + Duration::from_millis(80),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert_eq!(
+            fx_k2,
+            vec![HubEffect::System(SystemRequest::RunShellCommand {
+                command: "zoom reset".to_string(),
+            })]
+        );
+
+        // 6) K1 solta Adjusting; girar seleciona entrada 2 ("Mudo"); confirmar executa ação e fecha
+        let _ = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(100),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let _ = hub.handle_event(
+            KnobEvent::RotateCw,
+            t0 + Duration::from_millis(120),
+            &cfg,
+            &mode,
+            "global",
+        );
+        let fx_action = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(140),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert_eq!(
+            fx_action,
+            vec![
+                HubEffect::ExecuteAction(ActionConfig::VolumeMute),
+                HubEffect::CloseOverlay,
+            ]
+        );
     }
 }
