@@ -1,5 +1,6 @@
-use crate::config::{Config, GLOBAL_PROFILE_NAME};
+use crate::config::{Config, ProfileConfig, GLOBAL_PROFILE_NAME};
 use log::{debug, info, warn};
+use serde::Deserialize;
 use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -9,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Modo de seleção de perfil ativo (volátil: sempre inicia em `Auto` ao abrir o app).
+/// Modo de seleção de perfil ativo.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum ProfileMode {
     /// Segue automaticamente a janela em foco no compositor.
@@ -19,10 +20,27 @@ pub enum ProfileMode {
     Manual(String),
 }
 
+/// Informações contextuais ricas da janela ativa no compositor.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ActiveWindowInfo {
+    pub class: String,
+    pub title: String,
+    pub fullscreen: bool,
+}
+
+/// Eventos relevantes recebidos do `socket2` do Hyprland.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HyprlandEvent {
+    ActiveWindow(Option<(String, String)>),
+    Fullscreen(bool),
+}
+
 /// Estado compartilhado da janela atualmente em foco no compositor e do modo de perfil.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ContextState {
-    pub active_window: Option<String>,
+    pub active_window: Option<ActiveWindowInfo>,
+    /// Última janela ativa que não pertence ao próprio KnobContext (usada em "Capturar janela").
+    pub last_non_knob_window: Option<ActiveWindowInfo>,
     pub mode: ProfileMode,
 }
 
@@ -35,6 +53,7 @@ impl ContextState {
     pub fn with_mode(mode: ProfileMode) -> Self {
         Self {
             active_window: None,
+            last_non_knob_window: None,
             mode,
         }
     }
@@ -47,38 +66,86 @@ impl ContextState {
         &self.mode
     }
 
+    #[cfg(test)]
     pub fn set_active_window(&mut self, window_class: Option<String>) {
-        self.active_window = window_class.and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
+        match window_class {
+            Some(cls) => self.set_active_window_info(Some(ActiveWindowInfo {
+                class: cls,
+                title: String::new(),
+                fullscreen: false,
+            })),
+            None => self.set_active_window_info(None),
+        }
+    }
+
+    pub fn set_active_window_info(&mut self, info: Option<ActiveWindowInfo>) {
+        let normalized = info.and_then(|mut w| {
+            w.class = w.class.trim().to_string();
+            w.title = w.title.trim().to_string();
+            if w.class.is_empty() && w.title.is_empty() {
                 None
             } else {
-                Some(trimmed.to_string())
+                Some(w)
             }
         });
+
+        if let Some(ref w) = normalized {
+            if !is_knobcontext_window(w) {
+                self.last_non_knob_window = Some(w.clone());
+            }
+        }
+        self.active_window = normalized;
+    }
+
+    pub fn set_fullscreen(&mut self, fullscreen: bool) {
+        if let Some(ref mut w) = self.active_window {
+            w.fullscreen = fullscreen;
+            if !is_knobcontext_window(w) {
+                self.last_non_knob_window = Some(w.clone());
+            }
+        }
+    }
+
+    pub fn last_captured_window(&self) -> Option<&ActiveWindowInfo> {
+        self.last_non_knob_window
+            .as_ref()
+            .or(self.active_window.as_ref())
     }
 
     #[cfg(test)]
     pub fn active_window(&self) -> Option<&str> {
-        self.active_window.as_deref()
+        self.active_window.as_ref().map(|w| w.class.as_str())
     }
 
     /// Resolve qual perfil corresponderia à janela ativa atual (sempre contextual, fallback `"global"`).
+    ///
+    /// A seleção usa `(profile.priority, specificity_score)`:
+    /// - Regras com maior `priority` vencem.
+    /// - Em caso de empate, regras mais específicas vencem (ex.: `class + title` vence só `class`).
     pub fn contextual_profile_for_window(&self, config: &Config) -> String {
-        let Some(active_class) = self.active_window.as_deref() else {
+        let Some(active) = self.active_window.as_ref() else {
             return GLOBAL_PROFILE_NAME.to_string();
         };
 
+        let mut best: Option<(i32, u8, &str)> = None;
         for profile in &config.profiles {
-            if let Some(target_class) = profile.window_class.as_deref() {
-                let target = target_class.trim();
-                if !target.is_empty() && target.eq_ignore_ascii_case(active_class) {
-                    return profile.name.clone();
+            if let Some(specificity) = profile_match_specificity(profile, active) {
+                let candidate = (profile.priority, specificity, profile.name.as_str());
+                let is_better = match best {
+                    None => true,
+                    Some((best_prio, best_spec, _)) => {
+                        candidate.0 > best_prio
+                            || (candidate.0 == best_prio && candidate.1 > best_spec)
+                    }
+                };
+                if is_better {
+                    best = Some(candidate);
                 }
             }
         }
 
-        GLOBAL_PROFILE_NAME.to_string()
+        best.map(|(_, _, name)| name.to_string())
+            .unwrap_or_else(|| GLOBAL_PROFILE_NAME.to_string())
     }
 
     /// Resolve o nome do perfil efetivo respeitando `ProfileMode`:
@@ -92,37 +159,153 @@ impl ContextState {
     }
 }
 
-/// Faz o parsing de uma linha do `socket2` do Hyprland (`EVENT>>DATA`).
-///
-/// - Retorna `Some(Some(class))` quando `activewindow` informa uma janela ativa.
-/// - Retorna `Some(None)` quando `activewindow` informa que nenhuma janela está ativa (`activewindow>>,`).
-/// - Retorna `None` para outros eventos irrelevantes.
-pub fn parse_hyprland_event(line: &str) -> Option<Option<String>> {
-    let payload = line
-        .trim_end_matches(['\r', '\n'])
-        .strip_prefix("activewindow>>")?;
-    let window_class = payload.split(',').next().unwrap_or("").trim();
-    if window_class.is_empty() {
-        Some(None)
-    } else {
-        Some(Some(window_class.to_string()))
-    }
+fn is_knobcontext_window(info: &ActiveWindowInfo) -> bool {
+    let class_lower = info.class.to_ascii_lowercase();
+    let title_lower = info.title.to_ascii_lowercase();
+    class_lower.contains("knobcontext") || title_lower.starts_with("knobcontext")
 }
 
-fn parse_activewindow_query_response(response: &str) -> Option<String> {
-    for line in response.lines() {
-        let trimmed = line.trim();
-        if let Some(class) = trimmed.strip_prefix("class:") {
-            let value = class.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
+/// Avalia se um perfil casa com a janela ativa, retornando sua pontuação de especificidade.
+/// Retorna `None` se o perfil não possui critérios contextuais ou se algum critério falhar.
+pub fn profile_match_specificity(profile: &ProfileConfig, active: &ActiveWindowInfo) -> Option<u8> {
+    if !profile.has_context_rule() {
+        return None;
+    }
+
+    let mut score = 0u8;
+
+    if let Some(raw_classes) = profile.window_class.as_deref() {
+        let trimmed = raw_classes.trim();
+        if !trimmed.is_empty() {
+            if !matches_class_patterns(trimmed, &active.class) {
+                return None;
             }
+            score = score.saturating_add(1);
         }
     }
+
+    if let Some(raw_titles) = profile.window_title.as_deref() {
+        let trimmed = raw_titles.trim();
+        if !trimmed.is_empty() {
+            if !matches_title_patterns(trimmed, &active.title) {
+                return None;
+            }
+            score = score.saturating_add(2);
+        }
+    }
+
+    if let Some(required_fullscreen) = profile.fullscreen {
+        if active.fullscreen != required_fullscreen {
+            return None;
+        }
+        score = score.saturating_add(1);
+    }
+
+    Some(score)
+}
+
+fn matches_class_patterns(pattern_list: &str, active_class: &str) -> bool {
+    let actual = active_class.trim().to_ascii_lowercase();
+    if actual.is_empty() {
+        return false;
+    }
+    pattern_list
+        .split(['|', ','])
+        .map(|tok| tok.trim().to_ascii_lowercase())
+        .filter(|tok| !tok.is_empty())
+        .any(|pat| wildcard_match(&pat, &actual))
+}
+
+fn matches_title_patterns(pattern_list: &str, active_title: &str) -> bool {
+    let actual = active_title.to_ascii_lowercase();
+    if actual.is_empty() {
+        return false;
+    }
+    pattern_list
+        .split('|')
+        .map(|tok| tok.trim().to_ascii_lowercase())
+        .filter(|tok| !tok.is_empty())
+        .any(|needle| actual.contains(&needle))
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == text;
+    }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let mut rest = text;
+    let starts_with_wild = pattern.starts_with('*');
+    let ends_with_wild = pattern.ends_with('*');
+
+    for (idx, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if idx == 0 && !starts_with_wild {
+            let Some(after) = rest.strip_prefix(part) else {
+                return false;
+            };
+            rest = after;
+        } else if idx == parts.len() - 1 && !ends_with_wild {
+            return rest.ends_with(part);
+        } else if let Some(pos) = rest.find(part) {
+            rest = &rest[pos + part.len()..];
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Faz o parsing de uma linha do `socket2` do Hyprland (`EVENT>>DATA`).
+pub fn parse_hyprland_event(line: &str) -> Option<HyprlandEvent> {
+    let clean = line.trim_end_matches(['\r', '\n']);
+    if let Some(payload) = clean.strip_prefix("activewindow>>") {
+        let (class_raw, title_raw) = payload.split_once(',').unwrap_or((payload, ""));
+        let window_class = class_raw.trim();
+        let window_title = title_raw.trim();
+        if window_class.is_empty() && window_title.is_empty() {
+            return Some(HyprlandEvent::ActiveWindow(None));
+        }
+        return Some(HyprlandEvent::ActiveWindow(Some((
+            window_class.to_string(),
+            window_title.to_string(),
+        ))));
+    }
+
+    if let Some(payload) = clean.strip_prefix("fullscreen>>") {
+        let flag = payload.trim() == "1";
+        return Some(HyprlandEvent::Fullscreen(flag));
+    }
+
     None
 }
 
-fn hyprland_socket_paths() -> Option<(PathBuf, PathBuf)> {
+#[derive(Deserialize)]
+struct HyprActiveWindowJson {
+    #[serde(default)]
+    class: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    fullscreen: i32,
+}
+
+fn parse_activewindow_json_response(response: &str) -> Option<ActiveWindowInfo> {
+    let parsed: HyprActiveWindowJson = serde_json::from_str(response).ok()?;
+    let class = parsed.class.trim().to_string();
+    let title = parsed.title.trim().to_string();
+    if class.is_empty() && title.is_empty() {
+        return None;
+    }
+    Some(ActiveWindowInfo {
+        class,
+        title,
+        fullscreen: parsed.fullscreen != 0,
+    })
+}
+
+pub fn hyprland_socket_paths() -> Option<(PathBuf, PathBuf)> {
     let sig = env::var("HYPRLAND_INSTANCE_SIGNATURE")
         .ok()
         .filter(|s| !s.trim().is_empty())?;
@@ -136,17 +319,17 @@ fn hyprland_socket_paths() -> Option<(PathBuf, PathBuf)> {
     Some((dir.join(".socket.sock"), dir.join(".socket2.sock")))
 }
 
-fn query_initial_active_window(socket1_path: &Path) -> Option<String> {
+fn query_initial_active_window(socket1_path: &Path) -> Option<ActiveWindowInfo> {
     let mut stream = UnixStream::connect(socket1_path).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
-    stream.write_all(b"activewindow").ok()?;
+    stream.write_all(b"j/activewindow").ok()?;
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
-    parse_activewindow_query_response(&response)
+    parse_activewindow_json_response(&response)
 }
 
-/// Inicia uma thread dedicada escutando eventos `activewindow` do Hyprland (`socket2`).
+/// Inicia uma thread dedicada escutando eventos `activewindow` e `fullscreen` do Hyprland (`socket2`).
 ///
 /// Se `HYPRLAND_INSTANCE_SIGNATURE` não estiver presente, loga um único warning e
 /// retorna `None` (modo global).
@@ -162,10 +345,13 @@ pub fn spawn_hyprland_listener(
         return None;
     };
 
-    if let Some(initial_class) = query_initial_active_window(&socket1_path) {
+    if let Some(initial) = query_initial_active_window(&socket1_path) {
         if let Ok(mut guard) = state.write() {
-            debug!("Janela ativa inicial no Hyprland: '{initial_class}'");
-            guard.set_active_window(Some(initial_class));
+            debug!(
+                "Janela ativa inicial no Hyprland: class='{}', title='{}', fullscreen={}",
+                initial.class, initial.title, initial.fullscreen
+            );
+            guard.set_active_window_info(Some(initial));
         }
     }
 
@@ -196,14 +382,38 @@ pub fn spawn_hyprland_listener(
                                 // EOF: Hyprland reiniciou ou fechou o socket.
                                 break;
                             }
-                            Ok(_) => {
-                                if let Some(maybe_class) = parse_hyprland_event(&line) {
-                                    debug!("Hyprland activewindow -> {maybe_class:?}");
+                            Ok(_) => match parse_hyprland_event(&line) {
+                                Some(HyprlandEvent::ActiveWindow(Some((class, title)))) => {
+                                    // Consulta o estado fullscreen real da nova janela (rápido via socket1)
+                                    let fullscreen = query_initial_active_window(&socket1_path)
+                                        .filter(|w| w.class.eq_ignore_ascii_case(&class))
+                                        .map(|w| w.fullscreen)
+                                        .unwrap_or(false);
+                                    debug!(
+                                        "Hyprland activewindow -> class='{class}', title='{title}', fullscreen={fullscreen}"
+                                    );
                                     if let Ok(mut guard) = state.write() {
-                                        guard.set_active_window(maybe_class);
+                                        guard.set_active_window_info(Some(ActiveWindowInfo {
+                                            class,
+                                            title,
+                                            fullscreen,
+                                        }));
                                     }
                                 }
-                            }
+                                Some(HyprlandEvent::ActiveWindow(None)) => {
+                                    debug!("Hyprland activewindow -> None");
+                                    if let Ok(mut guard) = state.write() {
+                                        guard.set_active_window_info(None);
+                                    }
+                                }
+                                Some(HyprlandEvent::Fullscreen(fs)) => {
+                                    debug!("Hyprland fullscreen -> {fs}");
+                                    if let Ok(mut guard) = state.write() {
+                                        guard.set_fullscreen(fs);
+                                    }
+                                }
+                                None => {}
+                            },
                             Err(err)
                                 if err.kind() == io::ErrorKind::WouldBlock
                                     || err.kind() == io::ErrorKind::TimedOut
@@ -245,9 +455,10 @@ pub fn spawn_hyprland_listener(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_activewindow_query_response, parse_hyprland_event, ContextState, ProfileMode,
+        parse_activewindow_json_response, parse_hyprland_event, ActiveWindowInfo, ContextState,
+        HyprlandEvent, ProfileMode,
     };
-    use crate::config::{Config, GLOBAL_PROFILE_NAME};
+    use crate::config::{ActionConfig, Config, ProfileConfig, GLOBAL_PROFILE_NAME};
 
     #[test]
     fn manual_mode_overrides_window_context_and_auto_restores_it() {
@@ -286,6 +497,79 @@ mod tests {
     }
 
     #[test]
+    fn matches_multi_class_title_fullscreen_and_priority() {
+        let mut cfg = Config::default();
+        cfg.profiles.push(ProfileConfig {
+            name: "youtube".to_string(),
+            window_class: Some("firefox|zen|chromium".to_string()),
+            window_title: Some("YouTube|Twitch".to_string()),
+            fullscreen: None,
+            priority: 10,
+            inherits: Some("global".to_string()),
+            knob_cw: ActionConfig::Shortcut {
+                keys: vec!["Right".into()],
+            },
+            knob_ccw: ActionConfig::Shortcut {
+                keys: vec!["Left".into()],
+            },
+            knob_press: None,
+            key1: ActionConfig::None,
+            key2: ActionConfig::None,
+            key3: ActionConfig::None,
+        });
+        cfg.profiles.push(ProfileConfig {
+            name: "games_fs".to_string(),
+            window_class: None,
+            window_title: None,
+            fullscreen: Some(true),
+            priority: 5,
+            inherits: None,
+            knob_cw: ActionConfig::VolumeUp,
+            knob_ccw: ActionConfig::VolumeDown,
+            knob_press: None,
+            key1: ActionConfig::None,
+            key2: ActionConfig::None,
+            key3: ActionConfig::None,
+        });
+
+        let mut ctx = ContextState::new();
+        // Firefox em aba normal -> perfil firefox
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "firefox".to_string(),
+            title: "Rust Docs — Mozilla Firefox".to_string(),
+            fullscreen: false,
+        }));
+        assert_eq!(ctx.profile_for_window(&cfg), "firefox");
+
+        // Firefox no YouTube -> regra mais específica + maior prioridade vence!
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "firefox".to_string(),
+            title: "Lo-fi Hip Hop - YouTube — Mozilla Firefox".to_string(),
+            fullscreen: false,
+        }));
+        assert_eq!(ctx.profile_for_window(&cfg), "youtube");
+
+        // Outro app em fullscreen -> regra games_fs
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "steam_app_1234".to_string(),
+            title: "Game".to_string(),
+            fullscreen: true,
+        }));
+        assert_eq!(ctx.profile_for_window(&cfg), "games_fs");
+
+        // Última janela não-KnobContext é preservada quando KnobContext Settings abre
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "knobcontext".to_string(),
+            title: "KnobContext Settings".to_string(),
+            fullscreen: false,
+        }));
+        assert_eq!(
+            ctx.last_captured_window().map(|w| w.class.as_str()),
+            Some("steam_app_1234")
+        );
+    }
+
+    #[test]
     fn falls_back_to_global_for_unmapped_none_or_empty_config() {
         let cfg = Config::default();
         let mut ctx = ContextState::new();
@@ -307,22 +591,40 @@ mod tests {
     }
 
     #[test]
-    fn parses_hyprland_socket2_activewindow_lines() {
+    fn parses_hyprland_socket2_activewindow_and_fullscreen_lines() {
         assert_eq!(
-            parse_hyprland_event("activewindow>>firefox,Rust Docs — Mozilla Firefox\n"),
-            Some(Some("firefox".to_string()))
+            parse_hyprland_event("activewindow>>firefox,Rust, Docs — Mozilla Firefox\n"),
+            Some(HyprlandEvent::ActiveWindow(Some((
+                "firefox".to_string(),
+                "Rust, Docs — Mozilla Firefox".to_string()
+            ))))
         );
-        assert_eq!(parse_hyprland_event("activewindow>>,\n"), Some(None));
+        assert_eq!(
+            parse_hyprland_event("activewindow>>,\n"),
+            Some(HyprlandEvent::ActiveWindow(None))
+        );
+        assert_eq!(
+            parse_hyprland_event("fullscreen>>1\n"),
+            Some(HyprlandEvent::Fullscreen(true))
+        );
+        assert_eq!(
+            parse_hyprland_event("fullscreen>>0\n"),
+            Some(HyprlandEvent::Fullscreen(false))
+        );
         assert_eq!(parse_hyprland_event("workspace>>2\n"), None);
     }
 
     #[test]
-    fn parses_socket1_activewindow_query() {
-        let sample = "Window 55a1 -> Firefox:\n\tclass: firefox\n\ttitle: Home\n";
+    fn parses_socket1_activewindow_json_query() {
+        let sample = r#"{"class":"firefox","title":"YouTube — Mozilla Firefox","fullscreen":1}"#;
         assert_eq!(
-            parse_activewindow_query_response(sample),
-            Some("firefox".to_string())
+            parse_activewindow_json_response(sample),
+            Some(ActiveWindowInfo {
+                class: "firefox".to_string(),
+                title: "YouTube — Mozilla Firefox".to_string(),
+                fullscreen: true,
+            })
         );
-        assert_eq!(parse_activewindow_query_response("Invalid\n"), None);
+        assert_eq!(parse_activewindow_json_response("{}"), None);
     }
 }

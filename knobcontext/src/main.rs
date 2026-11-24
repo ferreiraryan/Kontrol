@@ -368,6 +368,7 @@ fn run() -> Result<(), KnobError> {
     let runtime_on_saved = Rc::clone(&runtime);
     let runtime_on_closed = Rc::clone(&runtime);
     let runtime_on_release = Rc::clone(&runtime);
+    let context_for_capture = Arc::clone(&runtime.borrow().context);
     let settings = Rc::new(SettingsController::new(
         initial_config_for_settings,
         move |saved_config| {
@@ -388,6 +389,12 @@ fn run() -> Result<(), KnobError> {
                 .dispatcher
                 .release_modifiers();
             debug!("Modificadores liberados preventivamente após captura/fechamento.");
+        },
+        move || {
+            context_for_capture
+                .read()
+                .ok()
+                .and_then(|ctx| ctx.last_captured_window().cloned())
         },
     )?);
 

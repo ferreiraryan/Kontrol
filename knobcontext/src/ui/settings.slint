@@ -134,14 +134,21 @@ component ActionRow inherits Rectangle {
 
 export component SettingsWindow inherits Window {
     title: "KnobContext Settings";
-    width: 760px;
-    height: 540px;
+    width: 820px;
+    height: 620px;
     background: rgba(20, 20, 20, 0.92);
 
     in property <[string]> profile-names: ["global"];
+    in property <[string]> preset-labels: [];
+    in property <bool> preset-picker-open: false;
     in property <int> selected-index: 0;
     in-out property <string> field-name;
     in-out property <string> field-window-class;
+    in-out property <string> field-window-title;
+    in-out property <string> field-inherits;
+    in property <int> field-priority: 0;
+    in property <bool> field-fullscreen-only: false;
+    in property <string> captured-window-hint: "";
     in property <string> summary-rotate-cw: "Nenhuma";
     in property <string> summary-rotate-ccw: "Nenhuma";
     in property <string> summary-key1: "Nenhuma";
@@ -174,7 +181,12 @@ export component SettingsWindow inherits Window {
 
     callback select-profile(int);
     callback add-profile();
+    callback toggle-preset-picker();
+    callback add-preset(int);
     callback remove-profile();
+    callback capture-active-window();
+    callback change-priority(int);
+    callback toggle-fullscreen-only();
     callback open-action-editor(int);
     callback save-requested();
     callback cancel-requested();
@@ -260,6 +272,11 @@ export component SettingsWindow inherits Window {
                 }
 
                 DarkButton {
+                    text: root.preset-picker-open ? "Fechar presets" : "+ Preset contextual";
+                    clicked => { root.toggle-preset-picker(); }
+                }
+
+                DarkButton {
                     text: "Remover perfil";
                     danger: true;
                     clicked => { root.remove-profile(); }
@@ -276,8 +293,8 @@ export component SettingsWindow inherits Window {
             border-color: rgba(255, 255, 255, 0.1);
 
             VerticalLayout {
-                padding: 16px;
-                spacing: 8px;
+                padding: 14px;
+                spacing: 7px;
 
                 HorizontalLayout {
                     spacing: 8px;
@@ -299,20 +316,105 @@ export component SettingsWindow inherits Window {
                 }
 
                 HorizontalLayout {
-                    spacing: 12px;
+                    spacing: 10px;
 
                     DarkField {
                         horizontal-stretch: 1;
                         label: "Nome do perfil";
-                        placeholder: "ex: firefox";
+                        placeholder: "ex: video_web";
                         value <=> root.field-name;
                     }
 
                     DarkField {
-                        horizontal-stretch: 1;
-                        label: "Janela correspondente (WINDOWCLASS)";
-                        placeholder: "vazio para global (ex: firefox, gimp)";
+                        horizontal-stretch: 2;
+                        label: "Janela (WINDOWCLASS, use | para várias)";
+                        placeholder: "ex: firefox|zen|chromium";
                         value <=> root.field-window-class;
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "Detectar";
+                            color: #a1a1aa;
+                            font-size: 11px;
+                            font-weight: 500;
+                        }
+                        DarkButton {
+                            width: 108px;
+                            text: "Capturar";
+                            clicked => { root.capture-active-window(); }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    DarkField {
+                        horizontal-stretch: 2;
+                        label: "Título contém (opcional, use |)";
+                        placeholder: "ex: YouTube|Twitch|Netflix";
+                        value <=> root.field-window-title;
+                    }
+
+                    DarkField {
+                        horizontal-stretch: 1;
+                        label: "Herdar de (opcional)";
+                        placeholder: "ex: global";
+                        value <=> root.field-inherits;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Prioridade:";
+                            color: #a1a1aa;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                        DarkButton {
+                            width: 28px;
+                            height: 26px;
+                            text: "-";
+                            clicked => { root.change-priority(-5); }
+                        }
+                        Text {
+                            width: 30px;
+                            text: root.field-priority;
+                            color: #f5f5f7;
+                            font-size: 12px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        DarkButton {
+                            width: 28px;
+                            height: 26px;
+                            text: "+";
+                            clicked => { root.change-priority(5); }
+                        }
+                    }
+
+                    DarkButton {
+                        height: 26px;
+                        primary: root.field-fullscreen-only;
+                        text: root.field-fullscreen-only ? "Tela cheia: SIM" : "Tela cheia: Qualquer";
+                        clicked => { root.toggle-fullscreen-only(); }
+                    }
+
+                    if root.captured-window-hint != "": Text {
+                        horizontal-stretch: 1;
+                        text: root.captured-window-hint;
+                        color: #93c5fd;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
 
@@ -387,6 +489,65 @@ export component SettingsWindow inherits Window {
                         text: "Salvar";
                         primary: true;
                         clicked => { root.save-requested(); }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.preset-picker-open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.62);
+
+        TouchArea {
+            clicked => { root.toggle-preset-picker(); }
+        }
+
+        Rectangle {
+            width: 420px;
+            height: 360px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 12px;
+            background: rgba(24, 24, 27, 0.98);
+            border-width: 1px;
+            border-color: rgba(255, 255, 255, 0.16);
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+
+                Text {
+                    text: "Adicionar Preset Contextual";
+                    color: #f5f5f7;
+                    font-size: 15px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Escolha um comportamento pronto para adicionar aos seus perfis:";
+                    color: #a1a1aa;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    vertical-stretch: 1;
+
+                    for label[idx] in root.preset-labels: DarkButton {
+                        height: 34px;
+                        text: label;
+                        clicked => { root.add-preset(idx); }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    DarkButton {
+                        text: "Fechar";
+                        clicked => { root.toggle-preset-picker(); }
                     }
                 }
             }

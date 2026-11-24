@@ -38,13 +38,29 @@ pub struct DeviceConfig {
     pub scroll_step: i32,
 }
 
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileConfig {
     pub name: String,
-    /// `WINDOWCLASS` do Hyprland associada a este perfil (ex.: `"firefox"`, `"gimp"`).
+    /// `WINDOWCLASS` do Hyprland associada a este perfil (aceita vários padrões separados por `|` ou `,`, ex.: `"firefox|zen|chromium"`).
     /// `None` para o perfil `"global"` ou perfis apenas manuais.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_class: Option<String>,
+    /// Substrings case-insensitive do título da janela separadas por `|` (ex.: `"YouTube|Twitch|Netflix"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
+    /// Se `Some(true)`, aplica apenas em janelas fullscreen; se `Some(false)`, apenas fora de fullscreen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fullscreen: Option<bool>,
+    /// Prioridade explícita na resolução contextual (maior vence; empate resolve por especificidade).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub priority: i32,
+    /// Nome do perfil pai para herdar ações não configuradas (`None`) neste perfil (ex.: `"global"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherits: Option<String>,
     #[serde(default)]
     pub knob_cw: ActionConfig,
     #[serde(default)]
@@ -59,6 +75,184 @@ pub struct ProfileConfig {
     pub key2: ActionConfig,
     #[serde(default)]
     pub key3: ActionConfig,
+}
+
+impl ProfileConfig {
+    /// Retorna `true` se o perfil define ao menos um critério contextual (`window_class`, `window_title` ou `fullscreen`).
+    pub fn has_context_rule(&self) -> bool {
+        self.window_class
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+            || self
+                .window_title
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+            || self.fullscreen.is_some()
+    }
+}
+
+/// Presets contextuais prontos que o usuário pode adicionar com 1 clique nas Configurações.
+#[derive(Debug, Clone)]
+pub struct ProfilePreset {
+    pub label: &'static str,
+    pub profile: ProfileConfig,
+}
+
+pub fn builtin_profile_presets() -> Vec<ProfilePreset> {
+    vec![
+        ProfilePreset {
+            label: "Navegador (Abas)",
+            profile: ProfileConfig {
+                name: "navegador".to_string(),
+                window_class: Some("firefox|zen|chromium|brave-browser|google-chrome".to_string()),
+                window_title: None,
+                fullscreen: None,
+                priority: 0,
+                inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
+                knob_cw: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Tab".into()],
+                },
+                knob_ccw: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "Tab".into()],
+                },
+                knob_press: None,
+                key1: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "T".into()],
+                },
+                key2: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "W".into()],
+                },
+                key3: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "R".into()],
+                },
+            },
+        },
+        ProfilePreset {
+            label: "Vídeo no Navegador (YouTube/Twitch)",
+            profile: ProfileConfig {
+                name: "video_web".to_string(),
+                window_class: Some("firefox|zen|chromium|brave-browser|google-chrome".to_string()),
+                window_title: Some("YouTube|Twitch|Netflix|Prime Video".to_string()),
+                fullscreen: None,
+                priority: 20,
+                inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
+                knob_cw: ActionConfig::Shortcut {
+                    keys: vec!["Right".into()],
+                },
+                knob_ccw: ActionConfig::Shortcut {
+                    keys: vec!["Left".into()],
+                },
+                knob_press: None,
+                key1: ActionConfig::Shortcut {
+                    keys: vec!["F".into()],
+                },
+                key2: ActionConfig::Shortcut {
+                    keys: vec!["M".into()],
+                },
+                key3: ActionConfig::Shortcut {
+                    keys: vec!["Space".into()],
+                },
+            },
+        },
+        ProfilePreset {
+            label: "Editor / IDE (VS Code / Cursor / Zed)",
+            profile: ProfileConfig {
+                name: "editor".to_string(),
+                window_class: Some("code|code-oss|cursor|zed".to_string()),
+                window_title: None,
+                fullscreen: None,
+                priority: 5,
+                inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
+                knob_cw: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "PageDown".into()],
+                },
+                knob_ccw: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "PageUp".into()],
+                },
+                knob_press: None,
+                key1: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Z".into()],
+                },
+                key2: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "Z".into()],
+                },
+                key3: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "S".into()],
+                },
+            },
+        },
+        ProfilePreset {
+            label: "GIMP / Krita (Pincel)",
+            profile: ProfileConfig {
+                name: "desenho".to_string(),
+                window_class: Some("gimp|krita".to_string()),
+                window_title: None,
+                fullscreen: None,
+                priority: 5,
+                inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
+                knob_cw: ActionConfig::Shortcut {
+                    keys: vec!["]".into()],
+                },
+                knob_ccw: ActionConfig::Shortcut {
+                    keys: vec!["[".into()],
+                },
+                knob_press: None,
+                key1: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Z".into()],
+                },
+                key2: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "Z".into()],
+                },
+                key3: ActionConfig::Shortcut {
+                    keys: vec!["B".into()],
+                },
+            },
+        },
+        ProfilePreset {
+            label: "Terminal (Scroll)",
+            profile: ProfileConfig {
+                name: "terminal".to_string(),
+                window_class: Some("kitty|alacritty|foot|wezterm|ghostty".to_string()),
+                window_title: None,
+                fullscreen: None,
+                priority: 0,
+                inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
+                knob_cw: ActionConfig::Scroll {
+                    delta: -3,
+                    horizontal: false,
+                },
+                knob_ccw: ActionConfig::Scroll {
+                    delta: 3,
+                    horizontal: false,
+                },
+                knob_press: None,
+                key1: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "C".into()],
+                },
+                key2: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "V".into()],
+                },
+                key3: ActionConfig::None,
+            },
+        },
+        ProfilePreset {
+            label: "Tela Cheia (Mídia / Jogos)",
+            profile: ProfileConfig {
+                name: "fullscreen".to_string(),
+                window_class: None,
+                window_title: None,
+                fullscreen: Some(true),
+                priority: 10,
+                inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
+                knob_cw: ActionConfig::VolumeUp,
+                knob_ccw: ActionConfig::VolumeDown,
+                knob_press: None,
+                key1: ActionConfig::MediaPrev,
+                key2: ActionConfig::MediaNext,
+                key3: ActionConfig::MediaPlayPause,
+            },
+        },
+    ]
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -334,6 +528,10 @@ impl Default for Config {
                 ProfileConfig {
                     name: GLOBAL_PROFILE_NAME.to_string(),
                     window_class: None,
+                    window_title: None,
+                    fullscreen: None,
+                    priority: 0,
+                    inherits: None,
                     knob_cw: ActionConfig::VolumeUp,
                     knob_ccw: ActionConfig::VolumeDown,
                     knob_press: None,
@@ -344,6 +542,10 @@ impl Default for Config {
                 ProfileConfig {
                     name: "firefox".to_string(),
                     window_class: Some("firefox".to_string()),
+                    window_title: None,
+                    fullscreen: None,
+                    priority: 0,
+                    inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
                     knob_cw: ActionConfig::Shortcut {
                         keys: vec!["Ctrl".to_string(), "Tab".to_string()],
                     },
@@ -364,6 +566,10 @@ impl Default for Config {
                 ProfileConfig {
                     name: "gimp".to_string(),
                     window_class: Some("gimp".to_string()),
+                    window_title: None,
+                    fullscreen: None,
+                    priority: 0,
+                    inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
                     knob_cw: ActionConfig::Shortcut {
                         keys: vec!["]".to_string()],
                     },
@@ -523,6 +729,53 @@ impl Config {
                 self.active_profile
             )));
         }
+
+        // Valida referências e ciclos em `inherits`
+        for profile in &self.profiles {
+            if let Some(parent_name) = profile
+                .inherits
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if parent_name.eq_ignore_ascii_case(&profile.name) {
+                    return Err(KnobError::ConfigValidation(format!(
+                        "perfil '{}' não pode herdar de si mesmo",
+                        profile.name
+                    )));
+                }
+                if !self
+                    .profiles
+                    .iter()
+                    .any(|p| p.name.eq_ignore_ascii_case(parent_name))
+                {
+                    return Err(KnobError::ConfigValidation(format!(
+                        "perfil '{}' herda de perfil inexistente '{}'",
+                        profile.name, parent_name
+                    )));
+                }
+            }
+        }
+        for start in &self.profiles {
+            let mut visited = HashSet::new();
+            let mut current = Some(start.name.to_ascii_lowercase());
+            while let Some(name_lower) = current {
+                if !visited.insert(name_lower.clone()) {
+                    return Err(KnobError::ConfigValidation(format!(
+                        "ciclo detectado na herança `inherits` do perfil '{}'",
+                        start.name
+                    )));
+                }
+                current = self
+                    .profiles
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(&name_lower))
+                    .and_then(|p| p.inherits.as_deref())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_ascii_lowercase);
+            }
+        }
         Ok(())
     }
 
@@ -677,6 +930,10 @@ key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
         cfg.profiles.push(ProfileConfig {
             name: "Global".to_string(),
             window_class: None,
+            window_title: None,
+            fullscreen: None,
+            priority: 0,
+            inherits: None,
             knob_cw: ActionConfig::None,
             knob_ccw: ActionConfig::None,
             knob_press: None,
@@ -686,6 +943,25 @@ key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
         });
         assert!(matches!(
             cfg.validate(),
+            Err(KnobError::ConfigValidation(_))
+        ));
+    }
+
+    #[test]
+    fn validates_inherits_and_detects_cycles() {
+        let mut cfg = Config::default();
+        cfg.profiles[1].inherits = Some("nao_existe".to_string());
+        assert!(matches!(
+            cfg.validate(),
+            Err(KnobError::ConfigValidation(_))
+        ));
+
+        // Ciclo A -> B -> A
+        let mut cyclic = Config::default();
+        cyclic.profiles[1].inherits = Some("gimp".to_string());
+        cyclic.profiles[2].inherits = Some("firefox".to_string());
+        assert!(matches!(
+            cyclic.validate(),
             Err(KnobError::ConfigValidation(_))
         ));
     }

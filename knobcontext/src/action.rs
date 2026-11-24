@@ -156,32 +156,59 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
         self.executor.release_modifiers();
     }
 
+    fn resolve_action_with_inheritance(&self, start_idx: usize, event: KnobEvent) -> ActionConfig {
+        let mut visited = Vec::with_capacity(4);
+        let mut current = Some(start_idx);
+
+        while let Some(idx) = current {
+            if visited.contains(&idx) {
+                break;
+            }
+            visited.push(idx);
+
+            let Some(profile) = self.profiles.get(idx) else {
+                break;
+            };
+            let action = match event {
+                KnobEvent::RotateCw => &profile.knob_cw,
+                KnobEvent::RotateCcw => &profile.knob_ccw,
+                KnobEvent::Key1 => &profile.key1,
+                KnobEvent::Key2 => &profile.key2,
+                KnobEvent::Key3 => &profile.key3,
+                KnobEvent::KnobPress | KnobEvent::OpenSettings => return ActionConfig::None,
+            };
+            if !matches!(action, ActionConfig::None) {
+                return action.clone();
+            }
+            current = profile
+                .inherits
+                .as_deref()
+                .and_then(|parent| self.find_profile_index(parent));
+        }
+
+        ActionConfig::None
+    }
+
     pub fn dispatch(
         &mut self,
         event: KnobEvent,
         profile_name: &str,
     ) -> Result<DispatchOutcome, KnobError> {
+        if matches!(event, KnobEvent::KnobPress | KnobEvent::OpenSettings) {
+            return Ok(DispatchOutcome::Ignored);
+        }
+
         let target_idx = self
             .find_profile_index(profile_name)
             .or_else(|| self.find_profile_index(crate::config::GLOBAL_PROFILE_NAME))
             .unwrap_or(self.active_index);
 
-        let Some(profile) = self.profiles.get(target_idx) else {
+        if self.profiles.get(target_idx).is_none() {
             return Ok(DispatchOutcome::Ignored);
-        };
+        }
         self.active_index = target_idx;
 
-        let action = match event {
-            KnobEvent::RotateCw => profile.knob_cw.clone(),
-            KnobEvent::RotateCcw => profile.knob_ccw.clone(),
-            KnobEvent::Key1 => profile.key1.clone(),
-            KnobEvent::Key2 => profile.key2.clone(),
-            KnobEvent::Key3 => profile.key3.clone(),
-            // `KnobPress` é reservado para o overlay; nunca executa ação de perfil.
-            KnobEvent::KnobPress | KnobEvent::OpenSettings => {
-                return Ok(DispatchOutcome::Ignored);
-            }
-        };
+        let action = self.resolve_action_with_inheritance(target_idx, event);
 
         match action {
             ActionConfig::None => Ok(DispatchOutcome::Ignored),
@@ -528,6 +555,50 @@ mod tests {
             })
         );
         assert_eq!(dispatcher.active_profile_name(), "gimp");
+    }
+
+    #[test]
+    fn inherits_unspecified_actions_from_parent_profile_without_cycles() {
+        let mut cfg = Config::default();
+        cfg.profiles.push(crate::config::ProfileConfig {
+            name: "video_child".to_string(),
+            window_class: Some("firefox".to_string()),
+            window_title: Some("YouTube".to_string()),
+            fullscreen: None,
+            priority: 10,
+            inherits: Some("global".to_string()),
+            knob_cw: ActionConfig::Shortcut {
+                keys: vec!["Right".into()],
+            },
+            knob_ccw: ActionConfig::Shortcut {
+                keys: vec!["Left".into()],
+            },
+            knob_press: None,
+            key1: ActionConfig::None,
+            key2: ActionConfig::None,
+            key3: ActionConfig::None,
+        });
+        let mut dispatcher = ActionDispatcher::new(cfg.profiles, 0, MockExecutor::default());
+
+        // Ação própria sobrescreve
+        let own = dispatcher
+            .dispatch(KnobEvent::RotateCw, "video_child")
+            .expect("ação própria");
+        assert_eq!(
+            own,
+            DispatchOutcome::Executed(ActionConfig::Shortcut {
+                keys: vec!["Right".into()],
+            })
+        );
+
+        // Key3 = None herda MediaPlayPause do "global"
+        let inherited = dispatcher
+            .dispatch(KnobEvent::Key3, "video_child")
+            .expect("ação herdada");
+        assert_eq!(
+            inherited,
+            DispatchOutcome::Executed(ActionConfig::MediaPlayPause)
+        );
     }
 
     #[test]

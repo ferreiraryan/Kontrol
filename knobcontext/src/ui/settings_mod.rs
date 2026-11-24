@@ -1,7 +1,10 @@
 use crate::actions_catalog::{
     action_summary, action_type_title, list_desktop_apps, DesktopApp, ACTION_TYPE_TITLES,
 };
-use crate::config::{ActionConfig, Config, ProfileConfig, GLOBAL_PROFILE_NAME};
+use crate::config::{
+    builtin_profile_presets, ActionConfig, Config, ProfileConfig, GLOBAL_PROFILE_NAME,
+};
+use crate::context::ActiveWindowInfo;
 use crate::error::KnobError;
 use crate::ui::action_editor_mod::{format_captured_key, pick_file_uri, sync_editor_to_ui};
 use crate::ui::action_editor_state::{ActionEditorState, ControlSlot};
@@ -14,12 +17,14 @@ struct SettingsDraft {
     base_config: Config,
     selected_index: usize,
     dirty: bool,
+    preset_picker_open: bool,
     editor: ActionEditorState,
     desktop_apps: Vec<DesktopApp>,
 }
 
 type OnSavedCallback = Rc<dyn Fn(Config)>;
 type OnNotifyCallback = Rc<dyn Fn()>;
+type OnCaptureWindowCallback = Rc<dyn Fn() -> Option<ActiveWindowInfo>>;
 
 /// Controlador da janela de configurações Slint (edição visual de perfis e persistência TOML).
 ///
@@ -33,6 +38,7 @@ pub struct SettingsController {
     on_saved: OnSavedCallback,
     on_closed: OnNotifyCallback,
     on_release_modifiers: OnNotifyCallback,
+    on_capture_window: OnCaptureWindowCallback,
 }
 
 impl SettingsController {
@@ -41,11 +47,13 @@ impl SettingsController {
         on_saved: impl Fn(Config) + 'static,
         on_closed: impl Fn() + 'static,
         on_release_modifiers: impl Fn() + 'static,
+        on_capture_window: impl Fn() -> Option<ActiveWindowInfo> + 'static,
     ) -> Result<Self, KnobError> {
         let draft = Rc::new(RefCell::new(SettingsDraft {
             base_config: initial_config,
             selected_index: 0,
             dirty: false,
+            preset_picker_open: false,
             editor: ActionEditorState::default(),
             desktop_apps: list_desktop_apps(),
         }));
@@ -58,6 +66,7 @@ impl SettingsController {
             on_saved: Rc::new(on_saved),
             on_closed: Rc::new(on_closed),
             on_release_modifiers: Rc::new(on_release_modifiers),
+            on_capture_window: Rc::new(on_capture_window),
         })
     }
 
@@ -70,11 +79,18 @@ impl SettingsController {
             .collect();
         window.set_editor_type_titles(ModelRc::from(Rc::new(VecModel::from(titles))));
 
+        let preset_labels: Vec<SharedString> = builtin_profile_presets()
+            .iter()
+            .map(|p| SharedString::from(p.label))
+            .collect();
+        window.set_preset_labels(ModelRc::from(Rc::new(VecModel::from(preset_labels))));
+
         let draft = Rc::clone(&self.draft);
         let is_open = Rc::clone(&self.is_open);
         let on_saved = Rc::clone(&self.on_saved);
         let on_closed = Rc::clone(&self.on_closed);
         let on_release_modifiers = Rc::clone(&self.on_release_modifiers);
+        let on_capture_window = Rc::clone(&self.on_capture_window);
 
         // Selecionar perfil na lista lateral
         {
@@ -107,10 +123,14 @@ impl SettingsController {
                     return;
                 }
 
-                let new_name = next_unique_profile_name(&d.base_config.profiles);
+                let new_name = next_unique_profile_name(&d.base_config.profiles, "novo_perfil");
                 d.base_config.profiles.push(ProfileConfig {
                     name: new_name,
                     window_class: None,
+                    window_title: None,
+                    fullscreen: None,
+                    priority: 0,
+                    inherits: Some(GLOBAL_PROFILE_NAME.to_string()),
                     knob_cw: ActionConfig::VolumeUp,
                     knob_ccw: ActionConfig::VolumeDown,
                     knob_press: None,
@@ -121,6 +141,117 @@ impl SettingsController {
                 d.selected_index = d.base_config.profiles.len() - 1;
                 d.dirty = true;
                 win.set_error_message(SharedString::from(""));
+                sync_draft_to_ui(&win, &d);
+            });
+        }
+
+        // Abrir/fechar seletor de presets contextuais
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_toggle_preset_picker(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                d.preset_picker_open = !d.preset_picker_open;
+                win.set_preset_picker_open(d.preset_picker_open);
+            });
+        }
+
+        // Adicionar preset contextual selecionado
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_add_preset(move |idx| {
+                let Some(win) = weak.upgrade() else { return };
+                let presets = builtin_profile_presets();
+                let Some(preset) = presets.get(idx.max(0) as usize) else {
+                    return;
+                };
+                let mut d = draft_ref.borrow_mut();
+                if let Err(err) = apply_profile_header_to_draft(&win, &mut d) {
+                    win.set_error_message(SharedString::from(err.to_string()));
+                    return;
+                }
+                let mut profile = preset.profile.clone();
+                profile.name = next_unique_profile_name(&d.base_config.profiles, &profile.name);
+                d.base_config.profiles.push(profile);
+                d.selected_index = d.base_config.profiles.len() - 1;
+                d.dirty = true;
+                d.preset_picker_open = false;
+                win.set_preset_picker_open(false);
+                win.set_error_message(SharedString::from(""));
+                sync_draft_to_ui(&win, &d);
+            });
+        }
+
+        // Capturar última janela ativa do Hyprland
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            let capture_cb = Rc::clone(&on_capture_window);
+            window.on_capture_active_window(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let Some(captured) = capture_cb() else {
+                    win.set_captured_window_hint(SharedString::from(
+                        "Nenhuma janela anterior detectada no Hyprland.",
+                    ));
+                    return;
+                };
+                let mut d = draft_ref.borrow_mut();
+                let idx = d.selected_index;
+                if let Some(profile) = d.base_config.profiles.get_mut(idx) {
+                    if !captured.class.is_empty() {
+                        profile.window_class = Some(captured.class.clone());
+                        d.dirty = true;
+                    }
+                }
+                win.set_captured_window_hint(SharedString::from(format!(
+                    "Capturado: {} ({})",
+                    captured.class,
+                    if captured.title.is_empty() {
+                        "sem título"
+                    } else {
+                        &captured.title
+                    }
+                )));
+                sync_draft_to_ui(&win, &d);
+            });
+        }
+
+        // Alterar prioridade do perfil selecionado
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_change_priority(move |delta| {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                let _ = apply_profile_header_to_draft(&win, &mut d);
+                let idx = d.selected_index;
+                if let Some(profile) = d.base_config.profiles.get_mut(idx) {
+                    profile.priority = (profile.priority + delta).clamp(-100, 100);
+                    d.dirty = true;
+                }
+                sync_draft_to_ui(&win, &d);
+            });
+        }
+
+        // Alternar regra "Somente tela cheia"
+        {
+            let weak = window.as_weak();
+            let draft_ref = Rc::clone(&draft);
+            window.on_toggle_fullscreen_only(move || {
+                let Some(win) = weak.upgrade() else { return };
+                let mut d = draft_ref.borrow_mut();
+                let _ = apply_profile_header_to_draft(&win, &mut d);
+                let idx = d.selected_index;
+                if let Some(profile) = d.base_config.profiles.get_mut(idx) {
+                    profile.fullscreen = if profile.fullscreen == Some(true) {
+                        None
+                    } else {
+                        Some(true)
+                    };
+                    d.dirty = true;
+                }
                 sync_draft_to_ui(&win, &d);
             });
         }
@@ -285,10 +416,13 @@ impl SettingsController {
             d.base_config = current_config.clone();
             d.selected_index = current_config.active_profile_index();
             d.dirty = false;
+            d.preset_picker_open = false;
             d.editor.cancel();
             sync_draft_to_ui(&window, &d);
             sync_editor_to_ui(&window, &d.editor, &d.desktop_apps);
         }
+        window.set_preset_picker_open(false);
+        window.set_captured_window_hint(SharedString::from(""));
         window.set_error_message(SharedString::from(""));
         *self.is_open.borrow_mut() = true;
         window
@@ -590,13 +724,18 @@ fn set_slot_action(profile: &mut ProfileConfig, slot: ControlSlot, action: Actio
     }
 }
 
-fn next_unique_profile_name(profiles: &[ProfileConfig]) -> String {
+fn next_unique_profile_name(profiles: &[ProfileConfig], base: &str) -> String {
+    let base_clean = if base.trim().is_empty() {
+        "novo_perfil"
+    } else {
+        base.trim()
+    };
     let mut counter = 1usize;
     loop {
         let candidate = if counter == 1 {
-            "novo_perfil".to_string()
+            base_clean.to_string()
         } else {
-            format!("novo_perfil_{counter}")
+            format!("{base_clean}_{counter}")
         };
         if !profiles
             .iter()
@@ -628,6 +767,14 @@ fn sync_draft_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
         win.set_field_window_class(SharedString::from(
             profile.window_class.as_deref().unwrap_or(""),
         ));
+        win.set_field_window_title(SharedString::from(
+            profile.window_title.as_deref().unwrap_or(""),
+        ));
+        win.set_field_inherits(SharedString::from(
+            profile.inherits.as_deref().unwrap_or(""),
+        ));
+        win.set_field_priority(profile.priority);
+        win.set_field_fullscreen_only(profile.fullscreen == Some(true));
         win.set_summary_rotate_cw(format_summary(&profile.knob_cw, &draft.desktop_apps));
         win.set_summary_rotate_ccw(format_summary(&profile.knob_ccw, &draft.desktop_apps));
         win.set_summary_key1(format_summary(&profile.key1, &draft.desktop_apps));
@@ -651,18 +798,30 @@ fn apply_profile_header_to_draft(
         ));
     }
 
-    let window_class_raw = win.get_field_window_class().trim().to_string();
-    let window_class = if window_class_raw.is_empty() {
-        None
-    } else {
-        Some(window_class_raw)
-    };
+    let window_class = normalize_optional_field(win.get_field_window_class().as_str());
+    let window_title = normalize_optional_field(win.get_field_window_title().as_str());
+    let inherits = normalize_optional_field(win.get_field_inherits().as_str());
 
-    if profile.name != name || profile.window_class != window_class {
+    if profile.name != name
+        || profile.window_class != window_class
+        || profile.window_title != window_title
+        || profile.inherits != inherits
+    {
         profile.name = name;
         profile.window_class = window_class;
+        profile.window_title = window_title;
+        profile.inherits = inherits;
         draft.dirty = true;
     }
 
     Ok(())
+}
+
+fn normalize_optional_field(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
