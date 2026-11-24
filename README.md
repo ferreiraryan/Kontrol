@@ -9,8 +9,12 @@ Mapeador global leve em Rust para dispositivos knob USB (3 teclas + botão rotat
 - Simulação de entrada nativa no Wayland via `enigo` (backend `wayland`).
 - Overlay minimalista escuro em Slint (`backend-winit-wayland` + `renderer-software` para baixo consumo de memória):
   - **Pressionar o knob (`KnobPress`)** é reservado para abrir/fechar o overlay (não é configurável como ação de perfil).
-  - A primeira opção do overlay é **Automático** (segue a janela ativa via Hyprland); escolher um perfil nomeado trava em modo **Manual** até voltar para **Automático**. O modo é **volátil** (sempre reinicia em **Automático** ao abrir o app).
+  - A primeira opção do overlay é **Automático** (segue a janela ativa via Hyprland); escolher um perfil nomeado trava em modo **Manual** até voltar para **Automático**.
+  - O modo escolhido (`mode = "auto"` ou `mode = "manual:<perfil>"`) é **persistido** no `config.toml` entre sessões.
   - **Inatividade de 3s** fecha o overlay automaticamente sem alterar o modo/perfil ativo.
+- **Ícone no tray via StatusNotifierItem (SNI)**:
+  - Exposto via D-Bus (`org.kde.StatusNotifierItem` com `ksni`) — compatível nativamente com **Caelestia dots** (Quickshell), Waybar (`tray` module) e outros hosts SNI no Wayland.
+  - Exibe tooltip dinâmico (`KnobContext — Automático (firefox)` ou `KnobContext — Manual: global`) e menu rápido (*Abrir configurações*, *Modo Automático*, *Modo Manual → perfis*, *Sair*).
 - **Limitação conhecida**: a v1.0 no Linux Wayland opera em modo global (sem detecção de janela em primeiro plano). A detecção de aplicativo em foco está prevista para a Fase 3 (Windows/X11).
 
 ## Requisitos de permissão no Linux
@@ -41,7 +45,31 @@ windowrulev2 = noshadow, title:^(KnobContext Overlay)$
 
 > **Transparência**: o overlay utiliza `background: transparent` no Slint (`renderer-software`) com cartão interno em `rgba(20, 20, 20, 0.85)` e cantos arredondados de `12px`. No Hyprland, a transparência RGBA funciona nativamente sem configuração adicional; se desejar desfoque de fundo, adicione `windowrulev2 = blur, title:^(KnobContext Overlay)$` ou regra de layer/opacity conforme sua versão do Hyprland.
 
-## Como executar
+## Instalação via AppImage (Arch Linux)
+
+1. Instale `fuse2` (necessário no Arch para executar AppImages):
+   ```bash
+   sudo pacman -S fuse2
+   ```
+2. Garanta que seu usuário pertence ao grupo `input` (e faça logout/login):
+   ```bash
+   sudo usermod -aG input "$USER"
+   ```
+3. Instale a regra `udev` **uma única vez** (usando o `install.sh` incluso em `packaging/appimage/`):
+   ```bash
+   ./packaging/appimage/install.sh
+   ```
+   *(Reconecte o dispositivo knob após rodar o script.)*
+4. Para gerar o AppImage localmente (requer `appimagetool` ou `linuxdeploy` no `PATH`):
+   ```bash
+   ./packaging/build-appimage.sh
+   chmod +x KnobContext-x86_64.AppImage
+   ./KnobContext-x86_64.AppImage
+   ```
+
+> **Requisito de Tray (SNI)**: o ícone na barra requer um host `StatusNotifierItem` ativo (como **Caelestia dots**, Waybar com módulo `tray`, ou Quickshell). Se nenhum host SNI estiver rodando, o KnobContext registra um aviso e continua funcionando normalmente.
+
+## Como executar (desenvolvimento)
 
 ```bash
 cd knobcontext
@@ -81,6 +109,7 @@ O arquivo usa strings legíveis para cada ação (compatível também com o form
 
 ```toml
 active_profile = "global"
+mode = "auto" # ou "manual:global"
 
 [device]
 kbd_path = "/dev/input/by-id/usb-1189_8890-event-kbd"

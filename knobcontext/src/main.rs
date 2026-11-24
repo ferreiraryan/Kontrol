@@ -251,7 +251,18 @@ impl AppRuntime {
     }
 }
 
+fn check_udev_rule_installed() {
+    let rules_path = std::path::Path::new("/etc/udev/rules.d/99-knobcontext.rules");
+    if !rules_path.exists() {
+        warn!(
+            "Regra udev não encontrada em {}. Rode install.sh do AppImage ou copie 99-knobcontext.rules para /etc/udev/rules.d/. Sem isso, o app pode não conseguir acessar o dispositivo.",
+            rules_path.display()
+        );
+    }
+}
+
 fn run() -> Result<(), KnobError> {
+    check_udev_rule_installed();
     let open_settings_on_start = env::args().skip(1).any(|arg| arg == "--settings");
 
     let (config, loaded_path) = Config::load_default_location()?;

@@ -19,20 +19,19 @@
 - **Wayland**: a crate `focus-tracker` não suporta detecção de janela em foco no Wayland. Por isso, a v1.0 opera em modo global no Linux Wayland.
 
 ## Status Atual
-Fase 4C-fix (correções de bugs + ajustes de design) implementada, testada e validada no Hyprland Wayland. Pronto para validação manual final e preparação da Fase 5 (empacotamento e distribuição).
+Fase 5 (persistência de `ProfileMode`, ícone no tray via StatusNotifierItem/`ksni`, e estrutura/scripts de empacotamento AppImage para Arch) implementada e validada.
 
 ## Concluído
 - **Fase 0**: probes `evdev` e `hidapi`, descoberta real do dispositivo `1189:8890`.
 - **Fase 1 (núcleo sem UI)**: `error.rs`, `config.rs`, `input.rs` (`evdev::grab()` + `ungrab()` + ordem física confirmada `Key1`/`Key2`/`Key3`), `action.rs` (`enigo` Wayland).
 - **Fase 2 (UI Overlay Slint)**: `ui/state.rs`, `ui/overlay.slint`, `ui/mod.rs` (overlay minimalista escuro com timeout de 3s).
 - **Fase 3 (Contexto Hyprland + Settings Slint)**: `context.rs` (listener `socket2` em `UnixStream`), `ui/settings.slint`, `ui/settings_mod.rs` (hot-reload sem liberar `grab()`, sem conflito com overlay).
-- **Fase 4C (Construtor visual de ações + ações ricas)**: `actions_catalog.rs`, `ui/action_editor.slint`, `ui/action_editor_mod.rs`, `ui/action_editor_state.rs` (9 tipos de ação, captura ao vivo, apps `.desktop`, `rfd` file chooser, macros, TOML em strings canônicas).
-- **Fase 4C-fix (Estabilidade e Design)**:
-  - **BUG 1 (tecla presa)**: criado `KeyReleaseGuard` (RAII) em `src/action.rs` garantindo `Direction::Release` em ordem reversa mesmo em erros no meio de atalhos/macros; `release_modifiers()` disparado ao cancelar/fechar captura no popover; `EventTranslator` em `src/input.rs` agora emite combos com `Ctrl` somente no `KEY_UP` do modificador (sem estado residual).
-  - **BUG 2 (scroll lento no Wayland)**: descoberto que `enigo` envia pixels contínuos no `wlr_virtual_pointer::axis`; adicionado `device.scroll_step` (padrão `20`, configurável 1–200) multiplicando `Scroll:<dir>:<qtd>`.
-  - **DESIGN 1 (`KnobPress` reservado)**: `KnobPress` é reservado exclusivamente para abrir/fechar o overlay; removido da tabela de ações nas Settings e ignorado no `ActionDispatcher`. Campos legados `knob_press` em TOMLs antigos geram warning único ao carregar e são omitidos ao salvar.
-  - **DESIGN 2 (Modo Automático / Manual)**: adicionado `ProfileMode { Auto, Manual(String) }` volátil em `ContextState`; primeira opção do overlay é `"Automático"` (subtítulo `"Automático (<perfil>)"`), enquanto perfis nomeados ativam modo `"Manual"` que não é sobrescrito por mudanças de janela.
-  - Validação: `cargo test` (41/41), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
+- **Fase 4C + 4C-fix**: construtor visual de ações (9 tipos, captura ao vivo, apps `.desktop`, `rfd`, macros), `KeyReleaseGuard` (RAII), `device.scroll_step`, `KnobPress` reservado ao overlay, e modo `Automático` / `Manual`.
+- **Fase 5 (Distribuição, Tray SNI e Persistência)**:
+  - **Persistência de `ProfileMode`**: campo `mode = "auto"` ou `"manual:<perfil>"` no `config.toml`, salvo automaticamente ao alternar modo no overlay ou no tray, com fallback seguro para `Auto` + warning se o perfil não existir.
+  - **Tray SNI (`src/tray.rs`)**: `KnobTray` usando `ksni 0.3` (`blocking` + `async-io`, sem GTK/Qt/tokio), ícone 24×24 ARGB32 embutido via `include_bytes!`, tooltip dinâmico, menu (*Abrir configurações*, *Modo Automático*, *Modo Manual → perfis*, *Sair* com `ungrab()` gracioso).
+  - **Empacotamento AppImage (`packaging/`)**: `AppRun`, `knobcontext.desktop`, `knobcontext.png` (256×256), `99-knobcontext.rules`, `install.sh`, `build-appimage.sh` (verifica `linuxdeploy`/`appimagetool`), e aviso não-bloqueante no startup caso `/etc/udev/rules.d/99-knobcontext.rules` não exista.
+  - Validação: `cargo test` (44/44), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):
@@ -55,9 +54,6 @@ Fase 4C-fix (correções de bugs + ajustes de design) implementada, testada e va
   - `/dev/hidraw*`: `root:root` (`0600`).
 
 ## Próximos Passos
-1. Validar interativamente o construtor visual de ações (`--settings` → `"Editar"`): testar `Launch:`, `Macro:`, captura ao vivo (inclusive `Super+E`), `Open:` (URL e arquivo via `rfd`) e `Scroll:`.
-2. **Fase 5 (Empacotamento e distribuição)**:
-   - Serviço `systemd --user` (`knobcontext.service`) + regra `udev` instalada no pacote.
-   - Arquivo `.desktop` e ícone para abrir configurações diretamente do launcher.
-   - `PKGBUILD` (Arch Linux) / binário release otimizado (`strip`, `lto`, verificação de RSS < 50MB).
-   - Suporte multiplataforma Windows/X11 (`focus-tracker` + `hidapi`).
+1. Instalar `appimagetool` (ou `linuxdeploy`) e rodar `./packaging/build-appimage.sh` para gerar o `KnobContext-x86_64.AppImage`.
+2. Validar manualmente o ícone no tray do Caelestia dots, a persistência de `mode = "manual:global"` entre reinicializações e o script `packaging/appimage/install.sh`.
+3. *(Versões futuras)* Serviço `systemd --user`, suporte multiplataforma Windows/X11 (`focus-tracker` + `hidapi`) e (opcional) escrita de firmware pela Interface 1 (`EP 2 OUT`).

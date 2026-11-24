@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=KnobContext
+Comment=Contextual HID knob mapper and overlay
+Exec=knobcontext
+Icon=knobcontext
+Categories=Utility;
+Terminal=false
