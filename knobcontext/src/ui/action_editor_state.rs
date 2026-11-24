@@ -145,7 +145,7 @@ impl ActionEditorState {
             ActionType::Macro(steps) => {
                 self.macro_steps = steps.clone();
             }
-            ActionType::None => {}
+            ActionType::Provider { .. } | ActionType::None => {}
         }
     }
 

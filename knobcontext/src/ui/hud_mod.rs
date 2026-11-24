@@ -201,6 +201,11 @@ fn describe_non_continuous_action(action: &ActionConfig) -> (&'static str, Strin
         ActionConfig::Open { target } => ("↗", target.clone()),
         ActionConfig::Exec { command } => ("$", command.clone()),
         ActionConfig::Macro { steps } => ("⚡", format!("Macro ({} passos)", steps.len())),
+        ActionConfig::Provider {
+            provider_id,
+            command_id,
+            ..
+        } => ("◈", format!("{provider_id} • {command_id}")),
         ActionConfig::NextProfile => ("◈", "Próximo perfil".to_string()),
         ActionConfig::VolumeUp
         | ActionConfig::VolumeDown

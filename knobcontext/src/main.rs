@@ -6,6 +6,7 @@ mod context;
 mod error;
 mod input;
 mod overlay_hub;
+mod providers;
 mod system;
 mod tray;
 mod ui;
@@ -16,6 +17,7 @@ use crate::context::{spawn_hyprland_listener, ContextState, ProfileMode};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
 use crate::overlay_hub::{HubController, HubEffect};
+use crate::providers::ProviderRegistry;
 use crate::system::{SystemRequest, SystemResponse, SystemWorker};
 use crate::tray::{TrayCommand, TrayController};
 use crate::ui::hud_mod::{HudController, HUD_HEIGHT_PX, HUD_WIDTH_PX};
@@ -36,6 +38,7 @@ use std::time::{Duration, Instant};
 struct AppRuntime {
     config: Config,
     context: Arc<RwLock<ContextState>>,
+    providers: Arc<RwLock<ProviderRegistry>>,
     hub: HubController,
     dispatcher: ActionDispatcher<EnigoExecutor>,
     overlay: OverlayWindow,
@@ -117,6 +120,9 @@ impl AppRuntime {
         }
 
         self.dispatcher.update_profiles(new_config.profiles.clone());
+        if let Ok(mut reg) = self.providers.write() {
+            *reg = ProviderRegistry::default_registry(&new_config.providers);
+        }
         self.config = new_config;
         info!("Configuração salva e aplicada em tempo real.");
     }
@@ -317,8 +323,11 @@ fn run() -> Result<(), KnobError> {
 
     let active_idx = config.active_profile_index();
     let initial_mode = config.resolve_profile_mode();
+    let providers = Arc::new(RwLock::new(ProviderRegistry::default_registry(
+        &config.providers,
+    )));
 
-    let executor = EnigoExecutor::new(config.device.scroll_step)?;
+    let executor = EnigoExecutor::new(config.device.scroll_step, Arc::clone(&providers))?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
     let overlay = OverlayWindow::new();
     let hud = HudController::new();
@@ -391,6 +400,7 @@ fn run() -> Result<(), KnobError> {
     let runtime = Rc::new(RefCell::new(AppRuntime {
         config,
         context,
+        providers,
         hub,
         dispatcher,
         overlay,

@@ -5,7 +5,7 @@ use crate::actions_catalog::{
 use crate::context::ProfileMode;
 use crate::error::KnobError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -366,6 +366,33 @@ pub fn default_overlay_items() -> Vec<OverlayItemConfig> {
     ]
 }
 
+pub const DEFAULT_OBS_WEBSOCKET_PORT: u16 = 4455;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObsProviderConfig {
+    pub enabled: bool,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
+impl Default for ObsProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: DEFAULT_OBS_WEBSOCKET_PORT,
+            password: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProvidersConfig {
+    pub obs: ObsProviderConfig,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -374,6 +401,8 @@ pub struct Config {
     /// Modo de perfil persistido: `"auto"` ou `"manual:<nome_do_perfil>"`.
     pub mode: String,
     pub overlay: OverlayConfig,
+    #[serde(default)]
+    pub providers: ProvidersConfig,
     pub profiles: Vec<ProfileConfig>,
 }
 
@@ -758,6 +787,11 @@ pub enum ActionConfig {
     Macro {
         steps: Vec<MacroStep>,
     },
+    Provider {
+        provider_id: String,
+        command_id: String,
+        args: BTreeMap<String, String>,
+    },
     NextProfile,
     #[default]
     None,
@@ -863,6 +897,15 @@ impl ActionConfig {
                 }
             }
             ActionType::Macro(steps) => Self::Macro { steps },
+            ActionType::Provider {
+                provider_id,
+                command_id,
+                args,
+            } => Self::Provider {
+                provider_id,
+                command_id,
+                args,
+            },
             ActionType::None => Self::None,
         }
     }
@@ -896,6 +939,15 @@ impl ActionConfig {
                 ActionType::Scroll { direction, amount }
             }
             Self::Macro { steps } => ActionType::Macro(steps.clone()),
+            Self::Provider {
+                provider_id,
+                command_id,
+                args,
+            } => ActionType::Provider {
+                provider_id: provider_id.clone(),
+                command_id: command_id.clone(),
+                args: args.clone(),
+            },
             Self::NextProfile | Self::None => ActionType::None,
         }
     }
@@ -957,6 +1009,19 @@ impl ActionConfig {
                     }
                 }
             }
+            Self::Provider {
+                provider_id,
+                command_id,
+                args,
+            } => {
+                if provider_id.trim().is_empty() || command_id.trim().is_empty() {
+                    return Err(KnobError::InvalidAction(
+                        "Provider: requer id do provider e comando".to_string(),
+                    ));
+                }
+                crate::providers::validate_builtin_provider_action(provider_id, command_id, args)
+                    .map_err(|err| KnobError::InvalidAction(err.to_string()))?;
+            }
             _ => {}
         }
         Ok(())
@@ -1001,6 +1066,7 @@ impl Default for Config {
             active_profile: GLOBAL_PROFILE_NAME.to_string(),
             mode: DEFAULT_MODE.to_string(),
             overlay: OverlayConfig::default(),
+            providers: ProvidersConfig::default(),
             profiles: vec![
                 ProfileConfig {
                     name: GLOBAL_PROFILE_NAME.to_string(),

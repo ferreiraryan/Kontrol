@@ -2,8 +2,10 @@ use crate::actions_catalog::{resolve_desktop_exec, MacroStep};
 use crate::config::{ActionConfig, ProfileConfig};
 use crate::error::KnobError;
 use crate::input::KnobEvent;
+use crate::providers::{ProviderArgs, ProviderRegistry};
 use enigo::{Axis, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use std::process::Command;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -239,19 +241,24 @@ pub fn compute_scroll_delta(delta: i32, scroll_step: i32) -> i32 {
     delta.saturating_mul(scroll_step.max(1))
 }
 
-/// Executor real baseado na crate `enigo` (backend Wayland).
+/// Executor real baseado na crate `enigo` (backend Wayland) + `ProviderRegistry` genérico.
 pub struct EnigoExecutor {
     enigo: Enigo,
     scroll_step: i32,
+    providers: Arc<RwLock<ProviderRegistry>>,
 }
 
 impl EnigoExecutor {
-    pub fn new(scroll_step: i32) -> Result<Self, KnobError> {
+    pub fn new(
+        scroll_step: i32,
+        providers: Arc<RwLock<ProviderRegistry>>,
+    ) -> Result<Self, KnobError> {
         let enigo = Enigo::new(&Settings::default())
             .map_err(|err| KnobError::InputSimulationInit(err.to_string()))?;
         Ok(Self {
             enigo,
             scroll_step: scroll_step.max(1),
+            providers,
         })
     }
 }
@@ -308,6 +315,18 @@ impl ActionExecutor for EnigoExecutor {
                 Ok(())
             }
             ActionConfig::Macro { steps } => execute_macro_with_backend(&mut self.enigo, steps),
+            ActionConfig::Provider {
+                provider_id,
+                command_id,
+                args,
+            } => {
+                let registry = self.providers.read().map_err(|_| {
+                    KnobError::InputSimulation("falha ao acessar registro de providers".to_string())
+                })?;
+                registry
+                    .execute(provider_id, command_id, &ProviderArgs::from_btree(args))
+                    .map_err(|err| KnobError::InputSimulation(err.to_string()))
+            }
             ActionConfig::NextProfile | ActionConfig::None => Ok(()),
         }
     }

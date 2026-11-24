@@ -1,12 +1,13 @@
 use crate::action::parse_key_name;
 use crate::error::KnobError;
-use std::collections::HashSet;
+use crate::providers::validate_builtin_provider_action;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Títulos amigáveis exibidos no popover do construtor visual de ações (ordem fixa 0..9).
-pub const ACTION_TYPE_TITLES: [&str; 9] = [
+/// Títulos amigáveis exibidos no popover do construtor visual de ações (ordem fixa 0..10).
+pub const ACTION_TYPE_TITLES: [&str; 10] = [
     "Atalho de teclado",
     "Controle de mídia",
     "Abrir aplicativo",
@@ -16,6 +17,7 @@ pub const ACTION_TYPE_TITLES: [&str; 9] = [
     "Scroll",
     "Sequência de teclas (macro)",
     "Nenhuma ação",
+    "Integração direta",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +120,7 @@ impl MacroStep {
     }
 }
 
-/// Catálogo completo dos 9 tipos de ação suportados pelo construtor visual.
+/// Catálogo completo dos 10 tipos de ação suportados pelo construtor visual.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionType {
     Shortcut(Vec<String>),
@@ -132,6 +134,11 @@ pub enum ActionType {
         amount: u8,
     },
     Macro(Vec<MacroStep>),
+    Provider {
+        provider_id: String,
+        command_id: String,
+        args: BTreeMap<String, String>,
+    },
     None,
 }
 
@@ -154,6 +161,7 @@ pub fn action_type_title(action: &ActionType) -> &'static str {
         ActionType::Scroll { .. } => ACTION_TYPE_TITLES[6],
         ActionType::Macro(_) => ACTION_TYPE_TITLES[7],
         ActionType::None => ACTION_TYPE_TITLES[8],
+        ActionType::Provider { .. } => ACTION_TYPE_TITLES[9],
     }
 }
 
@@ -168,6 +176,7 @@ pub fn action_type_index(action: &ActionType) -> usize {
         ActionType::Scroll { .. } => 6,
         ActionType::Macro(_) => 7,
         ActionType::None => 8,
+        ActionType::Provider { .. } => 9,
     }
 }
 
@@ -216,6 +225,18 @@ pub fn action_summary(action: &ActionType, apps: &[DesktopApp]) -> String {
                 format!("{n} passos")
             }
         }
+        ActionType::Provider {
+            provider_id,
+            command_id,
+            args,
+        } => {
+            if args.is_empty() {
+                format!("{provider_id} → {command_id}")
+            } else {
+                let first_val = args.values().next().map(String::as_str).unwrap_or("");
+                format!("{provider_id} → {command_id} ({first_val})")
+            }
+        }
         ActionType::None => "Nenhuma".to_string(),
     }
 }
@@ -244,6 +265,22 @@ pub fn action_to_string(action: &ActionType) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             format!("Macro:{joined}")
+        }
+        ActionType::Provider {
+            provider_id,
+            command_id,
+            args,
+        } => {
+            if args.is_empty() {
+                format!("Provider:{provider_id}:{command_id}")
+            } else {
+                let encoded = args
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("Provider:{provider_id}:{command_id}:{encoded}")
+            }
         }
         ActionType::None => "None".to_string(),
     }
@@ -328,6 +365,51 @@ pub fn parse_action_string(input: &str) -> Result<ActionType, KnobError> {
             )));
         }
         return Ok(ActionType::Scroll { direction, amount });
+    }
+
+    if let Some(rest) = strip_prefix_ignore_case(trimmed, "provider:") {
+        let mut parts = rest.splitn(3, ':');
+        let provider_id = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        let command_id = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        let raw_args = parts.next().map(str::trim).unwrap_or("");
+
+        if provider_id.is_empty() || command_id.is_empty() {
+            return Err(KnobError::InvalidAction(format!(
+                "formato Provider inválido: '{trimmed}' (esperado Provider:<id>:<comando>[:chave=valor,...])"
+            )));
+        }
+
+        let mut args = BTreeMap::new();
+        if !raw_args.is_empty() {
+            for pair in raw_args.split(',') {
+                let entry = pair.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let Some((k, v)) = entry.split_once('=') else {
+                    return Err(KnobError::InvalidAction(format!(
+                        "argumento inválido em Provider: '{entry}' (use chave=valor)"
+                    )));
+                };
+                let key = k.trim();
+                let val = v.trim();
+                if key.is_empty() || val.is_empty() {
+                    return Err(KnobError::InvalidAction(format!(
+                        "argumento vazio em Provider: '{entry}'"
+                    )));
+                }
+                args.insert(key.to_string(), val.to_string());
+            }
+        }
+
+        validate_builtin_provider_action(&provider_id, &command_id, &args)
+            .map_err(|err| KnobError::InvalidAction(err.to_string()))?;
+
+        return Ok(ActionType::Provider {
+            provider_id,
+            command_id,
+            args,
+        });
     }
 
     if let Some(rest) = strip_prefix_ignore_case(trimmed, "macro:") {
@@ -710,6 +792,25 @@ mod tests {
                     MacroStep::Keys(vec!["Ctrl".into(), "V".into()]),
                 ]),
             ),
+            (
+                "Provider:obs:toggle_record",
+                ActionType::Provider {
+                    provider_id: "obs".into(),
+                    command_id: "toggle_record".into(),
+                    args: std::collections::BTreeMap::new(),
+                },
+            ),
+            (
+                "Provider:obs:toggle_input_mute:input_name=Mic/Aux",
+                ActionType::Provider {
+                    provider_id: "obs".into(),
+                    command_id: "toggle_input_mute".into(),
+                    args: std::collections::BTreeMap::from([(
+                        "input_name".into(),
+                        "Mic/Aux".into(),
+                    )]),
+                },
+            ),
             ("None", ActionType::None),
         ];
 
@@ -735,6 +836,11 @@ mod tests {
             "Macro:",
             "Macro:Wait(0)",
             "Macro:Ctrl+TeclaInvalida",
+            "Provider:",
+            "Provider:obs",
+            "Provider:obs:",
+            "Provider:obs:set_scene:sem_igual",
+            "Provider:obs:set_scene:scene_name=",
             "TeclaInexistenteXYZ",
         ];
 
