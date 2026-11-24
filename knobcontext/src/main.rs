@@ -281,6 +281,7 @@ fn run() -> Result<(), KnobError> {
     let overlay = OverlayWindow::new();
     let hub = HubController::new();
     let system = SystemWorker::spawn();
+    system::hyprland::register_overlay_window_rule(config.overlay.bottom_margin_px);
 
     info!(
         "Capturando dispositivos: kbd='{}', media='{}'",

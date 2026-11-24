@@ -183,7 +183,40 @@ pub fn compute_bottom_center_position(
     (x, y)
 }
 
+#[derive(Deserialize)]
+struct HyprClientJson {
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    at: [i32; 2],
+}
+
+fn find_overlay_client() -> Option<HyprClientJson> {
+    let raw = hypr_socket1_command("j/clients").ok()?;
+    let clients: Vec<HyprClientJson> = serde_json::from_str(&raw).ok()?;
+    clients
+        .into_iter()
+        .find(|c| c.title == "KnobContext Overlay" && !c.address.trim().is_empty())
+}
+
+/// Registra dinamicamente a regra de janela do Overlay no Hyprland 0.56+ (Lua) para que
+/// ele já abra na parte inferior central do monitor focado desde o 1º frame, sem bordas,
+/// sem sombra, fixado (`pin`) e sem roubar foco (`no_initial_focus`), sobrescrevendo regras
+/// globais como `center = true`.
+pub fn register_overlay_window_rule(bottom_margin: i32) {
+    let margin = bottom_margin.max(0);
+    let lua_rule = format!(
+        "eval hl.window_rule({{ name = \"knobcontext-overlay\", match = {{ title = \"^(KnobContext Overlay)$\" }}, float = true, pin = true, center = false, move = \"((monitor_w-window_w)/2) (monitor_h-window_h-{margin})\", no_initial_focus = true, border_size = 0, no_shadow = true, opacity = \"1 override\" }})"
+    );
+    let _ = hypr_socket1_command(&lua_rule);
+}
+
 /// Posiciona a janela `KnobContext Overlay` na parte inferior central do monitor focado via IPC.
+///
+/// Suporta tanto Hyprland 0.56+ (API Lua `hl.dispatch(hl.dsp.window.move(...))`) quanto
+/// versões clássicas (`dispatch movewindowpixel exact ...`).
 pub fn position_overlay_bottom_center(
     win_w: i32,
     win_h: i32,
@@ -198,17 +231,32 @@ pub fn position_overlay_bottom_center(
         return Ok(());
     };
     let (x, y) = compute_bottom_center_position(target, win_w, win_h, bottom_margin);
-    let cmd = format!("dispatch movewindowpixel exact {x} {y},title:^(KnobContext Overlay)$");
 
-    // Curto retry porque o compositor pode levar ~15-40ms para mapear a xdg_toplevel recém-criada.
-    for attempt in 0..5 {
+    // Aguarda o compositor mapear a xdg_toplevel recém-criada para obter seu `address` exato.
+    for attempt in 0..12 {
         if attempt > 0 {
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(20));
         }
-        if let Ok(resp) = hypr_socket1_command(&cmd) {
-            if resp.trim().eq_ignore_ascii_case("ok") {
+        if let Some(client) = find_overlay_client() {
+            // Se a window_rule já posicionou no lugar exato, nada a fazer.
+            if (client.at[0] - x).abs() <= 2 && (client.at[1] - y).abs() <= 2 {
                 return Ok(());
             }
+            let lua_cmd = format!(
+                "eval hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = \"address:{}\" }}))",
+                client.address
+            );
+            if let Ok(resp) = hypr_socket1_command(&lua_cmd) {
+                if resp.trim().eq_ignore_ascii_case("ok") {
+                    return Ok(());
+                }
+            }
+            let legacy_cmd = format!(
+                "dispatch movewindowpixel exact {x} {y},address:{}",
+                client.address
+            );
+            let _ = hypr_socket1_command(&legacy_cmd);
+            return Ok(());
         }
     }
     Ok(())
@@ -226,11 +274,23 @@ pub fn fetch_monitors() -> Result<Vec<MonitorInfo>, KnobError> {
 }
 
 pub fn switch_workspace(id: i32) -> Result<(), KnobError> {
+    let lua_cmd = format!("eval hl.dispatch(hl.dsp.focus({{ workspace = \"{id}\" }}))");
+    if let Ok(resp) = hypr_socket1_command(&lua_cmd) {
+        if resp.trim().eq_ignore_ascii_case("ok") {
+            return Ok(());
+        }
+    }
     let _ = hypr_socket1_command(&format!("dispatch workspace {id}"))?;
     Ok(())
 }
 
 pub fn toggle_special_workspace() -> Result<(), KnobError> {
+    let lua_cmd = "eval hl.dispatch(hl.dsp.focus({ workspace = \"special:special\" }))";
+    if let Ok(resp) = hypr_socket1_command(lua_cmd) {
+        if resp.trim().eq_ignore_ascii_case("ok") {
+            return Ok(());
+        }
+    }
     let _ = hypr_socket1_command("dispatch togglespecialworkspace")?;
     Ok(())
 }
