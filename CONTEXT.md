@@ -31,6 +31,7 @@ Fase 5 (persistência de `ProfileMode`, ícone no tray via StatusNotifierItem/`k
   - **Persistência de `ProfileMode`**: campo `mode = "auto"` ou `"manual:<perfil>"` no `config.toml`, salvo automaticamente ao alternar modo no overlay ou no tray, com fallback seguro para `Auto` + warning se o perfil não existir.
   - **Tray SNI (`src/tray.rs`)**: `KnobTray` usando `ksni 0.3` (`blocking` + `async-io`, sem GTK/Qt/tokio), ícone 24×24 ARGB32 embutido via `include_bytes!`, tooltip dinâmico, menu (*Abrir configurações*, *Modo Automático*, *Modo Manual → perfis*, *Sair* com `ungrab()` gracioso).
   - **Empacotamento AppImage (`packaging/`)**: `AppRun`, `knobcontext.desktop`, `knobcontext.png` (256×256), `99-knobcontext.rules`, `install.sh`, `build-appimage.sh` (verifica `linuxdeploy`/`appimagetool`), e aviso não-bloqueante no startup caso `/etc/udev/rules.d/99-knobcontext.rules` não exista.
+  - **Fix Wayland/Hyprland (floating consistente)**: `OverlayWindow` e `SettingsController` agora recriam a instância Slint (`Overlay` / `SettingsWindow`, ambas com `width`/`height` fixos → `resizable = false` no Wayland) a cada abertura, contornando o reset de `WindowAttributes` no `suspend()` do `i-slint-backend-winit` após `hide()` no Wayland (que fazia reaberturas perderem `min/max_inner_size` e abrirem em modo tile no Hyprland).
   - Validação: `cargo test` (44/44), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
 ## Hardware e Descobertas HID

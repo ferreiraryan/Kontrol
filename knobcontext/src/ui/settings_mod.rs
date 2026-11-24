@@ -18,11 +18,21 @@ struct SettingsDraft {
     desktop_apps: Vec<DesktopApp>,
 }
 
+type OnSavedCallback = Rc<dyn Fn(Config)>;
+type OnNotifyCallback = Rc<dyn Fn()>;
+
 /// Controlador da janela de configurações Slint (edição visual de perfis e persistência TOML).
+///
+/// A instância `SettingsWindow` é recriada a cada abertura para contornar o reset de
+/// `WindowAttributes` do backend `winit` do Slint após `hide()` no Wayland (que faria
+/// reaberturas perderem `min/max_inner_size` e abrirem em modo tile no Hyprland).
 pub struct SettingsController {
-    window: SettingsWindow,
+    window: RefCell<Option<SettingsWindow>>,
     draft: Rc<RefCell<SettingsDraft>>,
     is_open: Rc<RefCell<bool>>,
+    on_saved: OnSavedCallback,
+    on_closed: OnNotifyCallback,
+    on_release_modifiers: OnNotifyCallback,
 }
 
 impl SettingsController {
@@ -32,14 +42,6 @@ impl SettingsController {
         on_closed: impl Fn() + 'static,
         on_release_modifiers: impl Fn() + 'static,
     ) -> Result<Self, KnobError> {
-        let window = SettingsWindow::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
-
-        let titles: Vec<SharedString> = ACTION_TYPE_TITLES
-            .iter()
-            .map(|t| SharedString::from(*t))
-            .collect();
-        window.set_editor_type_titles(ModelRc::from(Rc::new(VecModel::from(titles))));
-
         let draft = Rc::new(RefCell::new(SettingsDraft {
             base_config: initial_config,
             selected_index: 0,
@@ -49,9 +51,30 @@ impl SettingsController {
         }));
         let is_open = Rc::new(RefCell::new(false));
 
-        let on_saved = Rc::new(on_saved);
-        let on_closed = Rc::new(on_closed);
-        let on_release_modifiers: Rc<dyn Fn()> = Rc::new(on_release_modifiers);
+        Ok(Self {
+            window: RefCell::new(None),
+            draft,
+            is_open,
+            on_saved: Rc::new(on_saved),
+            on_closed: Rc::new(on_closed),
+            on_release_modifiers: Rc::new(on_release_modifiers),
+        })
+    }
+
+    fn create_wired_window(&self) -> Result<SettingsWindow, KnobError> {
+        let window = SettingsWindow::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
+
+        let titles: Vec<SharedString> = ACTION_TYPE_TITLES
+            .iter()
+            .map(|t| SharedString::from(*t))
+            .collect();
+        window.set_editor_type_titles(ModelRc::from(Rc::new(VecModel::from(titles))));
+
+        let draft = Rc::clone(&self.draft);
+        let is_open = Rc::clone(&self.is_open);
+        let on_saved = Rc::clone(&self.on_saved);
+        let on_closed = Rc::clone(&self.on_closed);
+        let on_release_modifiers = Rc::clone(&self.on_release_modifiers);
 
         // Selecionar perfil na lista lateral
         {
@@ -240,36 +263,50 @@ impl SettingsController {
             });
         }
 
-        Ok(Self {
-            window,
-            draft,
-            is_open,
-        })
+        Ok(window)
     }
 
     pub fn open(&self, current_config: &Config) -> Result<(), KnobError> {
+        if *self.is_open.borrow() {
+            if let Some(window) = self.window.borrow().as_ref() {
+                return window
+                    .show()
+                    .map_err(|err| KnobError::UiRun(err.to_string()));
+            }
+        }
+
+        // Descarta instância anterior (se houver) e cria uma janela fresca para preservar
+        // `min/max_inner_size` e `resizable = false` no Wayland/Hyprland.
+        self.window.borrow_mut().take();
+        let window = self.create_wired_window()?;
+
         {
             let mut d = self.draft.borrow_mut();
             d.base_config = current_config.clone();
             d.selected_index = current_config.active_profile_index();
             d.dirty = false;
             d.editor.cancel();
-            sync_draft_to_ui(&self.window, &d);
-            sync_editor_to_ui(&self.window, &d.editor, &d.desktop_apps);
+            sync_draft_to_ui(&window, &d);
+            sync_editor_to_ui(&window, &d.editor, &d.desktop_apps);
         }
-        self.window.set_error_message(SharedString::from(""));
+        window.set_error_message(SharedString::from(""));
         *self.is_open.borrow_mut() = true;
-        self.window
+        window
             .show()
-            .map_err(|err| KnobError::UiRun(err.to_string()))
+            .map_err(|err| KnobError::UiRun(err.to_string()))?;
+        *self.window.borrow_mut() = Some(window);
+        Ok(())
     }
 
     pub fn hide(&self) -> Result<(), KnobError> {
         *self.is_open.borrow_mut() = false;
-        self.window.set_editor_open(false);
-        self.window
-            .hide()
-            .map_err(|err| KnobError::UiRun(err.to_string()))
+        if let Some(window) = self.window.borrow_mut().take() {
+            window.set_editor_open(false);
+            window
+                .hide()
+                .map_err(|err| KnobError::UiRun(err.to_string()))?;
+        }
+        Ok(())
     }
 }
 

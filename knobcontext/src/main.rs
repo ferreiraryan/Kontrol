@@ -418,7 +418,7 @@ fn run() -> Result<(), KnobError> {
     running.store(false, Ordering::SeqCst);
     let _ = settings.hide();
     {
-        let rt = runtime.borrow();
+        let mut rt = runtime.borrow_mut();
         let _ = rt.overlay.hide();
         rt.tray.shutdown();
     }
