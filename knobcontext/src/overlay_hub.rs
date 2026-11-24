@@ -302,6 +302,10 @@ pub enum HubEffect {
     ExecuteAction(ActionConfig),
 }
 
+/// Janela pós-fechamento (ms) durante a qual a mesma tecla usada para fechar o Hub
+/// (`Key1` ou `Key3`) é suprimida para não vazar como ação do perfil no app em foco.
+const POST_CLOSE_SUPPRESS_MS: u64 = 350;
+
 /// Máquina de estados hierárquica do Hub Interativo em Carrossel Horizontal.
 pub struct HubController {
     open: bool,
@@ -311,6 +315,7 @@ pub struct HubController {
     root_cursor: usize,
     sub_cursor: usize,
     last_interaction: Option<Instant>,
+    suppress_after_close: Option<(KnobEvent, Instant)>,
     loading: bool,
     audio_mixer: AudioMixerSnapshot,
     audio_outputs: AudioOutputsSnapshot,
@@ -340,6 +345,7 @@ impl HubController {
             root_cursor: 0,
             sub_cursor: 0,
             last_interaction: None,
+            suppress_after_close: None,
             loading: false,
             audio_mixer: AudioMixerSnapshot::default(),
             audio_outputs: AudioOutputsSnapshot::default(),
@@ -423,6 +429,15 @@ impl HubController {
         contextual_profile: &str,
     ) -> Vec<HubEffect> {
         if !self.open {
+            if let Some((closed_by, closed_at)) = self.suppress_after_close {
+                if event == closed_by
+                    && now.saturating_duration_since(closed_at)
+                        < Duration::from_millis(POST_CLOSE_SUPPRESS_MS)
+                {
+                    return Vec::new();
+                }
+                self.suppress_after_close = None;
+            }
             if event == KnobEvent::KnobPress && !self.settings_open {
                 let items = Self::resolve_enabled_modules(config, mode, contextual_profile);
                 if items.is_empty() {
@@ -447,11 +462,12 @@ impl HubController {
 
         if event == KnobEvent::Key3 && config.overlay.key3_behavior == OverlayKey3Behavior::Close {
             self.close_internal();
+            self.suppress_after_close = Some((KnobEvent::Key3, now));
             return vec![HubEffect::CloseOverlay];
         }
 
         if event == KnobEvent::Key1 {
-            return self.handle_back(config, mode, contextual_profile);
+            return self.handle_back(now, config, mode, contextual_profile);
         }
 
         if event == KnobEvent::Key2 {
@@ -614,6 +630,7 @@ impl HubController {
 
     fn handle_back(
         &mut self,
+        now: Instant,
         config: &Config,
         mode: &ProfileMode,
         contextual_profile: &str,
@@ -634,6 +651,7 @@ impl HubController {
             return vec![HubEffect::RenderOverlay(vm)];
         }
         self.close_internal();
+        self.suppress_after_close = Some((KnobEvent::Key1, now));
         vec![HubEffect::CloseOverlay]
     }
 
@@ -2197,5 +2215,49 @@ mod tests {
         );
         assert!(fx_empty.is_empty());
         assert!(!hub.is_open());
+    }
+
+    #[test]
+    fn suppresses_closing_key1_leak_into_profile_right_after_closing_hub() {
+        let cfg = Config::default();
+        let mode = ProfileMode::Auto;
+        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let t0 = Instant::now();
+
+        // Abre o Hub no Firefox
+        let fx_open = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "firefox");
+        assert!(matches!(fx_open.first(), Some(HubEffect::RenderOverlay(_))));
+        assert!(hub.is_open());
+
+        // Key1 fecha o Hub na raiz
+        let fx_close = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(50),
+            &cfg,
+            &mode,
+            "firefox",
+        );
+        assert_eq!(fx_close, vec![HubEffect::CloseOverlay]);
+        assert!(!hub.is_open());
+
+        // Key1 duplicado / bounce logo após fechar (dentro de 350ms) NÃO vaza como DispatchNormal
+        let fx_leak = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(120),
+            &cfg,
+            &mode,
+            "firefox",
+        );
+        assert!(fx_leak.is_empty());
+
+        // Após a janela de 350ms, Key1 volta a despachar normalmente para o perfil
+        let fx_normal = hub.handle_event(
+            KnobEvent::Key1,
+            t0 + Duration::from_millis(450),
+            &cfg,
+            &mode,
+            "firefox",
+        );
+        assert_eq!(fx_normal, vec![HubEffect::DispatchNormal(KnobEvent::Key1)]);
     }
 }

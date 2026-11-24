@@ -18,6 +18,10 @@ pub enum KnobEvent {
     OpenSettings,
 }
 
+/// Janela mínima (ms) para filtrar bounce mecânico ou eco duplicado de teclas discretas
+/// (`Key1`, `Key2`, `Key3`, `KnobPress`, `OpenSettings`). Não se aplica ao giro do knob.
+const BUTTON_DEBOUNCE_MS: u64 = 60;
+
 /// Máquina de estados pura que traduz eventos brutos `evdev` em `KnobEvent`.
 ///
 /// Trata combos como `Ctrl+F1` (`Key1`), `Ctrl+F4` (`Key2`) e `Key1+Key2` (`OpenSettings`)
@@ -31,6 +35,7 @@ pub struct EventTranslator {
     f1_down: bool,
     f4_down: bool,
     pending_combo: Option<KnobEvent>,
+    last_button_event: Option<(KnobEvent, Instant)>,
 }
 
 impl EventTranslator {
@@ -41,6 +46,7 @@ impl EventTranslator {
             f1_down: false,
             f4_down: false,
             pending_combo: None,
+            last_button_event: None,
         }
     }
 
@@ -53,7 +59,7 @@ impl EventTranslator {
 
     pub fn process_key(&mut self, key: Key, value: i32, now: Instant) -> Option<KnobEvent> {
         // value: 1 = press, 0 = release, 2 = repeat
-        match (key, value) {
+        let raw_event = match (key, value) {
             (Key::KEY_LEFTCTRL | Key::KEY_RIGHTCTRL, 1) => {
                 self.ctrl_pressed_at = Some(now);
                 None
@@ -99,7 +105,21 @@ impl EventTranslator {
                 None
             }
             _ => None,
+        };
+
+        let event = raw_event?;
+        if !matches!(event, KnobEvent::RotateCw | KnobEvent::RotateCcw) {
+            if let Some((prev, prev_at)) = self.last_button_event {
+                if prev == event
+                    && now.saturating_duration_since(prev_at)
+                        < Duration::from_millis(BUTTON_DEBOUNCE_MS)
+                {
+                    return None;
+                }
+            }
+            self.last_button_event = Some((event, now));
         }
+        Some(event)
     }
 
     fn is_within_combo_window(&self, now: Instant) -> bool {
@@ -406,6 +426,64 @@ mod tests {
                 t0 + Duration::from_millis(40)
             ),
             Some(KnobEvent::OpenSettings)
+        );
+    }
+
+    #[test]
+    fn debounces_rapid_duplicate_button_presses_without_affecting_rotation() {
+        let mut tr = EventTranslator::new(Duration::from_millis(200));
+        let t0 = Instant::now();
+
+        // Primeiro Key1 emite normalmente
+        let _ = tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t0);
+        let _ = tr.process_input_event(key_event(Key::KEY_F1, 1), t0 + Duration::from_millis(5));
+        assert_eq!(
+            tr.process_input_event(
+                key_event(Key::KEY_LEFTCTRL, 0),
+                t0 + Duration::from_millis(10)
+            ),
+            Some(KnobEvent::Key1)
+        );
+
+        // Bounce / eco 25ms depois é suprimido
+        let t_bounce = t0 + Duration::from_millis(35);
+        let _ = tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t_bounce);
+        let _ = tr.process_input_event(
+            key_event(Key::KEY_F1, 1),
+            t_bounce + Duration::from_millis(2),
+        );
+        assert_eq!(
+            tr.process_input_event(
+                key_event(Key::KEY_LEFTCTRL, 0),
+                t_bounce + Duration::from_millis(5)
+            ),
+            None
+        );
+
+        // Novo pressionamento intencional após 80ms funciona normalmente
+        let t_next = t0 + Duration::from_millis(90);
+        let _ = tr.process_input_event(key_event(Key::KEY_LEFTCTRL, 1), t_next);
+        let _ =
+            tr.process_input_event(key_event(Key::KEY_F1, 1), t_next + Duration::from_millis(5));
+        assert_eq!(
+            tr.process_input_event(
+                key_event(Key::KEY_LEFTCTRL, 0),
+                t_next + Duration::from_millis(10)
+            ),
+            Some(KnobEvent::Key1)
+        );
+
+        // Giros rápidos consecutivos (10ms) NÃO são suprimidos
+        assert_eq!(
+            tr.process_input_event(key_event(Key::KEY_VOLUMEUP, 1), t0),
+            Some(KnobEvent::RotateCw)
+        );
+        assert_eq!(
+            tr.process_input_event(
+                key_event(Key::KEY_VOLUMEUP, 1),
+                t0 + Duration::from_millis(10)
+            ),
+            Some(KnobEvent::RotateCw)
         );
     }
 }
