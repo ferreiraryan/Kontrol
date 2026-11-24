@@ -251,6 +251,9 @@ Além da simulação de teclado via `enigo`, o KnobContext suporta **providers d
 | **Mídia MPRIS** (`mpris`) | `previous` | — | `Provider:mpris:previous` |
 | **Mídia MPRIS** (`mpris`) | `stop` | — | `Provider:mpris:stop` |
 | **Mídia MPRIS** (`mpris`) | `seek` | `seconds` | `Provider:mpris:seek:seconds=10` |
+| **Mídia MPRIS** (`mpris`) | `volume_up` | `step` *(opcional, padrão 5)* | `Provider:mpris:volume_up` |
+| **Mídia MPRIS** (`mpris`) | `volume_down` | `step` *(opcional, padrão 5)* | `Provider:mpris:volume_down` |
+| **Mídia MPRIS** (`mpris`) | `set_volume` | `percent` | `Provider:mpris:set_volume:percent=50` |
 
 ### Configuração do OBS WebSocket (`config.toml`)
 

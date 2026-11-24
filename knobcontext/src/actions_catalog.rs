@@ -827,6 +827,22 @@ mod tests {
                     args: std::collections::BTreeMap::from([("seconds".into(), "10".into())]),
                 },
             ),
+            (
+                "Provider:mpris:volume_up:step=5",
+                ActionType::Provider {
+                    provider_id: "mpris".into(),
+                    command_id: "volume_up".into(),
+                    args: std::collections::BTreeMap::from([("step".into(), "5".into())]),
+                },
+            ),
+            (
+                "Provider:mpris:volume_down",
+                ActionType::Provider {
+                    provider_id: "mpris".into(),
+                    command_id: "volume_down".into(),
+                    args: std::collections::BTreeMap::new(),
+                },
+            ),
             ("None", ActionType::None),
         ];
 

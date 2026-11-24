@@ -5,6 +5,58 @@ use zbus::blocking::{Connection, Proxy};
 const MPRIS_BUS_PREFIX: &str = "org.mpris.MediaPlayer2.";
 const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
+const DEFAULT_MPRIS_VOLUME_STEP_PERCENT: f64 = 5.0;
+
+/// Converte o argumento opcional `step` (1..=50%, padrão 5%) em fração `0.01..=0.50`.
+pub fn parse_volume_step_fraction(
+    args: &ProviderArgs,
+    command: &str,
+) -> Result<f64, ProviderError> {
+    let Some(raw) = args.get("step") else {
+        return Ok(DEFAULT_MPRIS_VOLUME_STEP_PERCENT / 100.0);
+    };
+    let step = raw.parse::<f64>().map_err(|_| ProviderError::InvalidArg {
+        provider: "mpris".to_string(),
+        command: command.to_string(),
+        arg: "step".to_string(),
+        reason: format!("esperado número em % (ex.: 5), recebido '{raw}'"),
+    })?;
+    if !step.is_finite() || step <= 0.0 || step > 100.0 {
+        return Err(ProviderError::InvalidArg {
+            provider: "mpris".to_string(),
+            command: command.to_string(),
+            arg: "step".to_string(),
+            reason: format!("passo deve estar entre 1 e 100% (recebido '{raw}')"),
+        });
+    }
+    Ok(step / 100.0)
+}
+
+/// Converte o argumento obrigatório `percent` (0..=100) em fração MPRIS `0.0..=1.0`.
+pub fn parse_volume_percent_fraction(args: &ProviderArgs) -> Result<f64, ProviderError> {
+    let raw = args
+        .get("percent")
+        .ok_or_else(|| ProviderError::MissingArg {
+            provider: "mpris".to_string(),
+            command: "set_volume".to_string(),
+            arg: "percent".to_string(),
+        })?;
+    let pct = raw.parse::<f64>().map_err(|_| ProviderError::InvalidArg {
+        provider: "mpris".to_string(),
+        command: "set_volume".to_string(),
+        arg: "percent".to_string(),
+        reason: format!("esperado número de 0 a 100, recebido '{raw}'"),
+    })?;
+    if !pct.is_finite() || !(0.0..=100.0).contains(&pct) {
+        return Err(ProviderError::InvalidArg {
+            provider: "mpris".to_string(),
+            command: "set_volume".to_string(),
+            arg: "percent".to_string(),
+            reason: format!("volume deve estar entre 0 e 100% (recebido '{raw}')"),
+        });
+    }
+    Ok((pct / 100.0).clamp(0.0, 1.0))
+}
 
 /// Converte o argumento `seconds` (ex.: `"10"`, `"-5"`, `"2.5"`) para microssegundos (`i64`)
 /// conforme a especificação D-Bus `org.mpris.MediaPlayer2.Player.Seek(x: Offset)`.
@@ -215,6 +267,31 @@ impl Provider for MprisProvider {
                     true,
                 ),
             },
+            ProviderCommand {
+                id: "volume_up",
+                name: "Aumentar volume do player",
+                args_schema: ArgsSchema::single(
+                    "step",
+                    "Passo % (opcional, padrão 5)",
+                    "ex: 5",
+                    false,
+                ),
+            },
+            ProviderCommand {
+                id: "volume_down",
+                name: "Diminuir volume do player",
+                args_schema: ArgsSchema::single(
+                    "step",
+                    "Passo % (opcional, padrão 5)",
+                    "ex: 5",
+                    false,
+                ),
+            },
+            ProviderCommand {
+                id: "set_volume",
+                name: "Definir volume do player (%)",
+                args_schema: ArgsSchema::single("percent", "Volume (0 a 100%)", "ex: 50", true),
+            },
         ]
     }
 
@@ -222,6 +299,16 @@ impl Provider for MprisProvider {
         let cmd = command_id.trim().to_ascii_lowercase();
         let seek_offset = if cmd == "seek" {
             Some(parse_seek_microseconds(args)?)
+        } else {
+            None
+        };
+        let vol_step = if cmd == "volume_up" || cmd == "volume_down" {
+            Some(parse_volume_step_fraction(args, &cmd)?)
+        } else {
+            None
+        };
+        let target_vol = if cmd == "set_volume" {
+            Some(parse_volume_percent_fraction(args)?)
         } else {
             None
         };
@@ -243,6 +330,46 @@ impl Provider for MprisProvider {
                 "seek" => {
                     let offset = seek_offset.unwrap_or(0);
                     proxy.call("Seek", &(offset,))
+                }
+                "volume_up" | "volume_down" => {
+                    let current = proxy.get_property::<f64>("Volume").map_err(|err| {
+                        ProviderError::CommandFailed {
+                            provider: "mpris".to_string(),
+                            command: cmd.clone(),
+                            reason: format!(
+                                "player '{target}' não suporta leitura de Volume MPRIS: {err}"
+                            ),
+                        }
+                    })?;
+                    let delta = vol_step.unwrap_or(DEFAULT_MPRIS_VOLUME_STEP_PERCENT / 100.0);
+                    let next = if cmd == "volume_up" {
+                        (current + delta).clamp(0.0, 1.0)
+                    } else {
+                        (current - delta).clamp(0.0, 1.0)
+                    };
+                    proxy.set_property("Volume", next).map_err(|err| {
+                        ProviderError::CommandFailed {
+                            provider: "mpris".to_string(),
+                            command: cmd.clone(),
+                            reason: format!(
+                                "player '{target}' não suporta escrita de Volume MPRIS: {err}"
+                            ),
+                        }
+                    })?;
+                    Ok(())
+                }
+                "set_volume" => {
+                    let next = target_vol.unwrap_or(0.5);
+                    proxy.set_property("Volume", next).map_err(|err| {
+                        ProviderError::CommandFailed {
+                            provider: "mpris".to_string(),
+                            command: cmd.clone(),
+                            reason: format!(
+                                "player '{target}' não suporta escrita de Volume MPRIS: {err}"
+                            ),
+                        }
+                    })?;
+                    Ok(())
                 }
                 other => {
                     return Err(ProviderError::UnknownCommand {
@@ -278,9 +405,41 @@ impl Provider for MprisProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_seek_microseconds, select_preferred_player, short_player_name, MprisProvider,
+        parse_seek_microseconds, parse_volume_percent_fraction, parse_volume_step_fraction,
+        select_preferred_player, short_player_name, MprisProvider,
     };
     use crate::providers::{Provider, ProviderArgs, ProviderError};
+
+    #[test]
+    fn parses_mpris_volume_step_and_percent_arguments() {
+        // Sem step -> padrão 5% (0.05)
+        assert_eq!(
+            parse_volume_step_fraction(&ProviderArgs::default(), "volume_up").ok(),
+            Some(0.05)
+        );
+        let mut step_args = ProviderArgs::default();
+        step_args.values.insert("step".into(), "10".into());
+        assert_eq!(
+            parse_volume_step_fraction(&step_args, "volume_down").ok(),
+            Some(0.10)
+        );
+
+        let mut bad_step = ProviderArgs::default();
+        bad_step.values.insert("step".into(), "0".into());
+        assert!(matches!(
+            parse_volume_step_fraction(&bad_step, "volume_up"),
+            Err(ProviderError::InvalidArg { .. })
+        ));
+
+        // set_volume exige percent 0..=100
+        assert!(matches!(
+            parse_volume_percent_fraction(&ProviderArgs::default()),
+            Err(ProviderError::MissingArg { .. })
+        ));
+        let mut pct_args = ProviderArgs::default();
+        pct_args.values.insert("percent".into(), "75".into());
+        assert_eq!(parse_volume_percent_fraction(&pct_args).ok(), Some(0.75));
+    }
 
     #[test]
     fn parses_seek_seconds_and_rejects_invalid_values() {
