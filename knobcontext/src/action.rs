@@ -156,6 +156,13 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
         self.executor.release_modifiers();
     }
 
+    pub fn execute_direct(&mut self, action: &ActionConfig) -> Result<(), KnobError> {
+        match action {
+            ActionConfig::None | ActionConfig::NextProfile => Ok(()),
+            other => self.executor.execute(other),
+        }
+    }
+
     fn resolve_action_with_inheritance(&self, start_idx: usize, event: KnobEvent) -> ActionConfig {
         let mut visited = Vec::with_capacity(4);
         let mut current = Some(start_idx);

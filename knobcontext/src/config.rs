@@ -17,6 +17,147 @@ pub const DEFAULT_COMBO_WINDOW_MS: u64 = 200;
 pub const DEFAULT_SCROLL_STEP: i32 = 20;
 pub const DEFAULT_MODE: &str = "auto";
 pub const GLOBAL_PROFILE_NAME: &str = "global";
+pub const DEFAULT_OVERLAY_BROWSE_TIMEOUT_MS: u64 = 5_000;
+pub const DEFAULT_OVERLAY_ADJUST_TIMEOUT_MS: u64 = 10_000;
+pub const DEFAULT_VOLUME_STEP: i32 = 5;
+pub const DEFAULT_BRIGHTNESS_STEP: i32 = 5;
+pub const DEFAULT_MAX_VOLUME_PERCENT: i32 = 150;
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_slider_step() -> i32 {
+    5
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayKey3Behavior {
+    /// Key3 atua como Confirmar/Entrar alternativo (além do KnobPress).
+    #[default]
+    Confirm,
+    /// Key3 fecha o overlay imediatamente.
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomGroupEntry {
+    pub label: String,
+    pub action: ActionConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OverlayItemKind {
+    Profiles,
+    AudioMixer,
+    AudioOutputs,
+    Workspaces,
+    Brightness,
+    CaelestiaWallpapers,
+    CaelestiaToggles,
+    QuickAction {
+        action: ActionConfig,
+    },
+    CustomGroup {
+        #[serde(default)]
+        entries: Vec<CustomGroupEntry>,
+    },
+    CustomSlider {
+        #[serde(default = "default_slider_step")]
+        step: i32,
+        up_command: String,
+        down_command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        toggle_command: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        read_command: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverlayItemConfig {
+    pub id: String,
+    pub title: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub kind: OverlayItemKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverlayConfig {
+    pub browse_timeout_ms: u64,
+    pub adjust_timeout_ms: u64,
+    pub volume_step: i32,
+    pub brightness_step: i32,
+    pub max_volume_percent: i32,
+    pub key3_behavior: OverlayKey3Behavior,
+    pub items: Vec<OverlayItemConfig>,
+}
+
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        Self {
+            browse_timeout_ms: DEFAULT_OVERLAY_BROWSE_TIMEOUT_MS,
+            adjust_timeout_ms: DEFAULT_OVERLAY_ADJUST_TIMEOUT_MS,
+            volume_step: DEFAULT_VOLUME_STEP,
+            brightness_step: DEFAULT_BRIGHTNESS_STEP,
+            max_volume_percent: DEFAULT_MAX_VOLUME_PERCENT,
+            key3_behavior: OverlayKey3Behavior::Confirm,
+            items: default_overlay_items(),
+        }
+    }
+}
+
+pub fn default_overlay_items() -> Vec<OverlayItemConfig> {
+    vec![
+        OverlayItemConfig {
+            id: "profiles".to_string(),
+            title: "Perfis".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::Profiles,
+        },
+        OverlayItemConfig {
+            id: "audio_mixer".to_string(),
+            title: "Sons & Apps".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::AudioMixer,
+        },
+        OverlayItemConfig {
+            id: "audio_outputs".to_string(),
+            title: "Saída de Som".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::AudioOutputs,
+        },
+        OverlayItemConfig {
+            id: "workspaces".to_string(),
+            title: "Workspaces".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::Workspaces,
+        },
+        OverlayItemConfig {
+            id: "brightness".to_string(),
+            title: "Brilho".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::Brightness,
+        },
+        OverlayItemConfig {
+            id: "caelestia_wallpapers".to_string(),
+            title: "Wallpapers".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::CaelestiaWallpapers,
+        },
+        OverlayItemConfig {
+            id: "caelestia_toggles".to_string(),
+            title: "Caelestia".to_string(),
+            enabled: true,
+            kind: OverlayItemKind::CaelestiaToggles,
+        },
+    ]
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,6 +166,7 @@ pub struct Config {
     pub active_profile: String,
     /// Modo de perfil persistido: `"auto"` ou `"manual:<nome_do_perfil>"`.
     pub mode: String,
+    pub overlay: OverlayConfig,
     pub profiles: Vec<ProfileConfig>,
 }
 
@@ -524,6 +666,7 @@ impl Default for Config {
             device: DeviceConfig::default(),
             active_profile: GLOBAL_PROFILE_NAME.to_string(),
             mode: DEFAULT_MODE.to_string(),
+            overlay: OverlayConfig::default(),
             profiles: vec![
                 ProfileConfig {
                     name: GLOBAL_PROFILE_NAME.to_string(),
@@ -691,6 +834,40 @@ impl Config {
                 "device.scroll_step deve estar entre 1 e 200 (recebido: {})",
                 self.device.scroll_step
             )));
+        }
+        if !(1..=50).contains(&self.overlay.volume_step) {
+            return Err(KnobError::ConfigValidation(format!(
+                "overlay.volume_step deve estar entre 1 e 50 (recebido: {})",
+                self.overlay.volume_step
+            )));
+        }
+        if !(1..=50).contains(&self.overlay.brightness_step) {
+            return Err(KnobError::ConfigValidation(format!(
+                "overlay.brightness_step deve estar entre 1 e 50 (recebido: {})",
+                self.overlay.brightness_step
+            )));
+        }
+        if !(100..=200).contains(&self.overlay.max_volume_percent) {
+            return Err(KnobError::ConfigValidation(format!(
+                "overlay.max_volume_percent deve estar entre 100 e 200 (recebido: {})",
+                self.overlay.max_volume_percent
+            )));
+        }
+        for item in &self.overlay.items {
+            if item.id.trim().is_empty() || item.title.trim().is_empty() {
+                return Err(KnobError::ConfigValidation(
+                    "itens do overlay devem possuir `id` e `title` não vazios".to_string(),
+                ));
+            }
+            match &item.kind {
+                OverlayItemKind::QuickAction { action } => action.validate()?,
+                OverlayItemKind::CustomGroup { entries } => {
+                    for entry in entries {
+                        entry.action.validate()?;
+                    }
+                }
+                _ => {}
+            }
         }
         if self.profiles.is_empty() {
             return Err(KnobError::ConfigValidation(

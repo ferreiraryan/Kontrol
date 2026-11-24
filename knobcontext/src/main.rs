@@ -4,6 +4,8 @@ mod config;
 mod context;
 mod error;
 mod input;
+mod overlay_hub;
+mod system;
 mod tray;
 mod ui;
 
@@ -12,9 +14,10 @@ use crate::config::Config;
 use crate::context::{spawn_hyprland_listener, ContextState, ProfileMode};
 use crate::error::KnobError;
 use crate::input::{KnobEvent, KnobInput};
+use crate::overlay_hub::{HubController, HubEffect};
+use crate::system::SystemWorker;
 use crate::tray::{TrayCommand, TrayController};
 use crate::ui::settings_mod::SettingsController;
-use crate::ui::state::{OverlayController, OverlayTransition, DEFAULT_OVERLAY_TIMEOUT};
 use crate::ui::OverlayWindow;
 use env_logger::Env;
 use log::{debug, error, info, warn};
@@ -31,22 +34,27 @@ use std::time::{Duration, Instant};
 struct AppRuntime {
     config: Config,
     context: Arc<RwLock<ContextState>>,
-    controller: OverlayController,
+    hub: HubController,
     dispatcher: ActionDispatcher<EnigoExecutor>,
     overlay: OverlayWindow,
+    system: SystemWorker,
     tray: TrayController,
 }
 
 impl AppRuntime {
-    fn sync_tray(&mut self) {
-        let (mode, contextual) = if let Ok(ctx) = self.context.read() {
+    fn current_mode_and_contextual(&self) -> (ProfileMode, String) {
+        if let Ok(ctx) = self.context.read() {
             (
                 ctx.mode().clone(),
                 ctx.contextual_profile_for_window(&self.config),
             )
         } else {
             (ProfileMode::Auto, self.config.active_profile.clone())
-        };
+        }
+    }
+
+    fn sync_tray(&mut self) {
+        let (mode, contextual) = self.current_mode_and_contextual();
         let profile_names: Vec<String> = self
             .config
             .profiles
@@ -81,26 +89,6 @@ impl AppRuntime {
             }
         }
     }
-    fn overlay_active_index_and_subtitle(&self) -> (usize, String) {
-        if let Ok(ctx) = self.context.read() {
-            match ctx.mode() {
-                ProfileMode::Auto => {
-                    let contextual = ctx.contextual_profile_for_window(&self.config);
-                    (0, format!("Automático ({contextual})"))
-                }
-                ProfileMode::Manual(profile_name) => {
-                    let idx = self
-                        .dispatcher
-                        .find_profile_index(profile_name)
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
-                    (idx, "Manual".to_string())
-                }
-            }
-        } else {
-            (0, format!("Automático ({})", self.config.active_profile))
-        }
-    }
 
     fn persist_mode(&mut self, mode: ProfileMode) {
         if let Ok(mut ctx) = self.context.write() {
@@ -125,23 +113,12 @@ impl AppRuntime {
             ctx.set_mode(validated_mode);
         }
 
-        let profile_names: Vec<String> =
-            new_config.profiles.iter().map(|p| p.name.clone()).collect();
         self.dispatcher.update_profiles(new_config.profiles.clone());
         self.config = new_config;
-
-        let (overlay_idx, subtitle) = self.overlay_active_index_and_subtitle();
-        self.overlay
-            .update_profiles(profile_names, overlay_idx, &subtitle);
-        self.controller
-            .set_profile_count(self.config.profiles.len() + 1, overlay_idx);
         info!("Configuração salva e aplicada em tempo real.");
     }
 
     fn sync_context(&mut self) -> String {
-        let (overlay_idx, _) = self.overlay_active_index_and_subtitle();
-        self.controller.sync_active_index(overlay_idx);
-
         let resolved = if let Ok(ctx) = self.context.read() {
             ctx.profile_for_window(&self.config)
         } else {
@@ -155,98 +132,103 @@ impl AppRuntime {
         resolved
     }
 
+    fn apply_hub_effects(&mut self, effects: Vec<HubEffect>) {
+        for effect in effects {
+            match effect {
+                HubEffect::DispatchNormal(ev) => {
+                    let profile_name = self.sync_context();
+                    match self.dispatcher.dispatch(ev, &profile_name) {
+                        Ok(DispatchOutcome::Executed(action)) => {
+                            info!(
+                                "[{}] {ev:?} -> {action:?}",
+                                self.dispatcher.active_profile_name()
+                            );
+                        }
+                        Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
+                            self.persist_mode(ProfileMode::Manual(new_profile.clone()));
+                            info!("Perfil alterado para Manual: '{new_profile}'");
+                        }
+                        Ok(DispatchOutcome::Ignored) => {
+                            debug!(
+                                "[{}] {ev:?} ignorado",
+                                self.dispatcher.active_profile_name()
+                            );
+                        }
+                        Err(err) => {
+                            warn!("Falha ao executar ação para {ev:?}: {err}");
+                        }
+                    }
+                }
+                HubEffect::RenderOverlay(vm) => {
+                    if let Err(err) = self.overlay.render(&vm) {
+                        warn!("Falha ao renderizar overlay: {err}");
+                    }
+                }
+                HubEffect::CloseOverlay => {
+                    if let Err(err) = self.overlay.hide() {
+                        warn!("Falha ao fechar overlay: {err}");
+                    }
+                }
+                HubEffect::SetProfileMode(new_mode) => {
+                    self.persist_mode(new_mode.clone());
+                    let resolved = self.sync_context();
+                    info!(
+                        "Modo alterado no Hub: {:?} (perfil: '{resolved}')",
+                        new_mode
+                    );
+                }
+                HubEffect::System(req) => {
+                    self.system.send(req);
+                }
+                HubEffect::ExecuteAction(action) => {
+                    if let Err(err) = self.dispatcher.execute_direct(&action) {
+                        warn!("Falha ao executar ação do Hub ({action:?}): {err}");
+                    }
+                }
+            }
+        }
+    }
+
     fn handle_knob_event(&mut self, event: KnobEvent, settings: &SettingsController) {
         if event == KnobEvent::OpenSettings {
             self.open_settings(settings);
             return;
         }
 
-        let profile_name = self.sync_context();
-        let transition = self.controller.handle_event(event, Instant::now());
-        match transition {
-            OverlayTransition::DispatchAction(ev) => {
-                match self.dispatcher.dispatch(ev, &profile_name) {
-                    Ok(DispatchOutcome::Executed(action)) => {
-                        info!(
-                            "[{}] {ev:?} -> {action:?}",
-                            self.dispatcher.active_profile_name()
-                        );
-                    }
-                    Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
-                        self.persist_mode(ProfileMode::Manual(new_profile.clone()));
-                        let (overlay_idx, _) = self.overlay_active_index_and_subtitle();
-                        self.controller.sync_active_index(overlay_idx);
-                        info!("Perfil alterado para Manual: '{new_profile}'");
-                    }
-                    Ok(DispatchOutcome::Ignored) => {
-                        debug!(
-                            "[{}] {ev:?} ignorado",
-                            self.dispatcher.active_profile_name()
-                        );
-                    }
-                    Err(err) => {
-                        warn!("Falha ao executar ação para {ev:?}: {err}");
-                    }
-                }
-            }
-            OverlayTransition::OpenOverlay { highlighted_index } => {
-                let (active_idx, subtitle) = self.overlay_active_index_and_subtitle();
-                debug!("Abrindo overlay (ativo={active_idx}, destaque={highlighted_index})");
-                if let Err(err) = self.overlay.show(active_idx, highlighted_index, &subtitle) {
-                    warn!("Falha ao abrir overlay: {err}");
-                }
-            }
-            OverlayTransition::UpdateHighlight { highlighted_index } => {
-                let (active_idx, subtitle) = self.overlay_active_index_and_subtitle();
-                debug!("Overlay destaque atualizado: {highlighted_index}");
-                self.overlay
-                    .update_selection(active_idx, highlighted_index, &subtitle);
-            }
-            OverlayTransition::CommitAndClose { selected_index } => {
-                if selected_index == 0 {
-                    self.persist_mode(ProfileMode::Auto);
-                    let resolved = self.sync_context();
-                    info!("Modo alterado no overlay: Automático ('{resolved}')");
-                } else if let Some(profile) = self.config.profiles.get(selected_index - 1) {
-                    let chosen = profile.name.clone();
-                    self.persist_mode(ProfileMode::Manual(chosen.clone()));
-                    self.dispatcher.set_active_profile_index(selected_index - 1);
-                    info!("Modo alterado no overlay: Manual ('{chosen}')");
-                }
-                if let Err(err) = self.overlay.hide() {
-                    warn!("Falha ao fechar overlay: {err}");
-                }
-            }
-            OverlayTransition::TimeoutClose => {
-                debug!("Overlay fechado por inatividade.");
-                if let Err(err) = self.overlay.hide() {
-                    warn!("Falha ao fechar overlay: {err}");
-                }
-            }
-            OverlayTransition::Consume => {
-                debug!("Evento {event:?} consumido enquanto overlay está aberto.");
+        let (mode, contextual) = self.current_mode_and_contextual();
+        let effects =
+            self.hub
+                .handle_event(event, Instant::now(), &self.config, &mode, &contextual);
+        self.apply_hub_effects(effects);
+    }
+
+    fn drain_system_responses(&mut self) {
+        while let Some(resp) = self.system.try_recv() {
+            let (mode, contextual) = self.current_mode_and_contextual();
+            if let Some(effect) =
+                self.hub
+                    .apply_system_response(resp, &self.config, &mode, &contextual)
+            {
+                self.apply_hub_effects(vec![effect]);
             }
         }
     }
 
     fn open_settings(&mut self, settings: &SettingsController) {
-        self.controller.set_settings_open(true);
+        self.hub.set_settings_open(true);
         let _ = self.overlay.hide();
         if let Err(err) = settings.open(&self.config) {
             warn!("Falha ao abrir janela de configurações: {err}");
-            self.controller.set_settings_open(false);
+            self.hub.set_settings_open(false);
         } else {
             info!("Janela de configurações aberta (grab mantido ativo).");
         }
     }
 
     fn check_timeout(&mut self) {
-        if let Some(OverlayTransition::TimeoutClose) = self.controller.check_timeout(Instant::now())
-        {
-            debug!("Overlay fechado automaticamente após 3s de inatividade.");
-            if let Err(err) = self.overlay.hide() {
-                warn!("Falha ao fechar overlay no timeout: {err}");
-            }
+        if let Some(effect) = self.hub.check_timeout(Instant::now(), &self.config.overlay) {
+            debug!("Overlay fechado automaticamente por inatividade.");
+            self.apply_hub_effects(vec![effect]);
         }
     }
 }
@@ -275,25 +257,12 @@ fn run() -> Result<(), KnobError> {
 
     let active_idx = config.active_profile_index();
     let initial_mode = config.resolve_profile_mode();
-    let initial_overlay_idx = match &initial_mode {
-        ProfileMode::Auto => 0,
-        ProfileMode::Manual(name) => config
-            .profiles
-            .iter()
-            .position(|p| p.name.eq_ignore_ascii_case(name))
-            .map(|i| i + 1)
-            .unwrap_or(0),
-    };
-    let profile_names: Vec<String> = config.profiles.iter().map(|p| p.name.clone()).collect();
 
     let executor = EnigoExecutor::new(config.device.scroll_step)?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
-    let overlay = OverlayWindow::new(profile_names, initial_overlay_idx)?;
-    let controller = OverlayController::new(
-        config.profiles.len() + 1,
-        initial_overlay_idx,
-        DEFAULT_OVERLAY_TIMEOUT,
-    );
+    let overlay = OverlayWindow::new();
+    let hub = HubController::new();
+    let system = SystemWorker::spawn();
 
     info!(
         "Capturando dispositivos: kbd='{}', media='{}'",
@@ -315,7 +284,7 @@ fn run() -> Result<(), KnobError> {
     let hyprland_thread = spawn_hyprland_listener(Arc::clone(&context), Arc::clone(&running));
 
     info!(
-        "KnobContext ativo (modo inicial: {:?}). Pressione o knob para o overlay, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair.",
+        "KnobContext ativo (modo inicial: {:?}). Pressione o knob para o Hub, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair.",
         initial_mode
     );
 
@@ -359,9 +328,10 @@ fn run() -> Result<(), KnobError> {
     let runtime = Rc::new(RefCell::new(AppRuntime {
         config,
         context,
-        controller,
+        hub,
         dispatcher,
         overlay,
+        system,
         tray,
     }));
 
@@ -377,11 +347,8 @@ fn run() -> Result<(), KnobError> {
                 .apply_saved_config(saved_config);
         },
         move || {
-            runtime_on_closed
-                .borrow_mut()
-                .controller
-                .set_settings_open(false);
-            debug!("Janela de configurações fechada; overlay reabilitado.");
+            runtime_on_closed.borrow_mut().hub.set_settings_open(false);
+            debug!("Janela de configurações fechada; Hub reabilitado.");
         },
         move || {
             runtime_on_release
@@ -414,6 +381,7 @@ fn run() -> Result<(), KnobError> {
         while let Ok(cmd) = tray_rx.try_recv() {
             rt.handle_tray_command(cmd, &settings_for_timer, &running_for_timer);
         }
+        rt.drain_system_responses();
         rt.sync_tray();
         rt.check_timeout();
     });
@@ -421,12 +389,13 @@ fn run() -> Result<(), KnobError> {
     let loop_result =
         slint::run_event_loop_until_quit().map_err(|err| KnobError::UiRun(err.to_string()));
 
-    // Encerramento gracioso: fecha janelas, encerra tray/listener e faz `ungrab()` dos dispositivos.
+    // Encerramento gracioso: fecha janelas, encerra workers/tray e faz `ungrab()` dos dispositivos.
     running.store(false, Ordering::SeqCst);
     let _ = settings.hide();
     {
         let mut rt = runtime.borrow_mut();
         let _ = rt.overlay.hide();
+        rt.system.shutdown();
         rt.tray.shutdown();
     }
     let _ = input_thread.join();

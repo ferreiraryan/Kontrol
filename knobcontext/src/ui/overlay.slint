@@ -1,104 +1,255 @@
+export struct OverlayRowData {
+    title: string,
+    subtitle: string,
+    badge: string,
+    value-percent: int,
+    max-percent: int,
+    is-slider: bool,
+    is-active: bool,
+    is-muted: bool,
+}
+
 export component Overlay inherits Window {
     title: "KnobContext Overlay";
     no-frame: true;
     always-on-top: true;
     background: transparent;
-    width: 480px;
-    height: 172px;
+    width: 520px;
+    height: 356px;
 
-    in property <string> active-profile-name: "Automático";
-    in property <string> mode-subtitle: "Automático (global)";
-    in property <[string]> profiles: ["Automático", "global", "firefox", "gimp"];
+    in property <string> breadcrumb: "KnobContext Hub";
+    in property <string> context-badge: "Auto • global";
+    in property <bool> adjusting: false;
+    in property <bool> loading: false;
+    in property <string> empty-message: "";
+    in property <[OverlayRowData]> rows: [];
     in property <int> highlighted-index: 0;
-    in property <int> active-index: 0;
+    in property <string> scroll-indicator: "";
+    in property <string> footer-hint: "Girar: Navegar • Knob/K3: Abrir • K1: Fechar";
 
     Rectangle {
         width: 100%;
         height: 100%;
-        background: rgba(20, 20, 20, 0.85);
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(18, 18, 22, 0.92);
+        border-radius: 14px;
+        border-width: 1.5px;
+        border-color: root.adjusting
+            ? rgba(59, 130, 246, 0.78)
+            : rgba(255, 255, 255, 0.12);
+
+        animate border-color {
+            duration: 140ms;
+            easing: ease-out;
+        }
 
         VerticalLayout {
-            padding-top: 16px;
-            padding-bottom: 14px;
-            padding-left: 20px;
-            padding-right: 20px;
+            padding-top: 14px;
+            padding-bottom: 12px;
+            padding-left: 16px;
+            padding-right: 16px;
             spacing: 10px;
-            alignment: center;
 
-            VerticalLayout {
-                spacing: 2px;
-                alignment: center;
+            // Cabeçalho: Breadcrumb + Modo Contextual + Badge AJUSTANDO
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: stretch;
 
                 Text {
-                    text: root.active-profile-name;
+                    horizontal-stretch: 1;
+                    text: root.breadcrumb;
                     color: #f5f5f7;
-                    font-size: 20px;
+                    font-size: 16px;
                     font-weight: 700;
-                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
                 }
 
-                Text {
-                    text: root.mode-subtitle;
-                    color: #93c5fd;
-                    font-size: 12px;
-                    font-weight: 500;
-                    horizontal-alignment: center;
+                if root.adjusting: Rectangle {
+                    height: 22px;
+                    border-radius: 11px;
+                    background: rgba(59, 130, 246, 0.28);
+                    border-width: 1px;
+                    border-color: rgba(96, 165, 250, 0.65);
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: "● AJUSTANDO";
+                            color: #93c5fd;
+                            font-size: 10px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 22px;
+                    border-radius: 11px;
+                    background: rgba(255, 255, 255, 0.07);
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.1);
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: root.context-badge;
+                            color: #cbd5e1;
+                            font-size: 10px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
 
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: center;
+            // Corpo principal: lista de até 5 itens visíveis
+            Rectangle {
+                vertical-stretch: 1;
+                background: transparent;
 
-                for name[idx] in root.profiles: Rectangle {
-                    min-width: 84px;
-                    height: 34px;
-                    border-radius: 8px;
-                    background: idx == root.highlighted-index
-                        ? rgba(255, 255, 255, 0.18)
-                        : rgba(255, 255, 255, 0.05);
-                    border-width: 1px;
-                    border-color: idx == root.highlighted-index
-                        ? rgba(255, 255, 255, 0.45)
-                        : (idx == root.active-index
-                            ? rgba(255, 255, 255, 0.2)
-                            : rgba(255, 255, 255, 0.06));
-
-                    animate background, border-color {
-                        duration: 150ms;
-                        easing: ease-out;
+                if root.loading: VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "Carregando dados do sistema...";
+                        color: #a1a1aa;
+                        font-size: 13px;
+                        horizontal-alignment: center;
                     }
+                }
 
-                    HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
-                        alignment: center;
+                if !root.loading && root.rows.length == 0: VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.empty-message;
+                        color: #a1a1aa;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
 
-                        Text {
-                            text: name;
-                            color: idx == root.highlighted-index ? #ffffff : #a1a1aa;
-                            font-size: 13px;
-                            font-weight: idx == root.highlighted-index ? 600 : 400;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
+                if !root.loading && root.rows.length > 0: VerticalLayout {
+                    spacing: 6px;
+                    alignment: start;
 
-                            animate color {
-                                duration: 150ms;
-                                easing: ease-out;
+                    for row[idx] in root.rows: Rectangle {
+                        height: row.is-slider ? 48px : 44px;
+                        border-radius: 9px;
+                        background: idx == root.highlighted-index
+                            ? (root.adjusting
+                                ? rgba(37, 99, 235, 0.22)
+                                : rgba(255, 255, 255, 0.14))
+                            : rgba(255, 255, 255, 0.04);
+                        border-width: 1px;
+                        border-color: idx == root.highlighted-index
+                            ? (root.adjusting
+                                ? rgba(96, 165, 250, 0.85)
+                                : rgba(255, 255, 255, 0.38))
+                            : (row.is-active
+                                ? rgba(147, 197, 253, 0.22)
+                                : rgba(255, 255, 255, 0.06));
+
+                        animate background, border-color {
+                            duration: 110ms;
+                            easing: ease-out;
+                        }
+
+                        VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            spacing: 4px;
+                            alignment: center;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: stretch;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 1px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: row.title;
+                                        color: idx == root.highlighted-index ? #ffffff : #e4e4e7;
+                                        font-size: 13px;
+                                        font-weight: idx == root.highlighted-index ? 700 : 500;
+                                        overflow: elide;
+                                    }
+
+                                    if row.subtitle != "": Text {
+                                        text: row.subtitle;
+                                        color: rgba(255, 255, 255, 0.52);
+                                        font-size: 10px;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                if row.badge != "": Text {
+                                    text: row.badge;
+                                    color: row.is-muted
+                                        ? #f87171
+                                        : (row.is-active || (idx == root.highlighted-index && root.adjusting)
+                                            ? #93c5fd
+                                            : #d4d4d8);
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            if row.is-slider: Rectangle {
+                                height: 5px;
+                                border-radius: 3px;
+                                background: rgba(255, 255, 255, 0.1);
+                                clip: true;
+
+                                Rectangle {
+                                    x: 0px;
+                                    y: 0px;
+                                    height: 100%;
+                                    width: parent.width * max(0.0, min(1.0, row.value-percent / max(1, row.max-percent)));
+                                    border-radius: 3px;
+                                    background: row.is-muted
+                                        ? #ef4444
+                                        : (idx == root.highlighted-index && root.adjusting
+                                            ? #3b82f6
+                                            : #93c5fd);
+                                }
                             }
                         }
                     }
                 }
             }
 
-            Text {
-                text: "Gire para alternar • Clique para selecionar";
-                color: rgba(255, 255, 255, 0.52);
-                font-size: 11px;
-                horizontal-alignment: center;
+            // Rodapé: Dicas dos controles + indicador de página/posição
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: stretch;
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.footer-hint;
+                    color: rgba(255, 255, 255, 0.55);
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                if root.scroll-indicator != "": Text {
+                    text: root.scroll-indicator;
+                    color: rgba(255, 255, 255, 0.45);
+                    font-size: 11px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
             }
         }
     }
