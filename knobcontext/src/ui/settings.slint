@@ -727,14 +727,15 @@ export component SettingsWindow inherits Window {
             // Coluna direita: ajustes gerais + editor do item selecionado
             Rectangle {
                 horizontal-stretch: 1;
+                clip: true;
                 border-radius: 10px;
                 background: rgba(30, 30, 30, 0.9);
                 border-width: 1px;
                 border-color: rgba(255, 255, 255, 0.1);
 
                 VerticalLayout {
-                    padding: 14px;
-                    spacing: 10px;
+                    padding: 12px;
+                    spacing: 8px;
 
                     // Ajustes gerais do Hub
                     Rectangle {
@@ -744,8 +745,8 @@ export component SettingsWindow inherits Window {
                         border-color: rgba(255, 255, 255, 0.08);
 
                         VerticalLayout {
-                            padding: 10px;
-                            spacing: 8px;
+                            padding: 8px;
+                            spacing: 6px;
 
                             Text {
                                 text: "Comportamento do Hub";
@@ -755,7 +756,8 @@ export component SettingsWindow inherits Window {
                             }
 
                             HorizontalLayout {
-                                spacing: 10px;
+                                spacing: 14px;
+                                alignment: start;
 
                                 HorizontalLayout {
                                     spacing: 4px;
@@ -772,17 +774,11 @@ export component SettingsWindow inherits Window {
                                     Text { width: 32px; text: root.hub-brightness-step + "%"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                     DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-brightness-step(1); } }
                                 }
-
-                                DarkButton {
-                                    height: 24px;
-                                    primary: root.hub-key3-is-confirm;
-                                    text: root.hub-key3-is-confirm ? "K3: Confirmar" : "K3: Fechar";
-                                    clicked => { root.hub-toggle-key3-behavior(); }
-                                }
                             }
 
                             HorizontalLayout {
                                 spacing: 14px;
+                                alignment: start;
 
                                 HorizontalLayout {
                                     spacing: 4px;
@@ -798,6 +794,18 @@ export component SettingsWindow inherits Window {
                                     DarkButton { width: 26px; height: 24px; text: "-"; clicked => { root.hub-change-adjust-timeout(-1); } }
                                     Text { width: 32px; text: root.hub-adjust-timeout-sec + "s"; color: #f5f5f7; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                     DarkButton { width: 26px; height: 24px; text: "+"; clicked => { root.hub-change-adjust-timeout(1); } }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+
+                                DarkButton {
+                                    height: 24px;
+                                    primary: root.hub-key3-is-confirm;
+                                    text: root.hub-key3-is-confirm ? "K3: Confirmar" : "K3: Fechar";
+                                    clicked => { root.hub-toggle-key3-behavior(); }
                                 }
 
                                 DarkButton {
