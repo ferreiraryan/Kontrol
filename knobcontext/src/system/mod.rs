@@ -69,9 +69,6 @@ pub enum SystemRequest {
     TriggerCaelestiaToggle {
         kind: CaelestiaToggleKind,
     },
-    RunShellCommand {
-        command: String,
-    },
     ReadCustomSlider {
         item_id: String,
         read_command: String,
@@ -380,13 +377,6 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
             fetch_caelestia_toggles()
                 .ok()
                 .map(SystemResponse::CaelestiaToggles)
-        }
-        SystemRequest::RunShellCommand { command } => {
-            if let Err(err) = Command::new("sh").arg("-c").arg(&command).status() {
-                warn!("Erro ao executar comando customizado '{command}': {err}");
-                return Some(SystemResponse::Error(err.to_string()));
-            }
-            None
         }
         SystemRequest::ReadCustomSlider {
             item_id,

@@ -46,18 +46,58 @@ pub enum OverlayKey3Behavior {
     Close,
 }
 
+/// Resolve a ação efetiva de um slot de slider, priorizando `action` (novo formato completo)
+/// com fallback automático para o campo legado `command` (`ActionConfig::Exec`).
+pub fn resolve_slider_action(action: &ActionConfig, legacy_command: &str) -> ActionConfig {
+    if !matches!(action, ActionConfig::None) {
+        return action.clone();
+    }
+    let trimmed = legacy_command.trim();
+    if !trimmed.is_empty() {
+        ActionConfig::Exec {
+            command: trimmed.to_string(),
+        }
+    } else {
+        ActionConfig::None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomGroupSlider {
     #[serde(default = "default_slider_step")]
     pub step: i32,
     #[serde(default)]
-    pub up_command: String,
+    pub up_action: ActionConfig,
     #[serde(default)]
+    pub down_action: ActionConfig,
+    #[serde(default)]
+    pub toggle_action: ActionConfig,
+    /// Campos legados mantidos para retrocompatibilidade com TOMLs antigos.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub up_command: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub down_command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toggle_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_command: Option<String>,
+}
+
+impl CustomGroupSlider {
+    pub fn effective_up_action(&self) -> ActionConfig {
+        resolve_slider_action(&self.up_action, &self.up_command)
+    }
+
+    pub fn effective_down_action(&self) -> ActionConfig {
+        resolve_slider_action(&self.down_action, &self.down_command)
+    }
+
+    pub fn effective_toggle_action(&self) -> ActionConfig {
+        resolve_slider_action(
+            &self.toggle_action,
+            self.toggle_command.as_deref().unwrap_or(""),
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,7 +139,15 @@ pub enum OverlayItemKind {
     CustomSlider {
         #[serde(default = "default_slider_step")]
         step: i32,
+        #[serde(default)]
+        up_action: Box<ActionConfig>,
+        #[serde(default)]
+        down_action: Box<ActionConfig>,
+        #[serde(default)]
+        toggle_action: Box<ActionConfig>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         up_command: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         down_command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         toggle_command: Option<String>,
@@ -1282,9 +1330,25 @@ impl Config {
             }
             match &item.kind {
                 OverlayItemKind::QuickAction { action } => action.validate()?,
+                OverlayItemKind::CustomSlider {
+                    up_action,
+                    down_action,
+                    toggle_action,
+                    ..
+                } => {
+                    up_action.validate()?;
+                    down_action.validate()?;
+                    toggle_action.validate()?;
+                }
                 OverlayItemKind::CustomGroup { entries } => {
                     for entry in entries {
-                        entry.action.validate()?;
+                        if let Some(ref sl) = entry.slider {
+                            sl.up_action.validate()?;
+                            sl.down_action.validate()?;
+                            sl.toggle_action.validate()?;
+                        } else {
+                            entry.action.validate()?;
+                        }
                     }
                 }
                 _ => {}
@@ -1790,9 +1854,18 @@ knob_cw = "VolumeUp"
                         action: ActionConfig::None,
                         slider: Some(CustomGroupSlider {
                             step: 10,
-                            up_command: "echo up".to_string(),
-                            down_command: "echo down".to_string(),
-                            toggle_command: Some("echo reset".to_string()),
+                            up_action: ActionConfig::Shortcut {
+                                keys: vec!["Ctrl".into(), "Plus".into()],
+                            },
+                            down_action: ActionConfig::Shortcut {
+                                keys: vec!["Ctrl".into(), "Minus".into()],
+                            },
+                            toggle_action: ActionConfig::Shortcut {
+                                keys: vec!["Ctrl".into(), "0".into()],
+                            },
+                            up_command: String::new(),
+                            down_command: String::new(),
+                            toggle_command: None,
                             read_command: Some("echo 40".to_string()),
                         }),
                         icon: None,
@@ -1807,9 +1880,16 @@ knob_cw = "VolumeUp"
             icon: None,
             kind: OverlayItemKind::CustomSlider {
                 step: 5,
-                up_command: "hyprctl keyword cursor:zoom_factor 2".to_string(),
-                down_command: "hyprctl keyword cursor:zoom_factor 1".to_string(),
-                toggle_command: Some("hyprctl keyword cursor:zoom_factor 1".to_string()),
+                up_action: Box::new(ActionConfig::Exec {
+                    command: "hyprctl keyword cursor:zoom_factor 2".to_string(),
+                }),
+                down_action: Box::new(ActionConfig::Exec {
+                    command: "hyprctl keyword cursor:zoom_factor 1".to_string(),
+                }),
+                toggle_action: Box::new(ActionConfig::MediaPlayPause),
+                up_command: String::new(),
+                down_command: String::new(),
+                toggle_command: None,
                 read_command: Some("echo 50".to_string()),
             },
         });

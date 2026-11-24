@@ -1,6 +1,7 @@
 use crate::actions_catalog::{list_desktop_apps, DesktopApp};
 use crate::config::{
-    ActionConfig, Config, OverlayConfig, OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior,
+    resolve_slider_action, ActionConfig, Config, OverlayConfig, OverlayItemConfig, OverlayItemKind,
+    OverlayKey3Behavior,
 };
 use crate::context::ProfileMode;
 use crate::input::KnobEvent;
@@ -752,6 +753,8 @@ impl HubController {
                     kind:
                         OverlayItemKind::CustomSlider {
                             step,
+                            up_action,
+                            down_action,
                             up_command,
                             down_command,
                             ..
@@ -766,11 +769,13 @@ impl HubController {
                         .unwrap_or(50);
                     let next = (cur + dir * (*step).max(1)).clamp(0, 100);
                     self.custom_slider_values.insert(id_clone, next);
-                    let cmd = if dir > 0 { up_command } else { down_command };
-                    if !cmd.trim().is_empty() {
-                        effects.push(HubEffect::System(SystemRequest::RunShellCommand {
-                            command: cmd.clone(),
-                        }));
+                    let act = if dir > 0 {
+                        resolve_slider_action(up_action, up_command)
+                    } else {
+                        resolve_slider_action(down_action, down_command)
+                    };
+                    if !matches!(act, ActionConfig::None) {
+                        effects.push(HubEffect::ExecuteAction(act));
                     }
                 }
             }
@@ -792,15 +797,13 @@ impl HubController {
                     let cur = self.custom_slider_values.get(&key).copied().unwrap_or(50);
                     let next = (cur + dir * sl.step.max(1)).clamp(0, 100);
                     self.custom_slider_values.insert(key, next);
-                    let cmd = if dir > 0 {
-                        sl.up_command
+                    let act = if dir > 0 {
+                        sl.effective_up_action()
                     } else {
-                        sl.down_command
+                        sl.effective_down_action()
                     };
-                    if !cmd.trim().is_empty() {
-                        effects.push(HubEffect::System(SystemRequest::RunShellCommand {
-                            command: cmd,
-                        }));
+                    if !matches!(act, ActionConfig::None) {
+                        effects.push(HubEffect::ExecuteAction(act));
                     }
                 }
             }
@@ -873,21 +876,24 @@ impl HubController {
                 if let Some(OverlayItemConfig {
                     kind:
                         OverlayItemKind::CustomSlider {
-                            toggle_command: Some(cmd),
+                            toggle_action,
+                            toggle_command,
                             ..
                         },
                     ..
                 }) = self.active_modules.iter().find(|i| i.id == *item_id)
                 {
-                    if !cmd.trim().is_empty() {
-                        effects.push(HubEffect::System(SystemRequest::RunShellCommand {
-                            command: cmd.clone(),
-                        }));
+                    let act = resolve_slider_action(
+                        toggle_action,
+                        toggle_command.as_deref().unwrap_or(""),
+                    );
+                    if !matches!(act, ActionConfig::None) {
+                        effects.push(HubEffect::ExecuteAction(act));
                     }
                 }
             }
             HubScreen::CustomGroup { item_id, .. } => {
-                let toggle_cmd = self
+                let toggle_act = self
                     .active_modules
                     .iter()
                     .find(|i| i.id == *item_id)
@@ -895,13 +901,11 @@ impl HubController {
                         OverlayItemKind::CustomGroup { entries } => entries
                             .get(self.sub_cursor)
                             .and_then(|e| e.slider.as_ref())
-                            .and_then(|sl| sl.toggle_command.clone()),
+                            .map(crate::config::CustomGroupSlider::effective_toggle_action),
                         _ => None,
                     });
-                if let Some(cmd) = toggle_cmd.filter(|s| !s.trim().is_empty()) {
-                    effects.push(HubEffect::System(SystemRequest::RunShellCommand {
-                        command: cmd,
-                    }));
+                if let Some(act) = toggle_act.filter(|a| !matches!(a, ActionConfig::None)) {
+                    effects.push(HubEffect::ExecuteAction(act));
                 }
             }
             _ => {}
@@ -2394,9 +2398,18 @@ mod tests {
                         action: ActionConfig::None,
                         slider: Some(CustomGroupSlider {
                             step: 10,
-                            up_command: "zoom +".to_string(),
-                            down_command: "zoom -".to_string(),
-                            toggle_command: Some("zoom reset".to_string()),
+                            up_action: ActionConfig::Shortcut {
+                                keys: vec!["Ctrl".into(), "Plus".into()],
+                            },
+                            down_action: ActionConfig::Shortcut {
+                                keys: vec!["Ctrl".into(), "Minus".into()],
+                            },
+                            toggle_action: ActionConfig::Shortcut {
+                                keys: vec!["Ctrl".into(), "0".into()],
+                            },
+                            up_command: String::new(),
+                            down_command: String::new(),
+                            toggle_command: None,
                             read_command: Some("echo 30".to_string()),
                         }),
                         icon: None,
@@ -2458,7 +2471,7 @@ mod tests {
             Some(HubEffect::RenderOverlay(vm)) if vm.adjusting
         ));
 
-        // 4) Girar sentido horário -> 40% e executa `zoom +`
+        // 4) Girar sentido horário -> 40% e executa ação normal (`Ctrl+Plus`)
         let fx_up = hub.handle_event(
             KnobEvent::RotateCw,
             t0 + Duration::from_millis(60),
@@ -2467,8 +2480,8 @@ mod tests {
             "global",
         );
         assert!(
-            fx_up.contains(&HubEffect::System(SystemRequest::RunShellCommand {
-                command: "zoom +".to_string(),
+            fx_up.contains(&HubEffect::ExecuteAction(ActionConfig::Shortcut {
+                keys: vec!["Ctrl".into(), "Plus".into()],
             }))
         );
         let Some(HubEffect::RenderOverlay(vm_up)) = fx_up.last() else {
@@ -2476,7 +2489,7 @@ mod tests {
         };
         assert_eq!(vm_up.cards[3].value_percent, 40);
 
-        // 5) K2 executa toggle_command do slider
+        // 5) K2 executa toggle_action (`Ctrl+0`) do slider
         let fx_k2 = hub.handle_event(
             KnobEvent::Key2,
             t0 + Duration::from_millis(80),
@@ -2486,8 +2499,8 @@ mod tests {
         );
         assert_eq!(
             fx_k2,
-            vec![HubEffect::System(SystemRequest::RunShellCommand {
-                command: "zoom reset".to_string(),
+            vec![HubEffect::ExecuteAction(ActionConfig::Shortcut {
+                keys: vec!["Ctrl".into(), "0".into()],
             })]
         );
 

@@ -5,9 +5,9 @@ use crate::actions_catalog::{
     action_summary, action_type_index, action_type_title, list_desktop_apps, ActionType, DesktopApp,
 };
 use crate::config::{
-    builtin_hub_module_templates, builtin_profile_presets, default_overlay_items, ActionConfig,
-    Config, CustomGroupEntry, CustomGroupSlider, OverlayItemConfig, OverlayItemKind,
-    OverlayKey3Behavior, ProfileConfig, GLOBAL_PROFILE_NAME,
+    builtin_hub_module_templates, builtin_profile_presets, default_overlay_items,
+    resolve_slider_action, ActionConfig, Config, CustomGroupEntry, CustomGroupSlider,
+    OverlayItemConfig, OverlayItemKind, OverlayKey3Behavior, ProfileConfig, GLOBAL_PROFILE_NAME,
 };
 use crate::context::ActiveWindowInfo;
 use crate::error::KnobError;
@@ -21,10 +21,48 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SliderSlot {
+    Up,
+    Down,
+    Toggle,
+}
+
+impl SliderSlot {
+    fn from_index(idx: i32) -> Option<Self> {
+        match idx {
+            0 => Some(Self::Up),
+            1 => Some(Self::Down),
+            2 => Some(Self::Toggle),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Up => "Girar horário (+)",
+            Self::Down => "Girar anti-horário (-)",
+            Self::Toggle => "K2 / Toggle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorTarget {
     ProfileSlot(ControlSlot),
     HubQuickAction(usize),
-    HubGroupEntry { item_idx: usize, entry_idx: usize },
+    HubSliderAction {
+        item_idx: usize,
+        slot: SliderSlot,
+    },
+    HubGroupEntry {
+        item_idx: usize,
+        entry_idx: usize,
+    },
+    HubGroupSliderAction {
+        item_idx: usize,
+        entry_idx: usize,
+        slot: SliderSlot,
+    },
 }
 
 struct SettingsDraft {
@@ -1128,6 +1166,9 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                 icon: None,
                 kind: OverlayItemKind::CustomSlider {
                     step: 5,
+                    up_action: Box::new(ActionConfig::None),
+                    down_action: Box::new(ActionConfig::None),
+                    toggle_action: Box::new(ActionConfig::None),
                     up_command: String::new(),
                     down_command: String::new(),
                     toggle_command: None,
@@ -1243,6 +1284,106 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
         });
     }
 
+    // Editar ação (+, -, K2) de CustomSlider via ActionEditorPopover
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_edit_slider_action(move |slot_idx| {
+            let Some(win) = weak.upgrade() else { return };
+            let Some(slot) = SliderSlot::from_index(slot_idx) else {
+                return;
+            };
+            let mut d = draft_ref.borrow_mut();
+            apply_hub_fields_to_draft(&win, &mut d);
+            let idx = d.hub_selected_index;
+            let info = d
+                .base_config
+                .overlay
+                .items
+                .get(idx)
+                .and_then(|item| match &item.kind {
+                    OverlayItemKind::CustomSlider {
+                        up_action,
+                        down_action,
+                        toggle_action,
+                        up_command,
+                        down_command,
+                        toggle_command,
+                        ..
+                    } => {
+                        let act = match slot {
+                            SliderSlot::Up => resolve_slider_action(up_action, up_command),
+                            SliderSlot::Down => resolve_slider_action(down_action, down_command),
+                            SliderSlot::Toggle => resolve_slider_action(
+                                toggle_action,
+                                toggle_command.as_deref().unwrap_or(""),
+                            ),
+                        };
+                        Some((item.title.clone(), act.to_action_type()))
+                    }
+                    _ => None,
+                });
+            if let Some((title, act)) = info {
+                d.editor_target = Some(EditorTarget::HubSliderAction {
+                    item_idx: idx,
+                    slot,
+                });
+                d.editor
+                    .open_custom(format!("Slider {title} • {}", slot.label()), &act);
+                win.set_editor_profile_context_label(SharedString::from(""));
+                win.set_editor_inherited_hint(SharedString::from(""));
+                win.set_editor_error_message(SharedString::from(""));
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
+            }
+        });
+    }
+
+    // Editar ação (+, -, K2) de um Slider dentro de CustomGroup via ActionEditorPopover
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_hub_group_edit_slider_action(move |slot_idx| {
+            let Some(win) = weak.upgrade() else { return };
+            let Some(slot) = SliderSlot::from_index(slot_idx) else {
+                return;
+            };
+            let mut d = draft_ref.borrow_mut();
+            apply_hub_fields_to_draft(&win, &mut d);
+            let idx = d.hub_selected_index;
+            let eidx = d.hub_group_selected_entry;
+            let info = d
+                .base_config
+                .overlay
+                .items
+                .get(idx)
+                .and_then(|item| match &item.kind {
+                    OverlayItemKind::CustomGroup { entries } => entries.get(eidx).and_then(|e| {
+                        let sl = e.slider.as_ref()?;
+                        let act = match slot {
+                            SliderSlot::Up => sl.effective_up_action(),
+                            SliderSlot::Down => sl.effective_down_action(),
+                            SliderSlot::Toggle => sl.effective_toggle_action(),
+                        };
+                        Some((e.label.clone(), act.to_action_type()))
+                    }),
+                    _ => None,
+                });
+            if let Some((label, act)) = info {
+                d.editor_target = Some(EditorTarget::HubGroupSliderAction {
+                    item_idx: idx,
+                    entry_idx: eidx,
+                    slot,
+                });
+                d.editor
+                    .open_custom(format!("Slider {label} • {}", slot.label()), &act);
+                win.set_editor_profile_context_label(SharedString::from(""));
+                win.set_editor_inherited_hint(SharedString::from(""));
+                win.set_editor_error_message(SharedString::from(""));
+                sync_editor_to_ui(&win, &d.editor, &d.desktop_apps, &d.provider_registry);
+            }
+        });
+    }
+
     // Passo do Slider Customizado
     {
         let weak = window.as_weak();
@@ -1325,6 +1466,9 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
                     action: ActionConfig::None,
                     slider: Some(CustomGroupSlider {
                         step: 5,
+                        up_action: ActionConfig::None,
+                        down_action: ActionConfig::None,
+                        toggle_action: ActionConfig::None,
                         up_command: String::new(),
                         down_command: String::new(),
                         toggle_command: None,
@@ -1990,6 +2134,38 @@ fn wire_action_editor_callbacks(
                                 d.dirty = true;
                             }
                         }
+                        Some(EditorTarget::HubSliderAction { item_idx, slot }) => {
+                            if let Some(OverlayItemConfig {
+                                kind:
+                                    OverlayItemKind::CustomSlider {
+                                        up_action,
+                                        down_action,
+                                        toggle_action,
+                                        up_command,
+                                        down_command,
+                                        toggle_command,
+                                        ..
+                                    },
+                                ..
+                            }) = d.base_config.overlay.items.get_mut(item_idx)
+                            {
+                                match slot {
+                                    SliderSlot::Up => {
+                                        **up_action = action_cfg;
+                                        up_command.clear();
+                                    }
+                                    SliderSlot::Down => {
+                                        **down_action = action_cfg;
+                                        down_command.clear();
+                                    }
+                                    SliderSlot::Toggle => {
+                                        **toggle_action = action_cfg;
+                                        *toggle_command = None;
+                                    }
+                                }
+                                d.dirty = true;
+                            }
+                        }
                         Some(EditorTarget::HubGroupEntry {
                             item_idx,
                             entry_idx,
@@ -2001,6 +2177,37 @@ fn wire_action_editor_callbacks(
                             {
                                 if let Some(entry) = entries.get_mut(entry_idx) {
                                     entry.action = action_cfg;
+                                    d.dirty = true;
+                                }
+                            }
+                        }
+                        Some(EditorTarget::HubGroupSliderAction {
+                            item_idx,
+                            entry_idx,
+                            slot,
+                        }) => {
+                            if let Some(OverlayItemConfig {
+                                kind: OverlayItemKind::CustomGroup { entries },
+                                ..
+                            }) = d.base_config.overlay.items.get_mut(item_idx)
+                            {
+                                if let Some(sl) =
+                                    entries.get_mut(entry_idx).and_then(|e| e.slider.as_mut())
+                                {
+                                    match slot {
+                                        SliderSlot::Up => {
+                                            sl.up_action = action_cfg;
+                                            sl.up_command.clear();
+                                        }
+                                        SliderSlot::Down => {
+                                            sl.down_action = action_cfg;
+                                            sl.down_command.clear();
+                                        }
+                                        SliderSlot::Toggle => {
+                                            sl.toggle_action = action_cfg;
+                                            sl.toggle_command = None;
+                                        }
+                                    }
                                     d.dirty = true;
                                 }
                             }
@@ -2563,6 +2770,9 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
             }
             OverlayItemKind::CustomSlider {
                 step,
+                up_action,
+                down_action,
+                toggle_action,
                 up_command,
                 down_command,
                 toggle_command,
@@ -2570,11 +2780,13 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
             } => {
                 win.set_hub_item_editor_mode(2);
                 win.set_hub_slider_step(*step);
-                win.set_hub_slider_up(SharedString::from(up_command.as_str()));
-                win.set_hub_slider_down(SharedString::from(down_command.as_str()));
-                win.set_hub_slider_toggle(SharedString::from(
-                    toggle_command.as_deref().unwrap_or(""),
-                ));
+                let up_eff = resolve_slider_action(up_action, up_command);
+                let down_eff = resolve_slider_action(down_action, down_command);
+                let toggle_eff =
+                    resolve_slider_action(toggle_action, toggle_command.as_deref().unwrap_or(""));
+                win.set_hub_slider_up_summary(format_summary(&up_eff, &draft.desktop_apps));
+                win.set_hub_slider_down_summary(format_summary(&down_eff, &draft.desktop_apps));
+                win.set_hub_slider_toggle_summary(format_summary(&toggle_eff, &draft.desktop_apps));
                 win.set_hub_slider_read(SharedString::from(read_command.as_deref().unwrap_or("")));
             }
             OverlayItemKind::CustomGroup { entries } => {
@@ -2603,10 +2815,17 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
                     if let Some(ref sl) = entry.slider {
                         win.set_hub_group_entry_is_slider(true);
                         win.set_hub_group_slider_step(sl.step);
-                        win.set_hub_group_slider_up(SharedString::from(sl.up_command.as_str()));
-                        win.set_hub_group_slider_down(SharedString::from(sl.down_command.as_str()));
-                        win.set_hub_group_slider_toggle(SharedString::from(
-                            sl.toggle_command.as_deref().unwrap_or(""),
+                        win.set_hub_group_slider_up_summary(format_summary(
+                            &sl.effective_up_action(),
+                            &draft.desktop_apps,
+                        ));
+                        win.set_hub_group_slider_down_summary(format_summary(
+                            &sl.effective_down_action(),
+                            &draft.desktop_apps,
+                        ));
+                        win.set_hub_group_slider_toggle_summary(format_summary(
+                            &sl.effective_toggle_action(),
+                            &draft.desktop_apps,
                         ));
                         win.set_hub_group_slider_read(SharedString::from(
                             sl.read_command.as_deref().unwrap_or(""),
@@ -2701,25 +2920,9 @@ fn apply_hub_fields_to_draft(win: &SettingsWindow, draft: &mut SettingsDraft) {
     }
 
     match &mut item.kind {
-        OverlayItemKind::CustomSlider {
-            up_command,
-            down_command,
-            toggle_command,
-            read_command,
-            ..
-        } => {
-            let up = win.get_hub_slider_up().trim().to_string();
-            let down = win.get_hub_slider_down().trim().to_string();
-            let toggle = normalize_optional_field(win.get_hub_slider_toggle().as_str());
+        OverlayItemKind::CustomSlider { read_command, .. } => {
             let read = normalize_optional_field(win.get_hub_slider_read().as_str());
-            if *up_command != up
-                || *down_command != down
-                || *toggle_command != toggle
-                || *read_command != read
-            {
-                *up_command = up;
-                *down_command = down;
-                *toggle_command = toggle;
+            if *read_command != read {
                 *read_command = read;
                 draft.dirty = true;
             }
@@ -2732,19 +2935,8 @@ fn apply_hub_fields_to_draft(win: &SettingsWindow, draft: &mut SettingsDraft) {
                     draft.dirty = true;
                 }
                 if let Some(ref mut sl) = entry.slider {
-                    let up = win.get_hub_group_slider_up().trim().to_string();
-                    let down = win.get_hub_group_slider_down().trim().to_string();
-                    let toggle =
-                        normalize_optional_field(win.get_hub_group_slider_toggle().as_str());
                     let read = normalize_optional_field(win.get_hub_group_slider_read().as_str());
-                    if sl.up_command != up
-                        || sl.down_command != down
-                        || sl.toggle_command != toggle
-                        || sl.read_command != read
-                    {
-                        sl.up_command = up;
-                        sl.down_command = down;
-                        sl.toggle_command = toggle;
+                    if sl.read_command != read {
                         sl.read_command = read;
                         draft.dirty = true;
                     }
