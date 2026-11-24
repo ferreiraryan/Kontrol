@@ -2,6 +2,7 @@ use crate::action::parse_key_name;
 use crate::actions_catalog::{
     action_to_string, parse_action_string, ActionType, MacroStep, MediaAction, ScrollDirection,
 };
+use crate::context::ProfileMode;
 use crate::error::KnobError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
@@ -14,6 +15,7 @@ pub const DEFAULT_KBD_PATH: &str = "/dev/input/by-id/usb-1189_8890-event-kbd";
 pub const DEFAULT_MEDIA_PATH: &str = "/dev/input/by-id/usb-1189_8890-if02-event-kbd";
 pub const DEFAULT_COMBO_WINDOW_MS: u64 = 200;
 pub const DEFAULT_SCROLL_STEP: i32 = 20;
+pub const DEFAULT_MODE: &str = "auto";
 pub const GLOBAL_PROFILE_NAME: &str = "global";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +23,8 @@ pub const GLOBAL_PROFILE_NAME: &str = "global";
 pub struct Config {
     pub device: DeviceConfig,
     pub active_profile: String,
+    /// Modo de perfil persistido: `"auto"` ou `"manual:<nome_do_perfil>"`.
+    pub mode: String,
     pub profiles: Vec<ProfileConfig>,
 }
 
@@ -325,6 +329,7 @@ impl Default for Config {
         Self {
             device: DeviceConfig::default(),
             active_profile: GLOBAL_PROFILE_NAME.to_string(),
+            mode: DEFAULT_MODE.to_string(),
             profiles: vec![
                 ProfileConfig {
                     name: GLOBAL_PROFILE_NAME.to_string(),
@@ -527,6 +532,43 @@ impl Config {
             .position(|p| p.name == self.active_profile)
             .unwrap_or(0)
     }
+
+    /// Resolve o `ProfileMode` a partir do campo persistido `mode` (`"auto"` ou `"manual:<nome>"`).
+    /// Se o perfil manual não existir na lista de perfis, loga warning e cai em `ProfileMode::Auto`.
+    pub fn resolve_profile_mode(&self) -> ProfileMode {
+        let trimmed = self.mode.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(DEFAULT_MODE) {
+            return ProfileMode::Auto;
+        }
+        if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("manual:") {
+            let target = trimmed[7..].trim();
+            if let Some(found) = self
+                .profiles
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(target))
+            {
+                return ProfileMode::Manual(found.name.clone());
+            }
+            log::warn!(
+                "Modo persistido '{}' referencia perfil inexistente '{}'; caindo em modo Automático.",
+                self.mode,
+                target
+            );
+            return ProfileMode::Auto;
+        }
+        log::warn!(
+            "Valor de `mode` desconhecido no config.toml ('{}'); usando modo Automático.",
+            self.mode
+        );
+        ProfileMode::Auto
+    }
+
+    pub fn set_profile_mode(&mut self, mode: &ProfileMode) {
+        self.mode = match mode {
+            ProfileMode::Auto => DEFAULT_MODE.to_string(),
+            ProfileMode::Manual(name) => format!("manual:{name}"),
+        };
+    }
 }
 
 #[cfg(test)]
@@ -685,6 +727,38 @@ key3 = "Macro:Ctrl+C,Wait(100),Ctrl+V"
         let _ = fs::remove_file(&path);
 
         assert!(matches!(err, KnobError::ConfigParse { .. }));
+    }
+
+    #[test]
+    fn resolves_and_persists_profile_mode_roundtrip() {
+        let path = unique_temp_path("mode_roundtrip");
+        let mut cfg = Config::default();
+        assert_eq!(
+            cfg.resolve_profile_mode(),
+            crate::context::ProfileMode::Auto
+        );
+
+        cfg.set_profile_mode(&crate::context::ProfileMode::Manual("global".to_string()));
+        assert_eq!(cfg.mode, "manual:global");
+        cfg.save_to_path(&path)
+            .expect("salvar config com modo manual");
+
+        let reloaded = Config::load_from_path(&path).expect("recarregar config");
+        let _ = fs::remove_file(&path);
+        assert_eq!(
+            reloaded.resolve_profile_mode(),
+            crate::context::ProfileMode::Manual("global".to_string())
+        );
+
+        // Perfil inexistente em `mode = "manual:..."` deve cair em Auto
+        let missing_profile_cfg = Config {
+            mode: "manual:perfil_inexistente".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            missing_profile_cfg.resolve_profile_mode(),
+            crate::context::ProfileMode::Auto
+        );
     }
 
     #[test]

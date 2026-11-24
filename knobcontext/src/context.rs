@@ -27,10 +27,15 @@ pub struct ContextState {
 }
 
 impl ContextState {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Self::with_mode(ProfileMode::Auto)
+    }
+
+    pub fn with_mode(mode: ProfileMode) -> Self {
         Self {
             active_window: None,
-            mode: ProfileMode::Auto,
+            mode,
         }
     }
 

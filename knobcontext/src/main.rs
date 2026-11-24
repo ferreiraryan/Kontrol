@@ -56,7 +56,29 @@ impl AppRuntime {
         }
     }
 
-    fn apply_saved_config(&mut self, new_config: Config) {
+    fn persist_mode(&mut self, mode: ProfileMode) {
+        if let Ok(mut ctx) = self.context.write() {
+            ctx.set_mode(mode.clone());
+        }
+        self.config.set_profile_mode(&mode);
+        if let Err(err) = self.config.save_default_location() {
+            warn!("Não foi possível persistir `mode` no config.toml: {err}");
+        }
+    }
+
+    fn apply_saved_config(&mut self, mut new_config: Config) {
+        let current_mode = self
+            .context
+            .read()
+            .map(|ctx| ctx.mode().clone())
+            .unwrap_or(ProfileMode::Auto);
+        new_config.set_profile_mode(&current_mode);
+        let validated_mode = new_config.resolve_profile_mode();
+        new_config.set_profile_mode(&validated_mode);
+        if let Ok(mut ctx) = self.context.write() {
+            ctx.set_mode(validated_mode);
+        }
+
         let profile_names: Vec<String> =
             new_config.profiles.iter().map(|p| p.name.clone()).collect();
         self.dispatcher.update_profiles(new_config.profiles.clone());
@@ -105,9 +127,7 @@ impl AppRuntime {
                         );
                     }
                     Ok(DispatchOutcome::ProfileSwitched(new_profile)) => {
-                        if let Ok(mut ctx) = self.context.write() {
-                            ctx.set_mode(ProfileMode::Manual(new_profile.clone()));
-                        }
+                        self.persist_mode(ProfileMode::Manual(new_profile.clone()));
                         let (overlay_idx, _) = self.overlay_active_index_and_subtitle();
                         self.controller.sync_active_index(overlay_idx);
                         info!("Perfil alterado para Manual: '{new_profile}'");
@@ -138,16 +158,12 @@ impl AppRuntime {
             }
             OverlayTransition::CommitAndClose { selected_index } => {
                 if selected_index == 0 {
-                    if let Ok(mut ctx) = self.context.write() {
-                        ctx.set_mode(ProfileMode::Auto);
-                    }
+                    self.persist_mode(ProfileMode::Auto);
                     let resolved = self.sync_context();
                     info!("Modo alterado no overlay: Automático ('{resolved}')");
                 } else if let Some(profile) = self.config.profiles.get(selected_index - 1) {
                     let chosen = profile.name.clone();
-                    if let Ok(mut ctx) = self.context.write() {
-                        ctx.set_mode(ProfileMode::Manual(chosen.clone()));
-                    }
+                    self.persist_mode(ProfileMode::Manual(chosen.clone()));
                     self.dispatcher.set_active_profile_index(selected_index - 1);
                     info!("Modo alterado no overlay: Manual ('{chosen}')");
                 }
@@ -201,13 +217,26 @@ fn run() -> Result<(), KnobError> {
     }
 
     let active_idx = config.active_profile_index();
+    let initial_mode = config.resolve_profile_mode();
+    let initial_overlay_idx = match &initial_mode {
+        ProfileMode::Auto => 0,
+        ProfileMode::Manual(name) => config
+            .profiles
+            .iter()
+            .position(|p| p.name.eq_ignore_ascii_case(name))
+            .map(|i| i + 1)
+            .unwrap_or(0),
+    };
     let profile_names: Vec<String> = config.profiles.iter().map(|p| p.name.clone()).collect();
 
     let executor = EnigoExecutor::new(config.device.scroll_step)?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
-    // Índice 0 no overlay = "Automático" (padrão volátil na inicialização).
-    let overlay = OverlayWindow::new(profile_names, 0)?;
-    let controller = OverlayController::new(config.profiles.len() + 1, 0, DEFAULT_OVERLAY_TIMEOUT);
+    let overlay = OverlayWindow::new(profile_names, initial_overlay_idx)?;
+    let controller = OverlayController::new(
+        config.profiles.len() + 1,
+        initial_overlay_idx,
+        DEFAULT_OVERLAY_TIMEOUT,
+    );
 
     info!(
         "Capturando dispositivos: kbd='{}', media='{}'",
@@ -225,11 +254,12 @@ fn run() -> Result<(), KnobError> {
         warn!("Não foi possível registrar handler de sinal Ctrl+C: {err}");
     }
 
-    let context = Arc::new(RwLock::new(ContextState::new()));
+    let context = Arc::new(RwLock::new(ContextState::with_mode(initial_mode.clone())));
     let hyprland_thread = spawn_hyprland_listener(Arc::clone(&context), Arc::clone(&running));
 
     info!(
-        "KnobContext ativo (modo: Automático). Pressione o knob para o overlay, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair."
+        "KnobContext ativo (modo inicial: {:?}). Pressione o knob para o overlay, Key1+Key2 (ou --settings) para configurações, ou Ctrl+C para sair.",
+        initial_mode
     );
 
     let (tx, rx) = mpsc::channel::<KnobEvent>();
