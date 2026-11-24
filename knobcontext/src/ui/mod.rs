@@ -1,5 +1,6 @@
 pub mod action_editor_mod;
 pub mod action_editor_state;
+pub mod animator;
 pub mod settings_mod;
 
 use crate::error::KnobError;
@@ -7,16 +8,21 @@ use crate::overlay_hub::{
     HubCardView, HubViewModel, THUMB_COVER_HEIGHT, THUMB_COVER_WIDTH, THUMB_ICON_SIZE,
 };
 use crate::system::thumbs::{is_svg_path, DecodedThumbnail, ThumbnailMode, ThumbnailRequest};
+use crate::ui::animator::CarouselAnimator;
 use slint::{
-    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode,
+    VecModel,
 };
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 pub const OVERLAY_WIDTH_PX: i32 = 960;
 pub const OVERLAY_HEIGHT_PX: i32 = 256;
 const MAX_RAM_THUMBNAILS: usize = 32;
+const ANIM_FRAME_MS: u64 = 16;
 
 slint::include_modules!();
 
@@ -64,14 +70,22 @@ pub struct RenderOutcome {
     pub missing_thumbnails: Vec<ThumbnailRequest>,
 }
 
+struct AnimRuntime {
+    animator: CarouselAnimator,
+    last_tick: Instant,
+}
+
 /// Gerencia o ciclo de vida da janela Overlay (Carrossel Horizontal Caelestia) em Slint.
 ///
 /// Descarta a instância no `hide()` e cria um `Overlay` novo ao abrir para preservar
-/// o estado `floating` no Wayland/Hyprland (contornando o reset de `WindowAttributes`).
+/// o estado `floating` no Wayland/Hyprland, e dirige animações a 60fps apenas enquanto
+/// há transição ativa (0% de CPU em repouso).
 pub struct OverlayWindow {
     window: Option<Overlay>,
     last_vm: Option<HubViewModel>,
     thumb_cache: ThumbnailCache,
+    anim: Rc<RefCell<AnimRuntime>>,
+    anim_timer: Rc<Timer>,
 }
 
 impl OverlayWindow {
@@ -80,6 +94,11 @@ impl OverlayWindow {
             window: None,
             last_vm: None,
             thumb_cache: ThumbnailCache::new(),
+            anim: Rc::new(RefCell::new(AnimRuntime {
+                animator: CarouselAnimator::new(),
+                last_tick: Instant::now(),
+            })),
+            anim_timer: Rc::new(Timer::default()),
         }
     }
 
@@ -90,8 +109,22 @@ impl OverlayWindow {
             self.window = Some(window);
         }
 
+        {
+            let mut rt = self.anim.borrow_mut();
+            if just_opened {
+                rt.animator.trigger_open(vm.animations_enabled);
+            } else if vm.screen_changed {
+                rt.animator.trigger_screen_transition(vm.animations_enabled);
+            } else if vm.scroll_delta != 0 {
+                rt.animator
+                    .trigger_scroll(vm.scroll_delta, vm.animations_enabled);
+            }
+            rt.last_tick = Instant::now();
+        }
+
         self.last_vm = Some(vm.clone());
         let missing_thumbnails = self.apply_current_vm()?;
+        self.sync_anim_properties();
 
         if just_opened {
             if let Some(window) = &self.window {
@@ -100,6 +133,8 @@ impl OverlayWindow {
                     .map_err(|err| KnobError::UiRun(err.to_string()))?;
             }
         }
+
+        self.ensure_anim_timer();
 
         Ok(RenderOutcome {
             just_opened,
@@ -127,6 +162,8 @@ impl OverlayWindow {
     }
 
     pub fn hide(&mut self) -> Result<(), KnobError> {
+        self.anim_timer.stop();
+        self.anim.borrow_mut().animator.reset();
         self.last_vm = None;
         if let Some(window) = self.window.take() {
             window
@@ -134,6 +171,57 @@ impl OverlayWindow {
                 .map_err(|err| KnobError::UiRun(err.to_string()))?;
         }
         Ok(())
+    }
+
+    fn sync_anim_properties(&self) {
+        if let Some(window) = &self.window {
+            let rt = self.anim.borrow();
+            window.set_scroll_phase(rt.animator.scroll_phase);
+            window.set_open_progress(rt.animator.open_progress);
+            window.set_screen_progress(rt.animator.screen_progress);
+        }
+    }
+
+    fn ensure_anim_timer(&self) {
+        if !self.anim.borrow().animator.is_active() {
+            self.anim_timer.stop();
+            return;
+        }
+        let Some(window) = &self.window else {
+            return;
+        };
+        let weak = window.as_weak();
+        let anim_ref = Rc::clone(&self.anim);
+        let timer_ref = Rc::clone(&self.anim_timer);
+        self.anim_timer.start(
+            TimerMode::Repeated,
+            Duration::from_millis(ANIM_FRAME_MS),
+            move || {
+                let Some(win) = weak.upgrade() else {
+                    timer_ref.stop();
+                    return;
+                };
+                let (still_active, scroll_phase, open_progress, screen_progress) = {
+                    let mut rt = anim_ref.borrow_mut();
+                    let now = Instant::now();
+                    let dt = now.saturating_duration_since(rt.last_tick).as_secs_f32();
+                    rt.last_tick = now;
+                    let active = rt.animator.step(dt);
+                    (
+                        active,
+                        rt.animator.scroll_phase,
+                        rt.animator.open_progress,
+                        rt.animator.screen_progress,
+                    )
+                };
+                win.set_scroll_phase(scroll_phase);
+                win.set_open_progress(open_progress);
+                win.set_screen_progress(screen_progress);
+                if !still_active {
+                    timer_ref.stop();
+                }
+            },
+        );
     }
 
     fn resolve_card_image(
@@ -162,7 +250,6 @@ impl OverlayWindow {
             return (true, cached);
         }
 
-        // SVGs de ícones pequenos podem ser carregados diretamente pelo Slint (resvg embutido)
         if is_svg_path(path) {
             if let Ok(svg_img) = Image::load_from_path(Path::new(path)) {
                 self.thumb_cache.insert(req, svg_img.clone());
@@ -207,7 +294,6 @@ impl OverlayWindow {
             });
         }
 
-        // Pre-fetch dos vizinhos imediatos do carrossel que ainda não estão no cache
         for pre in &vm.prefetch_requests {
             if !is_svg_path(&pre.path)
                 && self.thumb_cache.get(pre).is_none()

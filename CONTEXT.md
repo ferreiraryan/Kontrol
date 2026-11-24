@@ -46,6 +46,8 @@
   - Novo `ui/overlay.slint` panorâmico (`960×256px`, 5 cards horizontais com foco central elevado em moldura translúcida, pílulas centralizadas no topo e rodapé discreto).
   - Posicionamento automático na parte inferior central do monitor focado (respeitando `scale` e `transform` para monitor vertical) via `.socket.sock` do Hyprland (`position_overlay_bottom_center`, margem flutuante padrão `20px`).
   - Pipeline assíncrono leve de imagens/ícones opcionais: `system/icons.rs` (resolução `.desktop` → tema de ícones Linux), `system/thumbs.rs` (`image 0.25` redimensionando para `240×140` / `96×96` + cache em disco `~/.cache/knobcontext/thumbs/`), e cache LRU em RAM (`ui/mod.rs`, máx. 32 imagens ≈ ~4 MB) + pre-fetch dos vizinhos do carrossel.
+- **v2.2 — Animações Suaves 60fps no Overlay (`ui/animator.rs`)**:
+  - Carrossel contínuo de **7 slots** (centro fixo em `3`, bordas `0` e `6` entrando/saindo via `clip: true` com espaçamento constante de `12px`), `CarouselAnimator` exponencial (`~175ms` scroll com acúmulo de inércia em rajadas, `~155ms` entrada do dock, `~140ms` troca de tela, `animate width` nos sliders), `slint::Timer` 16ms sob demanda (0% CPU em repouso) e toggle `overlay.animations_enabled` nas Configurações.
 
 ## Hardware e Descobertas HID
 - **VID:PID**: `1189:8890` (4 interfaces USB HID):

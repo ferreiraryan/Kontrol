@@ -16,58 +16,53 @@ export struct OverlayCardData {
 
 component CarouselCard inherits Rectangle {
     in property <OverlayCardData> card;
-    in property <bool> is-center: false;
-    in property <bool> is-outer: false;
+    /// Distância assinada em slots em relação ao centro (`0.0` = centro, `-1.0` = esquerda, `+1.0` = direita).
+    in property <float> slot-pos: 0.0;
     in property <bool> adjusting: false;
 
-    width: root.is-center ? 228px : (root.is-outer ? 148px : 162px);
-    height: root.is-center ? 168px : (root.is-outer ? 132px : 142px);
-    border-radius: root.is-center ? 14px : 11px;
+    private property <float> dist: abs(root.slot-pos);
+    private property <float> center-weight: max(0.0, 1.0 - root.dist);
+    private property <float> outer: max(0.0, min(1.0, root.dist - 1.0));
+    private property <float> edge-fade: max(0.0, min(1.0, (2.85 - root.dist) / 0.75));
+    private property <bool> is-center-dominant: root.center-weight > 0.55;
+
+    width: 160px + 64px * root.center-weight - 16px * root.outer;
+    height: 140px + 28px * root.center-weight - 12px * root.outer;
+    border-radius: 11px + 3px * root.center-weight;
     background: root.card.is-empty
         ? transparent
-        : (root.is-center
-            ? (root.adjusting ? rgba(37, 99, 235, 0.24) : rgba(255, 255, 255, 0.08))
-            : transparent);
-    border-width: root.card.is-empty ? 0px : (root.is-center ? 1.2px : 0px);
-    border-color: root.is-center
-        ? (root.adjusting ? rgba(96, 165, 250, 0.88) : rgba(255, 255, 255, 0.16))
-        : transparent;
+        : (root.adjusting
+            ? rgba(37, 99, 235, 0.24 * root.center-weight)
+            : rgba(255, 255, 255, 0.08 * root.center-weight));
+    border-width: root.card.is-empty ? 0px : (1.2px * root.center-weight);
+    border-color: root.adjusting
+        ? rgba(96, 165, 250, 0.88 * root.center-weight)
+        : rgba(255, 255, 255, 0.16 * root.center-weight);
 
-    animate background, border-color {
-        duration: 130ms;
-        easing: ease-out;
-    }
-
-    if !root.card.is-empty: VerticalLayout {
-        padding-top: root.is-center ? 10px : 6px;
-        padding-bottom: root.is-center ? 8px : 4px;
-        padding-left: root.is-center ? 10px : 4px;
-        padding-right: root.is-center ? 10px : 4px;
-        spacing: root.is-center ? 7px : 5px;
+    if !root.card.is-empty && root.edge-fade > 0.02: VerticalLayout {
+        padding-top: 6px + 4px * root.center-weight;
+        padding-bottom: 4px + 4px * root.center-weight;
+        padding-left: 4px + 6px * root.center-weight;
+        padding-right: 4px + 6px * root.center-weight;
+        spacing: 5px + 2px * root.center-weight;
         alignment: center;
 
         // Área visual principal do card (16:10 thumbnail, ícone de app ou card limpo)
         Rectangle {
-            height: root.is-center ? 114px : (root.is-outer ? 84px : 94px);
+            height: 92px + 22px * root.center-weight - 10px * root.outer;
             border-radius: 10px;
             clip: true;
             background: root.card.has-image && root.card.image-is-cover
-                ? rgba(10, 12, 16, 0.9)
-                : (root.is-center
-                    ? (root.adjusting
-                        ? rgba(30, 58, 138, 0.55)
-                        : rgba(34, 38, 50, 0.92))
-                    : (root.is-outer
-                        ? rgba(24, 27, 36, 0.72)
-                        : rgba(28, 31, 42, 0.84)));
+                ? rgba(10, 12, 16, 0.9 * root.edge-fade)
+                : (root.is-center-dominant && root.adjusting
+                    ? rgba(30, 58, 138, 0.58)
+                    : rgba(26 + 8 * root.center-weight, 29 + 9 * root.center-weight, 39 + 11 * root.center-weight, (0.76 + 0.16 * root.center-weight) * root.edge-fade));
             border-width: 1px;
-            border-color: root.is-center
-                ? (root.adjusting
-                    ? rgba(96, 165, 250, 0.85)
-                    : rgba(255, 255, 255, 0.24))
+            border-color: root.is-center-dominant && root.adjusting
+                ? rgba(96, 165, 250, 0.85)
                 : (root.card.is-active
-                    ? rgba(147, 197, 253, 0.35)
-                    : rgba(255, 255, 255, 0.08));
+                    ? rgba(147, 197, 253, (0.32 + 0.25 * root.center-weight) * root.edge-fade)
+                    : rgba(255, 255, 255, (0.08 + 0.16 * root.center-weight) * root.edge-fade));
 
             // 1. Imagem Cover (ex.: Wallpapers ou imagem customizada)
             if root.card.has-image && root.card.image-is-cover: Image {
@@ -75,23 +70,23 @@ component CarouselCard inherits Rectangle {
                 height: 100%;
                 source: root.card.image-source;
                 image-fit: cover;
-                opacity: root.is-center ? 1.0 : (root.is-outer ? 0.62 : 0.82);
+                opacity: (0.64 + 0.36 * root.center-weight - 0.14 * root.outer) * root.edge-fade;
             }
 
             // 2. Ícone de aplicativo (ex.: Firefox no Mixer ou LaunchApp)
             if root.card.has-image && !root.card.image-is-cover: VerticalLayout {
                 alignment: center;
                 padding: 8px;
-                spacing: 6px;
+                spacing: 5px;
 
                 HorizontalLayout {
                     alignment: center;
                     Image {
-                        width: root.is-center ? (root.card.is-slider ? 46px : 58px) : 38px;
-                        height: root.is-center ? (root.card.is-slider ? 46px : 58px) : 38px;
+                        width: (root.card.is-slider ? 36px + 10px * root.center-weight : 40px + 18px * root.center-weight);
+                        height: (root.card.is-slider ? 36px + 10px * root.center-weight : 40px + 18px * root.center-weight);
                         source: root.card.image-source;
                         image-fit: contain;
-                        opacity: root.is-center ? 1.0 : (root.is-outer ? 0.68 : 0.85);
+                        opacity: (0.72 + 0.28 * root.center-weight - 0.12 * root.outer) * root.edge-fade;
                     }
                 }
 
@@ -100,7 +95,7 @@ component CarouselCard inherits Rectangle {
                     Text {
                         text: root.card.badge;
                         color: root.card.is-muted ? #f87171 : #e2e8f0;
-                        font-size: root.is-center ? 13px : 11px;
+                        font-size: root.is-center-dominant ? 13px : 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
                     }
@@ -118,7 +113,12 @@ component CarouselCard inherits Rectangle {
                             border-radius: 3px;
                             background: root.card.is-muted
                                 ? #ef4444
-                                : (root.is-center && root.adjusting ? #3b82f6 : #93c5fd);
+                                : (root.is-center-dominant && root.adjusting ? #3b82f6 : #93c5fd);
+
+                            animate width {
+                                duration: 110ms;
+                                easing: ease-out;
+                            }
                         }
                     }
                 }
@@ -137,18 +137,16 @@ component CarouselCard inherits Rectangle {
                     text: root.card.is-muted ? "MUTE" : (root.card.value-percent + "%");
                     color: root.card.is-muted
                         ? #f87171
-                        : (root.is-center ? #ffffff : #cbd5e1);
-                    font-size: root.is-center ? 24px : 17px;
+                        : rgba(248, 250, 252, (0.70 + 0.30 * root.center-weight) * root.edge-fade);
+                    font-size: root.is-center-dominant ? 24px : 17px;
                     font-weight: 700;
                     horizontal-alignment: center;
                 }
 
                 if !root.card.is-slider: Text {
                     text: root.card.glyph;
-                    color: root.is-center
-                        ? #e0e7ff
-                        : (root.is-outer ? rgba(203, 213, 225, 0.55) : #94a3b8);
-                    font-size: root.is-center ? 30px : 22px;
+                    color: rgba(224, 231, 255, (0.58 + 0.42 * root.center-weight - 0.16 * root.outer) * root.edge-fade);
+                    font-size: root.is-center-dominant ? 30px : 22px;
                     font-weight: 700;
                     horizontal-alignment: center;
                 }
@@ -167,13 +165,18 @@ component CarouselCard inherits Rectangle {
                         border-radius: 3px;
                         background: root.card.is-muted
                             ? #ef4444
-                            : (root.is-center && root.adjusting ? #3b82f6 : #93c5fd);
+                            : (root.is-center-dominant && root.adjusting ? #3b82f6 : #93c5fd);
+
+                        animate width {
+                            duration: 110ms;
+                            easing: ease-out;
+                        }
                     }
                 }
 
                 if !root.card.is-slider && root.card.subtitle != "": Text {
                     text: root.card.subtitle;
-                    color: rgba(226, 232, 240, 0.62);
+                    color: rgba(226, 232, 240, (0.54 + 0.20 * root.center-weight) * root.edge-fade);
                     font-size: 10px;
                     horizontal-alignment: center;
                     overflow: elide;
@@ -188,14 +191,14 @@ component CarouselCard inherits Rectangle {
                 height: 18px;
                 border-radius: 9px;
                 background: root.card.is-active
-                    ? rgba(59, 130, 246, 0.85)
-                    : rgba(15, 23, 42, 0.78);
+                    ? rgba(59, 130, 246, 0.85 * root.edge-fade)
+                    : rgba(15, 23, 42, 0.78 * root.edge-fade);
                 border-width: 1px;
-                border-color: rgba(255, 255, 255, 0.18);
+                border-color: rgba(255, 255, 255, 0.18 * root.edge-fade);
 
                 Text {
                     text: root.card.badge;
-                    color: #f8fafc;
+                    color: rgba(248, 250, 252, root.edge-fade);
                     font-size: 9px;
                     font-weight: 700;
                     horizontal-alignment: center;
@@ -207,11 +210,9 @@ component CarouselCard inherits Rectangle {
         // Título centralizado abaixo do card (idêntico ao estilo do Caelestia)
         Text {
             text: root.card.title;
-            color: root.is-center
-                ? #f8fafc
-                : (root.is-outer ? rgba(226, 232, 240, 0.56) : rgba(226, 232, 240, 0.78));
-            font-size: root.is-center ? 12px : 11px;
-            font-weight: root.is-center ? 700 : 500;
+            color: rgba(248, 250, 252, (0.64 + 0.36 * root.center-weight - 0.16 * root.outer) * root.edge-fade);
+            font-size: root.is-center-dominant ? 12px : 11px;
+            font-weight: root.is-center-dominant ? 700 : 500;
             horizontal-alignment: center;
             overflow: elide;
         }
@@ -235,15 +236,22 @@ export component Overlay inherits Window {
     in property <[OverlayCardData]> cards: [];
     in property <string> footer-hint: "Girar: Navegar • Knob/K3: Abrir • K1: Fechar";
 
+    // Propriedades animadas a 60fps pelo CarouselAnimator (0% CPU em repouso)
+    in property <float> scroll-phase: 0.0;
+    in property <float> open-progress: 1.0;
+    in property <float> screen-progress: 1.0;
+
     Rectangle {
+        x: 0px;
+        y: (1.0 - root.open-progress) * 12px;
         width: 100%;
         height: 100%;
-        background: rgba(17, 20, 27, 0.90);
+        background: rgba(17, 20, 27, 0.90 * root.open-progress);
         border-radius: 20px;
         border-width: 1.5px;
         border-color: root.adjusting
-            ? rgba(96, 165, 250, 0.82)
-            : rgba(255, 255, 255, 0.11);
+            ? rgba(96, 165, 250, 0.82 * root.open-progress)
+            : rgba(255, 255, 255, 0.11 * root.open-progress);
 
         animate border-color {
             duration: 140ms;
@@ -255,7 +263,7 @@ export component Overlay inherits Window {
             padding-bottom: 10px;
             padding-left: 18px;
             padding-right: 18px;
-            spacing: 8px;
+            spacing: 6px;
             alignment: stretch;
 
             // Barra superior centralizada com pílulas estilo Caelestia
@@ -287,6 +295,11 @@ export component Overlay inherits Window {
                     height: 28px;
                     border-radius: 14px;
                     background: root.adjusting ? #3b82f6 : #c7d2fe;
+
+                    animate background {
+                        duration: 140ms;
+                        easing: ease-out;
+                    }
 
                     HorizontalLayout {
                         padding-left: 16px;
@@ -326,10 +339,11 @@ export component Overlay inherits Window {
                 }
             }
 
-            // Carrossel horizontal de 5 cards com foco central elevado
-            Rectangle {
+            // Carrossel contínuo de 7 slots com clip suave nas bordas e espaçamento constante de 12px
+            carousel-stage := Rectangle {
                 vertical-stretch: 1;
                 background: transparent;
+                clip: true;
 
                 if root.loading: VerticalLayout {
                     alignment: center;
@@ -351,18 +365,21 @@ export component Overlay inherits Window {
                     }
                 }
 
-                if !root.loading && root.cards.length > 0: HorizontalLayout {
-                    alignment: center;
-                    spacing: 12px;
+                if !root.loading && root.cards.length > 0: Rectangle {
+                    x: 0px;
+                    y: (1.0 - root.screen-progress) * 10px;
+                    width: 100%;
+                    height: 100%;
+                    background: transparent;
 
-                    for card[idx] in root.cards: VerticalLayout {
-                        alignment: center;
-                        CarouselCard {
-                            card: card;
-                            is-center: idx == 2;
-                            is-outer: idx == 0 || idx == 4;
-                            adjusting: root.adjusting;
-                        }
+                    for card[idx] in root.cards: CarouselCard {
+                        property <float> pos: (idx - 3) + root.scroll-phase;
+                        property <length> dx: 164px * pos + 40px * max(-1.0, min(1.0, pos));
+                        card: card;
+                        slot-pos: pos;
+                        adjusting: root.adjusting;
+                        x: parent.width / 2 + dx - self.width / 2;
+                        y: (parent.height - self.height) / 2;
                     }
                 }
             }

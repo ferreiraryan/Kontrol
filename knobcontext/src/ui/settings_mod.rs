@@ -897,6 +897,17 @@ fn wire_hub_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<SettingsDra
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
+        window.on_hub_toggle_animations(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.base_config.overlay.animations_enabled = !d.base_config.overlay.animations_enabled;
+            d.dirty = true;
+            sync_all_to_ui(&win, &d);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
         window.on_hub_pick_item_icon(move || {
             let Some(win) = weak.upgrade() else { return };
             if let Some(path) = rfd::FileDialog::new()
@@ -1323,6 +1334,7 @@ fn sync_hub_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     win.set_hub_adjust_timeout_sec((overlay.adjust_timeout_ms / 1_000) as i32);
     win.set_hub_key3_is_confirm(overlay.key3_behavior == OverlayKey3Behavior::Confirm);
     win.set_hub_show_images(overlay.show_images);
+    win.set_hub_animations_enabled(overlay.animations_enabled);
 
     let labels: Vec<SharedString> = overlay
         .items

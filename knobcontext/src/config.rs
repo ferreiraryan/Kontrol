@@ -129,6 +129,9 @@ pub struct OverlayConfig {
     /// Margem inferior (em pixels) do dock flutuante na base central da tela.
     #[serde(default = "default_bottom_margin_px")]
     pub bottom_margin_px: i32,
+    /// Habilita animações suaves de 60fps no carrossel e transições de tela do overlay.
+    #[serde(default = "default_true")]
+    pub animations_enabled: bool,
     pub items: Vec<OverlayItemConfig>,
 }
 
@@ -143,6 +146,7 @@ impl Default for OverlayConfig {
             key3_behavior: OverlayKey3Behavior::Confirm,
             show_images: true,
             bottom_margin_px: DEFAULT_OVERLAY_BOTTOM_MARGIN_PX,
+            animations_enabled: true,
             items: default_overlay_items(),
         }
     }
@@ -1287,6 +1291,7 @@ knob_cw = "VolumeUp"
         cfg.overlay.key3_behavior = OverlayKey3Behavior::Close;
         cfg.overlay.show_images = false;
         cfg.overlay.bottom_margin_px = 24;
+        cfg.overlay.animations_enabled = false;
         cfg.overlay.items.push(OverlayItemConfig {
             id: "quick_term".to_string(),
             title: "Abrir Terminal".to_string(),

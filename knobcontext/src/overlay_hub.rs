@@ -14,7 +14,7 @@ use crate::system::{SystemRequest, SystemResponse};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-pub const CAROUSEL_SLOTS: usize = 5;
+pub const CAROUSEL_SLOTS: usize = 7;
 pub const THUMB_COVER_WIDTH: u32 = 240;
 pub const THUMB_COVER_HEIGHT: u32 = 140;
 pub const THUMB_ICON_SIZE: u32 = 96;
@@ -82,12 +82,18 @@ pub struct HubViewModel {
     pub adjusting: bool,
     pub loading: bool,
     pub empty_message: String,
-    /// Exatamente 5 slots do carrossel horizontal, com o item selecionado fixo no slot central (`2`).
+    /// Exatamente 7 slots do carrossel horizontal, com o item selecionado fixo no centro (`3`)
+    /// e os slots `0` e `6` atuando como bordas de entrada/saída durante o deslize suave.
     pub cards: Vec<HubCardView>,
     /// Lista de thumbnails extras (vizinhos imediatos) para pre-fetch suave em background.
     pub prefetch_requests: Vec<ThumbnailRequest>,
     pub scroll_indicator: String,
     pub footer_hint: String,
+    /// Deslocamento discreto do último giro de navegação (`+1`, `-1` ou `0`) para o animador.
+    pub scroll_delta: i32,
+    /// `true` quando ocorreu transição de tela (Hub ↔ submenu) para animar a troca.
+    pub screen_changed: bool,
+    pub animations_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,11 +418,9 @@ impl HubController {
         if self.screen != HubScreen::Root {
             self.screen = HubScreen::Root;
             self.loading = false;
-            return vec![HubEffect::RenderOverlay(self.build_view_model(
-                config,
-                mode,
-                contextual_profile,
-            ))];
+            let mut vm = self.build_view_model(config, mode, contextual_profile);
+            vm.screen_changed = true;
+            return vec![HubEffect::RenderOverlay(vm)];
         }
         self.close_internal();
         vec![HubEffect::CloseOverlay]
@@ -448,11 +452,11 @@ impl HubController {
             *cursor = (*cursor + count - 1) % count;
         }
 
-        vec![HubEffect::RenderOverlay(self.build_view_model(
-            config,
-            mode,
-            contextual_profile,
-        ))]
+        let mut vm = self.build_view_model(config, mode, contextual_profile);
+        if count > 1 {
+            vm.scroll_delta = dir.signum();
+        }
+        vec![HubEffect::RenderOverlay(vm)]
     }
 
     fn handle_adjust_rotation(
@@ -867,11 +871,9 @@ impl HubController {
             }
         }
 
-        effects.push(HubEffect::RenderOverlay(self.build_view_model(
-            config,
-            mode,
-            contextual_profile,
-        )));
+        let mut vm = self.build_view_model(config, mode, contextual_profile);
+        vm.screen_changed = true;
+        effects.push(HubEffect::RenderOverlay(vm));
         effects
     }
 
@@ -1367,6 +1369,9 @@ impl HubController {
             prefetch_requests,
             scroll_indicator,
             footer_hint,
+            scroll_delta: 0,
+            screen_changed: false,
+            animations_enabled: config.overlay.animations_enabled,
         }
     }
 }
@@ -1389,10 +1394,10 @@ fn card_thumbnail_request(card: &HubCardView) -> Option<ThumbnailRequest> {
     })
 }
 
-/// Constrói exatamente 5 slots horizontais com o item `cursor` fixo no centro (`index = 2`).
+/// Constrói exatamente 7 slots horizontais com o item `cursor` fixo no centro (`index = 3`).
 ///
-/// - Se `total >= 5`: carrossel circular contínuo (`cursor - 2 ..= cursor + 2`) + pre-fetch de `±3`.
-/// - Se `total < 5`: centraliza os itens disponíveis sem duplicá-los, preenchendo pontas com `HubCardView::empty()`.
+/// - Se `total >= 5`: carrossel circular contínuo (`cursor - 3 ..= cursor + 3`) + pre-fetch de `±4`.
+/// - Se `total < 5`: centraliza os itens disponíveis sem duplicá-los em `1..=5`, preenchendo pontas com `HubCardView::empty()`.
 pub fn build_centered_carousel(
     items: &[HubCardView],
     cursor: usize,
@@ -1407,32 +1412,32 @@ pub fn build_centered_carousel(
     let mut slots = vec![HubCardView::empty(); CAROUSEL_SLOTS];
     let mut prefetch = Vec::new();
 
-    if total >= CAROUSEL_SLOTS {
-        for (slot_idx, offset) in (-2isize..=2isize).enumerate() {
+    if total >= 5 {
+        for (slot_idx, offset) in (-3isize..=3isize).enumerate() {
             let idx = (clamped as isize + offset).rem_euclid(total as isize) as usize;
             slots[slot_idx] = items[idx].clone();
         }
-        // Pre-fetch dos vizinhos imediatos (-3 e +3)
-        for offset in [-3isize, 3isize] {
+        // Pre-fetch dos vizinhos além da janela de entrada/saída (-4 e +4)
+        for offset in [-4isize, 4isize] {
             let idx = (clamped as isize + offset).rem_euclid(total as isize) as usize;
             if let Some(req) = card_thumbnail_request(&items[idx]) {
                 prefetch.push(req);
             }
         }
     } else {
-        // Sem duplicação: item selecionado no slot 2; anteriores em 1, 0; próximos em 3, 4
-        slots[2] = items[clamped].clone();
+        // Sem duplicação: item selecionado no slot 3 (centro); anteriores em 2, 1; próximos em 4, 5
+        slots[3] = items[clamped].clone();
         if clamped >= 1 {
-            slots[1] = items[clamped - 1].clone();
+            slots[2] = items[clamped - 1].clone();
         }
         if clamped >= 2 {
-            slots[0] = items[clamped - 2].clone();
+            slots[1] = items[clamped - 2].clone();
         }
         if clamped + 1 < total {
-            slots[3] = items[clamped + 1].clone();
+            slots[4] = items[clamped + 1].clone();
         }
         if clamped + 2 < total {
-            slots[4] = items[clamped + 2].clone();
+            slots[5] = items[clamped + 2].clone();
         }
     }
 
@@ -1470,29 +1475,33 @@ mod tests {
 
     #[test]
     fn centered_carousel_handles_small_and_circular_lists() {
-        // 3 itens com cursor no meio (1): [0, 1, 2] nos slots [1, 2, 3], pontas vazias
+        // 3 itens com cursor no meio (1): [A, B, C] nos slots [2, 3, 4], pontas vazias
         let three = vec![dummy_card("A"), dummy_card("B"), dummy_card("C")];
         let (slots, _, ind) = build_centered_carousel(&three, 1);
         assert_eq!(ind, "2 / 3");
+        assert_eq!(slots.len(), 7);
         assert!(slots[0].is_empty_slot);
-        assert_eq!(slots[1].title, "A");
-        assert_eq!(slots[2].title, "B");
-        assert_eq!(slots[3].title, "C");
-        assert!(slots[4].is_empty_slot);
+        assert!(slots[1].is_empty_slot);
+        assert_eq!(slots[2].title, "A");
+        assert_eq!(slots[3].title, "B");
+        assert_eq!(slots[4].title, "C");
+        assert!(slots[5].is_empty_slot);
+        assert!(slots[6].is_empty_slot);
 
-        // 6 itens com cursor no 0: wrap circular -> [E, F, A, B, C]
-        let six = vec![
+        // 7 itens com cursor no 0: wrap circular -> [E, F, G, A, B, C, D] (centro em 3 = "A")
+        let seven = vec![
             dummy_card("A"),
             dummy_card("B"),
             dummy_card("C"),
             dummy_card("D"),
             dummy_card("E"),
             dummy_card("F"),
+            dummy_card("G"),
         ];
-        let (slots, _, ind) = build_centered_carousel(&six, 0);
-        assert_eq!(ind, "1 / 6");
+        let (slots, _, ind) = build_centered_carousel(&seven, 0);
+        assert_eq!(ind, "1 / 7");
         let titles: Vec<&str> = slots.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, vec!["E", "F", "A", "B", "C"]);
+        assert_eq!(titles, vec!["E", "F", "G", "A", "B", "C", "D"]);
     }
 
     #[test]
@@ -1510,15 +1519,18 @@ mod tests {
         let fx = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "firefox");
         assert!(hub.is_open());
         assert!(
-            matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.active_pill == "KnobContext" && vm.cards.len() == 5)
+            matches!(fx.first(), Some(HubEffect::RenderOverlay(vm)) if vm.active_pill == "KnobContext" && vm.cards.len() == 7)
         );
 
-        let _ = hub.handle_event(
+        let fx_rot = hub.handle_event(
             KnobEvent::RotateCw,
             t0 + Duration::from_millis(100),
             &cfg,
             &mode,
             "firefox",
+        );
+        assert!(
+            matches!(fx_rot.first(), Some(HubEffect::RenderOverlay(vm)) if vm.scroll_delta == 1)
         );
         let fx = hub.handle_event(
             KnobEvent::Key3,
@@ -1528,6 +1540,9 @@ mod tests {
             "firefox",
         );
         assert!(fx.contains(&HubEffect::System(SystemRequest::FetchAudioMixer)));
+        assert!(fx
+            .iter()
+            .any(|e| matches!(e, HubEffect::RenderOverlay(vm) if vm.screen_changed)));
 
         let snap = AudioMixerSnapshot {
             streams: vec![
