@@ -423,6 +423,13 @@ mod winrt_impl {
     }
 
     pub(super) fn fetch_hub_snapshot() -> SmtcHubSnapshot {
+        // Executa WinRT SMTC em thread isolada para nunca alterar o apartment COM (STA) da thread de UI (`winit`).
+        std::thread::spawn(fetch_hub_snapshot_on_current_thread)
+            .join()
+            .unwrap_or_default()
+    }
+
+    fn fetch_hub_snapshot_on_current_thread() -> SmtcHubSnapshot {
         let Ok(raw_sessions) = list_raw_sessions() else {
             return SmtcHubSnapshot::default();
         };
@@ -443,6 +450,17 @@ mod winrt_impl {
     }
 
     pub(super) fn execute_command(cmd: SmtcCommand) -> Result<(), ProviderError> {
+        std::thread::spawn(move || execute_command_on_current_thread(cmd))
+            .join()
+            .unwrap_or_else(|_| {
+                Err(ProviderError::Unavailable(
+                    "smtc".to_string(),
+                    "thread SMTC encerrada inesperadamente".to_string(),
+                ))
+            })
+    }
+
+    fn execute_command_on_current_thread(cmd: SmtcCommand) -> Result<(), ProviderError> {
         let raw_sessions = list_raw_sessions()?;
         if raw_sessions.is_empty() {
             return Err(ProviderError::Unavailable(

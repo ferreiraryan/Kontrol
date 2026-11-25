@@ -373,6 +373,16 @@ fn run() -> Result<(), KnobError> {
         scan::run_scan_command().map_err(KnobError::InputSimulation)?;
         return Ok(());
     }
+    #[cfg(target_os = "windows")]
+    {
+        // Garante COM em modo STA na thread principal antes de qualquer crate/UI (`winit::OleInitialize`).
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            );
+        }
+    }
     check_udev_rule_installed();
     let open_settings_on_start = env::args().skip(1).any(|arg| arg == "--settings");
 
