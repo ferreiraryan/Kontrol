@@ -64,7 +64,7 @@ where
 }
 
 pub const OVERLAY_WIDTH_PX: i32 = 960;
-pub const OVERLAY_HEIGHT_PX: i32 = 256;
+pub const OVERLAY_HEIGHT_PX: i32 = 224;
 const MAX_RAM_THUMBNAILS: usize = 32;
 const ANIM_FRAME_MS: u64 = 16;
 

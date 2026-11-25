@@ -5,8 +5,8 @@ use crate::ui::MiniHud;
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::time::{Duration, Instant};
 
-pub const HUD_WIDTH_PX: i32 = 244;
-pub const HUD_HEIGHT_PX: i32 = 68;
+pub const HUD_WIDTH_PX: i32 = 224;
+pub const HUD_HEIGHT_PX: i32 = 52;
 pub const DEFAULT_HUD_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Conteúdo exibido no Mini-HUD ao girar o knob fora do Hub.
