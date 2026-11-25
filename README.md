@@ -266,4 +266,62 @@ port = 4455
 password = "sua_senha_opcional" # omita se desabilitar autenticação no OBS
 ```
 
-O provider **MPRIS** não requer configuração e detecta automaticamente qualquer player Linux compatível em execução (Spotify, Firefox, Chromium, mpv, VLC).
+O provider **MPRIS** (Linux) não requer configuração e detecta automaticamente qualquer player compatível em execução (Spotify, Firefox, Chromium, mpv, VLC).
+
+---
+
+## Suporte Multiplataforma (Windows e Linux — Fase 9)
+
+O KnobContext detecta automaticamente se está rodando no **Windows** ou no **Linux** (`src/platform/mod.rs`) e exibe nas Configurações apenas os providers disponíveis na plataforma atual. Se você sincronizar o mesmo `config.toml` em dual-boot, seções e ações de providers da outra plataforma são ignoradas sem erro.
+
+### Providers por Plataforma
+
+| Provider (`id`) | Windows | Linux | Comandos | Configuração no TOML |
+|---|---|---|---|---|
+| **Mídia Windows SMTC** (`smtc`) | Disponível (nativo via `windows 0.62`) | Oculto | `play_pause`, `play`, `pause`, `next`, `previous`, `seek` (`seconds`) | `[providers.smtc]` (`enabled = true`) |
+| **Mídia Linux MPRIS** (`mpris`) | Oculto | Disponível (D-Bus) | `play_pause`, `next`, `previous`, `stop`, `seek`, `volume_up`, `volume_down`, `set_volume` | Sem configuração |
+| **OBS Studio** (`obs`) | Disponível (WebSocket 5.x) | Disponível (WebSocket 5.x) | `toggle_record`, `start_record`, `stop_record`, `toggle_stream`, `start_stream`, `stop_stream`, `toggle_input_mute`, `set_scene` | `[providers.obs]` (`enabled`, `port`, `password`) |
+
+> **Nota sobre capas de álbum no SMTC**: players nativos como o **Spotify** enviam capa do álbum (exibida no módulo Mídia do Hub e no Mini-HUD). Navegadores como o **Firefox** com YouTube frequentemente não expõem thumbnail via SMTC — o KnobContext trata `thumbnail = None` como caso normal e exibe o ícone genérico de música junto com o título e controles.
+
+### Configuração `[providers.smtc]` e `[ui]` (`%APPDATA%\knobcontext\config.toml`)
+
+```toml
+[ui]
+# "software" (padrão no Windows — menor uso de RAM, glassmorphism simulado)
+# "femtovg"  (ativa backdrop-blur real na GPU; cai automaticamente para software se falhar)
+renderer = "software"
+
+[providers.smtc]
+enabled = true # padrão: true (SMTC é local e nativo, sem porta ou senha)
+```
+
+> **Reduced Motion**: no Windows, o KnobContext consulta `SPI_GETCLIENTAREAANIMATION`. Se os efeitos de animação estiverem desativados nas configurações de Acessibilidade do Windows, as animações do carrossel, fade de 120ms entre telas e micro-animação de pressão tornam-se instantâneas automaticamente.
+
+### Perfis Padrão no Primeiro Startup (por Plataforma)
+
+Quando nenhum `config.toml` existe ainda, o KnobContext cria automaticamente um arquivo inicial com perfis adaptados à plataforma atual:
+
+| Plataforma | Perfis Pré-configurados | Ações Principais |
+|---|---|---|
+| **Windows** (`presets_windows.rs`) | `global`, `navegadores` (`firefox\|chrome\|msedge`), `vscode` (`code`), `explorer`, `krita`, `photoshop`, `illustrator`, `resolve`, `spotify` | Abas (`Ctrl+Tab`/`Ctrl+T`/`Ctrl+W`/`Ctrl+Shift+T`), Paleta/Terminal VSCode, Navegação/Copiar/Colar no Explorer, Pincel/Undo no Krita & Photoshop, Zoom/Ferramentas no Illustrator, J/K/L/I/O no DaVinci Resolve e controle direto `Provider:smtc:*` no Spotify |
+| **Linux** (`presets_linux.rs`) | `global`, `firefox`, `vscode`, `gimp`, `krita` | Abas no Firefox, Paleta/Terminal no VSCode, Pincel/Undo no GIMP e Krita |
+
+### Limitação em Jogos com Anti-Cheat (CS, Valorant, Fortnite, etc.)
+
+> **Importante**: perfis de jogos funcionam apenas em **jogos single-player ou sem anti-cheat**. Jogos competitivos com anti-cheat em nível de kernel/sistema (**CS / VAC**, **Valorant / Vanguard**, **Fortnite / EAC**, etc.) **bloqueiam simulação de teclado sintético (`enigo` / `SendInput`) por design** — isso não é um bug do KnobContext. Por esse motivo, nenhum preset de jogos é incluído por padrão; você pode criar perfis manuais nas Configurações para jogos single-player que aceitem entrada simulada.
+
+### Modo Aprender com Captura Global (Windows)
+
+No Windows, o Modo Aprender usa um hook `WH_KEYBOARD_LL` temporário (`src/platform/windows/input_capture.rs`) para capturar atalhos do sistema como `Win+E` e `Alt+Tab` sem abrir o Explorador nem trocar de janela.
+
+- **Privacidade e segurança**: a captura global vê todas as teclas do sistema enquanto está ativa, portanto o hook é instalado **exclusivamente** enquanto a janela *Modo Aprender* está aberta e é **desinstalado imediatamente** ao confirmar, cancelar ou fechar a janela — nunca permanece ativo em background.
+- Caso alguma combinação reservada do sistema (como `Ctrl+Alt+Del` ou `Win+L`) seja interceptada pelo Windows antes do hook, use o campo de texto manual do editor de atalhos como fallback.
+
+### Diagnóstico do Ambiente (`--scan`)
+
+Para listar processos ativos, aplicativos instalados e APIs detectadas ao vivo (SMTC, OBS WebSocket na porta 4455, Discord RPC) e salvar `scan_report.txt` na raiz do projeto:
+
+```powershell
+.\knobcontext\target\debug\knobcontext.exe --scan
+```
