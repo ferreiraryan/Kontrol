@@ -39,7 +39,90 @@ struct ContextModuleAction {
     action: ActionConfig,
 }
 
+struct ContextKnobControl {
+    glyph: &'static str,
+    subtitle: &'static str,
+    hint: &'static str,
+    cw_action: ActionConfig,
+    ccw_action: ActionConfig,
+    secondary_action: Option<ActionConfig>,
+}
+
 impl ContextModuleKind {
+    /// Módulos direcionais (Zoom, Abas, Página, Pincel, Desfazer) abrem como 1 controle rotativo
+    /// direto: basta clicar para ativar e girar o knob para frente/trás (sem precisar escolher entre 2 botões).
+    fn knob_control(self) -> Option<ContextKnobControl> {
+        match self {
+            Self::BrowserTabs => Some(ContextKnobControl {
+                glyph: "⇥",
+                subtitle: "Gire: trocar aba • K2: nova aba",
+                hint: "Girar: Trocar Aba • K2: Nova Aba • Knob/K1: Voltar",
+                cw_action: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Tab".into()],
+                },
+                ccw_action: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "Tab".into()],
+                },
+                secondary_action: Some(ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "T".into()],
+                }),
+            }),
+            Self::Zoom => Some(ContextKnobControl {
+                glyph: "⊕",
+                subtitle: "Gire: + / - • K2: resetar",
+                hint: "Girar: Zoom +/- • K2: Resetar (Ctrl+0) • Knob/K1: Voltar",
+                cw_action: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Plus".into()],
+                },
+                ccw_action: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Minus".into()],
+                },
+                secondary_action: Some(ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "0".into()],
+                }),
+            }),
+            Self::ScrollPage => Some(ContextKnobControl {
+                glyph: "⇕",
+                subtitle: "Gire: rolar página • K2: topo",
+                hint: "Girar: Rolar Página • K2: Topo (Home) • Knob/K1: Voltar",
+                cw_action: ActionConfig::Shortcut {
+                    keys: vec!["PageDown".into()],
+                },
+                ccw_action: ActionConfig::Shortcut {
+                    keys: vec!["PageUp".into()],
+                },
+                secondary_action: Some(ActionConfig::Shortcut {
+                    keys: vec!["Home".into()],
+                }),
+            }),
+            Self::BrushSize => Some(ContextKnobControl {
+                glyph: "●",
+                subtitle: "Gire: tamanho do pincel",
+                hint: "Girar: Pincel [ / ] • Knob/K1: Voltar",
+                cw_action: ActionConfig::Shortcut {
+                    keys: vec!["]".into()],
+                },
+                ccw_action: ActionConfig::Shortcut {
+                    keys: vec!["[".into()],
+                },
+                secondary_action: None,
+            }),
+            Self::UndoRedo => Some(ContextKnobControl {
+                glyph: "↶",
+                subtitle: "Gire: desfazer / refazer",
+                hint: "Girar: Desfazer / Refazer • Knob/K1: Voltar",
+                cw_action: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Shift".into(), "Z".into()],
+                },
+                ccw_action: ActionConfig::Shortcut {
+                    keys: vec!["Ctrl".into(), "Z".into()],
+                },
+                secondary_action: None,
+            }),
+            Self::MediaControl => None,
+        }
+    }
+
     fn actions(self) -> Vec<ContextModuleAction> {
         match self {
             Self::BrowserTabs => vec![
@@ -351,6 +434,7 @@ pub struct HubController {
     caelestia_toggles: CaelestiaTogglesSnapshot,
     smtc_media: SmtcHubSnapshot,
     custom_slider_values: HashMap<String, i32>,
+    context_step_delta: i32,
     desktop_apps: Vec<DesktopApp>,
     icon_path_cache: HashMap<String, Option<String>>,
     /// Snapshot dos módulos habilitados do perfil ativo no momento da abertura do Hub.
@@ -383,6 +467,7 @@ impl HubController {
             caelestia_toggles: CaelestiaTogglesSnapshot::default(),
             smtc_media: SmtcHubSnapshot::default(),
             custom_slider_values: HashMap::new(),
+            context_step_delta: 0,
             desktop_apps,
             icon_path_cache: HashMap::new(),
             active_modules: Vec::new(),
@@ -701,7 +786,11 @@ impl HubController {
         mode: &ProfileMode,
         contextual_profile: &str,
     ) -> Vec<HubEffect> {
-        if self.interaction == InteractionMode::Adjusting {
+        let is_direct_knob_screen = matches!(
+            self.screen,
+            HubScreen::ContextModule { kind, .. } if kind.knob_control().is_some()
+        );
+        if self.interaction == InteractionMode::Adjusting && !is_direct_knob_screen {
             self.interaction = InteractionMode::Browsing;
             return vec![HubEffect::RenderOverlay(self.build_view_model(
                 config,
@@ -710,6 +799,8 @@ impl HubController {
             ))];
         }
         if self.screen != HubScreen::Root {
+            self.interaction = InteractionMode::Browsing;
+            self.context_step_delta = 0;
             self.screen = HubScreen::Root;
             self.loading = false;
             let mut vm = self.build_view_model(config, mode, contextual_profile);
@@ -879,6 +970,17 @@ impl HubController {
                     }
                 }
             }
+            HubScreen::ContextModule { kind, .. } => {
+                if let Some(ctrl) = kind.knob_control() {
+                    self.context_step_delta = self.context_step_delta.saturating_add(dir.signum());
+                    let act = if dir > 0 {
+                        ctrl.cw_action
+                    } else {
+                        ctrl.ccw_action
+                    };
+                    effects.push(HubEffect::ExecuteAction(act));
+                }
+            }
             _ => {}
         }
 
@@ -990,6 +1092,20 @@ impl HubController {
                     args: std::collections::BTreeMap::new(),
                 }));
                 effects.push(HubEffect::System(SystemRequest::FetchSmtcMedia));
+            }
+            HubScreen::ContextModule { kind, .. } => {
+                let kind = *kind;
+                if let Some(act) = kind.knob_control().and_then(|c| c.secondary_action) {
+                    if kind == ContextModuleKind::Zoom {
+                        self.context_step_delta = 0;
+                    }
+                    effects.push(HubEffect::ExecuteAction(act));
+                    effects.push(HubEffect::RenderOverlay(self.build_view_model(
+                        config,
+                        mode,
+                        contextual_profile,
+                    )));
+                }
             }
             _ => {}
         }
@@ -1135,6 +1251,16 @@ impl HubController {
     ) -> Vec<HubEffect> {
         if self.interaction == InteractionMode::Adjusting {
             self.interaction = InteractionMode::Browsing;
+            if matches!(
+                self.screen,
+                HubScreen::ContextModule { kind, .. } if kind.knob_control().is_some()
+            ) {
+                self.context_step_delta = 0;
+                self.screen = HubScreen::Root;
+                let mut vm = self.build_view_model(config, mode, contextual_profile);
+                vm.screen_changed = true;
+                return vec![HubEffect::RenderOverlay(vm)];
+            }
             return vec![HubEffect::RenderOverlay(self.build_view_model(
                 config,
                 mode,
@@ -1392,6 +1518,8 @@ impl HubController {
                     kind: ContextModuleKind::BrowserTabs,
                     title: item.title,
                 };
+                self.interaction = InteractionMode::Adjusting;
+                self.context_step_delta = 0;
                 self.loading = false;
             }
             OverlayItemKind::MediaControl => {
@@ -1411,6 +1539,8 @@ impl HubController {
                     kind: ContextModuleKind::Zoom,
                     title: item.title,
                 };
+                self.interaction = InteractionMode::Adjusting;
+                self.context_step_delta = 0;
                 self.loading = false;
             }
             OverlayItemKind::ScrollPage => {
@@ -1418,6 +1548,8 @@ impl HubController {
                     kind: ContextModuleKind::ScrollPage,
                     title: item.title,
                 };
+                self.interaction = InteractionMode::Adjusting;
+                self.context_step_delta = 0;
                 self.loading = false;
             }
             OverlayItemKind::BrushSize => {
@@ -1425,6 +1557,8 @@ impl HubController {
                     kind: ContextModuleKind::BrushSize,
                     title: item.title,
                 };
+                self.interaction = InteractionMode::Adjusting;
+                self.context_step_delta = 0;
                 self.loading = false;
             }
             OverlayItemKind::UndoRedo => {
@@ -1432,6 +1566,8 @@ impl HubController {
                     kind: ContextModuleKind::UndoRedo,
                     title: item.title,
                 };
+                self.interaction = InteractionMode::Adjusting;
+                self.context_step_delta = 0;
                 self.loading = false;
             }
             OverlayItemKind::QuickAction { action } => {
@@ -1500,7 +1636,10 @@ impl HubController {
             HubScreen::CaelestiaWallpapers => self.wallpapers.items.len(),
             HubScreen::CaelestiaToggles => self.caelestia_toggles.items.len(),
             HubScreen::ContextModule { kind, .. } => {
-                if *kind == ContextModuleKind::MediaControl && PlatformKind::current().is_windows()
+                if kind.knob_control().is_some() {
+                    1
+                } else if *kind == ContextModuleKind::MediaControl
+                    && PlatformKind::current().is_windows()
                 {
                     self.smtc_media_entries().len()
                 } else {
@@ -1910,7 +2049,40 @@ impl HubController {
                 )
             }
             HubScreen::ContextModule { kind, title } => {
-                if kind == ContextModuleKind::MediaControl && PlatformKind::current().is_windows() {
+                if let Some(ctrl) = kind.knob_control() {
+                    let step_label = if self.context_step_delta == 0 {
+                        title.clone()
+                    } else if self.context_step_delta > 0 {
+                        format!("{title}  +{}", self.context_step_delta)
+                    } else {
+                        format!("{title}  {}", self.context_step_delta)
+                    };
+                    let cards = vec![HubCardView {
+                        is_empty_slot: false,
+                        title: step_label,
+                        subtitle: ctrl.subtitle.to_string(),
+                        badge: format_infinite_badge(self.context_step_delta),
+                        glyph: ctrl.glyph.to_string(),
+                        image_path: None,
+                        inline_rgba: None,
+                        image_is_cover: false,
+                        value_percent: -1,
+                        max_percent: 100,
+                        is_slider: false,
+                        is_active: true,
+                        is_muted: false,
+                        is_playing: false,
+                    }];
+                    (
+                        "Hub".to_string(),
+                        title,
+                        cards,
+                        String::new(),
+                        ctrl.hint.to_string(),
+                    )
+                } else if kind == ContextModuleKind::MediaControl
+                    && PlatformKind::current().is_windows()
+                {
                     let cards: Vec<HubCardView> = self
                         .smtc_media_entries()
                         .into_iter()
@@ -2658,28 +2830,56 @@ mod tests {
         assert_eq!(vm_rot.cards[3].title, "Zoom");
         assert_eq!(vm_rot.scroll_indicator, "2 / 2");
 
-        // 3) Entrar em "Zoom" e confirmar -> executa Ctrl+Plus
-        let _ = hub.handle_event(
+        // 3) Entrar em "Zoom" -> ativa controle rotativo direto (girar CW = Ctrl+Plus, CCW = Ctrl+Minus, K2 = Ctrl+0)
+        let fx_enter = hub.handle_event(
             KnobEvent::KnobPress,
             t0 + Duration::from_millis(100),
             &cfg,
             &mode,
             "global",
         );
-        let fx_exec = hub.handle_event(
-            KnobEvent::KnobPress,
+        assert!(matches!(
+            fx_enter.first(),
+            Some(HubEffect::RenderOverlay(vm)) if vm.adjusting && vm.cards[3].title == "Zoom"
+        ));
+        let fx_cw = hub.handle_event(
+            KnobEvent::RotateCw,
             t0 + Duration::from_millis(150),
             &cfg,
             &mode,
             "global",
         );
         assert!(
-            fx_exec.contains(&HubEffect::ExecuteAction(ActionConfig::Shortcut {
+            fx_cw.contains(&HubEffect::ExecuteAction(ActionConfig::Shortcut {
                 keys: vec!["Ctrl".into(), "Plus".into()],
             }))
         );
+        let fx_ccw = hub.handle_event(
+            KnobEvent::RotateCcw,
+            t0 + Duration::from_millis(160),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx_ccw.contains(&HubEffect::ExecuteAction(ActionConfig::Shortcut {
+                keys: vec!["Ctrl".into(), "Minus".into()],
+            }))
+        );
+        let fx_reset = hub.handle_event(
+            KnobEvent::Key2,
+            t0 + Duration::from_millis(170),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(
+            fx_reset.contains(&HubEffect::ExecuteAction(ActionConfig::Shortcut {
+                keys: vec!["Ctrl".into(), "0".into()],
+            }))
+        );
 
-        // 4) Fechar e reabrir no GIMP (lista vazia explícita) -> não abre
+        // 4) Um único K1 volta ao Root; segundo K1 fecha; reabrir no GIMP (lista vazia explícita) -> não abre
         let _ = hub.handle_event(
             KnobEvent::Key1,
             t0 + Duration::from_millis(200),
