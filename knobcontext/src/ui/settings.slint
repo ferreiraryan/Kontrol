@@ -355,6 +355,7 @@ export component SettingsWindow inherits Window {
     in property <string> hub-item-icon-label: "Automático / nenhuma";
 
     // --- Aba 2: Integrações (Providers) ---
+    in property <bool> is-windows: false;
     in property <bool> obs-enabled: false;
     in-out property <string> obs-port: "4455";
     in-out property <string> obs-password: "";
@@ -362,6 +363,7 @@ export component SettingsWindow inherits Window {
     in property <int> obs-status-code: 0;
     in property <string> obs-status-label: "Desconectado";
     in property <string> obs-status-detail: "";
+    in property <bool> smtc-enabled: true;
     in property <bool> mpris-available: false;
     in property <string> mpris-status-label: "Indisponível";
     in property <string> mpris-status-detail: "";
@@ -472,6 +474,7 @@ export component SettingsWindow inherits Window {
     // Callbacks Aba 2: Integrações
     callback obs-toggle-enabled();
     callback obs-test-connection();
+    callback smtc-toggle-enabled();
     callback mpris-test-connection();
 
     // Callbacks Popover
@@ -2070,7 +2073,7 @@ export component SettingsWindow inherits Window {
                 }
             }
 
-            // Card 2: Mídia (MPRIS / D-Bus)
+            // Card 2: Mídia Nativa (Windows: SMTC | Linux: MPRIS)
             Rectangle {
                 horizontal-stretch: 1;
                 border-radius: 12px;
@@ -2089,13 +2092,15 @@ export component SettingsWindow inherits Window {
                         VerticalLayout {
                             spacing: 2px;
                             Text {
-                                text: "Mídia (MPRIS)";
+                                text: root.is-windows ? "Mídia Windows (SMTC)" : "Mídia (MPRIS)";
                                 color: Theme.text-primary;
                                 font-size: 16px;
                                 font-weight: 700;
                             }
                             Text {
-                                text: "Protocolo padrão Linux via D-Bus (sem configuração)";
+                                text: root.is-windows
+                                    ? "Protocolo nativo Windows (System Media Transport Controls)"
+                                    : "Protocolo padrão Linux via D-Bus (sem configuração)";
                                 color: Theme.text-muted;
                                 font-size: 11px;
                             }
@@ -2124,10 +2129,27 @@ export component SettingsWindow inherits Window {
                     }
 
                     Text {
-                        text: "Controla diretamente qualquer player compatível com MPRIS em execução (Spotify, Firefox, Chromium, mpv, VLC) sem depender de atalhos de teclado.";
+                        text: root.is-windows
+                            ? "Controla diretamente Spotify, Firefox/Chrome (YouTube/Twitch) e players nativos do Windows, com capa do álbum no Hub e no Mini-HUD."
+                            : "Controla diretamente qualquer player compatível com MPRIS em execução (Spotify, Firefox, Chromium, mpv, VLC) sem depender de atalhos de teclado.";
                         color: Theme.text-secondary;
                         font-size: 12px;
                         wrap: word-wrap;
+                    }
+
+                    if root.is-windows: HorizontalLayout {
+                        spacing: 10px;
+                        alignment: space-between;
+                        Text {
+                            text: "Ativar provider SMTC ([providers.smtc])";
+                            color: Theme.text-secondary;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        ToggleSwitch {
+                            checked: root.smtc-enabled;
+                            toggled => { root.smtc-toggle-enabled(); }
+                        }
                     }
 
                     HorizontalLayout {
@@ -2135,7 +2157,7 @@ export component SettingsWindow inherits Window {
                         alignment: start;
 
                         AppButton {
-                            text: "Verificar players";
+                            text: root.is-windows ? "Verificar sessões SMTC" : "Verificar players";
                             clicked => { root.mpris-test-connection(); }
                         }
                     }
@@ -2173,7 +2195,9 @@ export component SettingsWindow inherits Window {
                                 font-weight: 600;
                             }
                             Text {
-                                text: "• Play / Pause  • Próxima faixa  • Faixa anterior  • Parar  • Avançar / retroceder (segundos)";
+                                text: root.is-windows
+                                    ? "• Play / Pause  • Reproduzir  • Pausar  • Próxima faixa  • Faixa anterior  • Avançar / retroceder (segundos)"
+                                    : "• Play / Pause  • Próxima faixa  • Faixa anterior  • Parar  • Avançar / retroceder (segundos)";
                                 color: Theme.text-muted;
                                 font-size: 11px;
                                 wrap: word-wrap;

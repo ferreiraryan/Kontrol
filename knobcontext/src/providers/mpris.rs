@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use crate::providers::{ArgsSchema, Provider, ProviderArgs, ProviderCommand, ProviderError};
 use std::sync::Mutex;
 use zbus::blocking::{Connection, Proxy};

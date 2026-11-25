@@ -1852,16 +1852,32 @@ fn wire_integrations_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<Se
         });
     }
 
-    // Verificar players MPRIS ativos via D-Bus
+    // Habilitar/desabilitar SMTC no Windows
+    {
+        let weak = window.as_weak();
+        let draft_ref = Rc::clone(&draft);
+        window.on_smtc_toggle_enabled(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let mut d = draft_ref.borrow_mut();
+            d.base_config.providers.smtc.enabled = !d.base_config.providers.smtc.enabled;
+            d.provider_registry = ProviderRegistry::default_registry(&d.base_config.providers);
+            d.dirty = true;
+            refresh_integrations_status(&mut d);
+            sync_all_to_ui(&win, &d);
+        });
+    }
+
+    // Verificar players de mídia ativos (SMTC no Windows / MPRIS no Linux)
     {
         let weak = window.as_weak();
         let draft_ref = Rc::clone(&draft);
         window.on_mpris_test_connection(move || {
             let Some(win) = weak.upgrade() else { return };
             let mut d = draft_ref.borrow_mut();
+            let media_id = crate::platform::PlatformKind::current().media_provider_id();
             let result = d
                 .provider_registry
-                .find("mpris")
+                .find(media_id)
                 .map(|p| p.test_connection());
             match result {
                 Some(Ok(msg)) => {
@@ -1877,7 +1893,8 @@ fn wire_integrations_tab_callbacks(window: &SettingsWindow, draft: Rc<RefCell<Se
                 None => {
                     d.mpris_available = false;
                     d.mpris_status_label = "Indisponível".to_string();
-                    d.mpris_status_detail = "Provider MPRIS não registrado.".to_string();
+                    d.mpris_status_detail =
+                        format!("Provider de mídia ({media_id}) não registrado.");
                 }
             }
             sync_all_to_ui(&win, &d);
@@ -2425,12 +2442,14 @@ fn sync_all_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
 
 fn sync_integrations_tab_to_ui(win: &SettingsWindow, draft: &SettingsDraft) {
     let obs = &draft.base_config.providers.obs;
+    win.set_is_windows(crate::platform::PlatformKind::current().is_windows());
     win.set_obs_enabled(obs.enabled);
     win.set_obs_port(SharedString::from(obs.port.to_string()));
     win.set_obs_password(SharedString::from(obs.password.as_deref().unwrap_or("")));
     win.set_obs_status_code(draft.obs_status_code);
     win.set_obs_status_label(SharedString::from(draft.obs_status_label.as_str()));
     win.set_obs_status_detail(SharedString::from(draft.obs_status_detail.as_str()));
+    win.set_smtc_enabled(draft.base_config.providers.smtc.enabled);
     win.set_mpris_available(draft.mpris_available);
     win.set_mpris_status_label(SharedString::from(draft.mpris_status_label.as_str()));
     win.set_mpris_status_detail(SharedString::from(draft.mpris_status_detail.as_str()));
@@ -2452,8 +2471,9 @@ fn refresh_integrations_status(draft: &mut SettingsDraft) {
         draft.obs_status_label = "Indisponível".to_string();
     }
 
-    if let Some(mpris) = draft.provider_registry.find("mpris") {
-        match mpris.test_connection() {
+    let media_id = crate::platform::PlatformKind::current().media_provider_id();
+    if let Some(media) = draft.provider_registry.find(media_id) {
+        match media.test_connection() {
             Ok(msg) => {
                 draft.mpris_available = true;
                 draft.mpris_status_label = "Disponível".to_string();

@@ -1,9 +1,14 @@
 pub mod mpris;
 pub mod obs;
+pub mod smtc;
 
 use crate::config::ProvidersConfig;
+use crate::platform::PlatformKind;
+#[cfg(target_os = "linux")]
 use crate::providers::mpris::MprisProvider;
 use crate::providers::obs::ObsProvider;
+#[cfg(target_os = "windows")]
+use crate::providers::smtc::SmtcProvider;
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
@@ -158,10 +163,16 @@ impl ProviderRegistry {
         }
     }
 
-    /// Constrói o registro padrão com todos os providers embutidos a partir de `[providers]`.
+    /// Constrói o registro padrão apenas com os providers disponíveis na plataforma atual.
+    ///
+    /// - Windows: `OBS Studio` + `Mídia Windows (SMTC)`
+    /// - Linux: `OBS Studio` + `Mídia (MPRIS)`
     pub fn default_registry(config: &ProvidersConfig) -> Self {
         let mut reg = Self::new();
         reg.register(Box::new(ObsProvider::new(config.obs.clone())));
+        #[cfg(target_os = "windows")]
+        reg.register(Box::new(SmtcProvider::new(config.smtc.clone())));
+        #[cfg(target_os = "linux")]
         reg.register(Box::new(MprisProvider::new()));
         reg
     }
@@ -246,6 +257,10 @@ pub fn validate_builtin_provider_action(
     command_id: &str,
     args: &BTreeMap<String, String>,
 ) -> Result<(), ProviderError> {
+    if PlatformKind::current().is_other_platform_builtin_provider(provider_id) {
+        // Permite carregar sem erro um `config.toml` sincronizado entre Windows e Linux (dual boot).
+        return Ok(());
+    }
     let registry = ProviderRegistry::default_registry(&ProvidersConfig::default());
     if registry.providers().is_empty() {
         return Ok(());
@@ -350,5 +365,21 @@ mod tests {
         assert_eq!(recorded[0].0, "ping");
         assert_eq!(recorded[1].0, "set_target");
         assert_eq!(recorded[1].1.get("target"), Some("Cena 1"));
+    }
+
+    #[test]
+    fn default_registry_exposes_only_current_platform_providers() {
+        let reg = ProviderRegistry::default_registry(&crate::config::ProvidersConfig::default());
+        assert!(reg.find("obs").is_some());
+        #[cfg(target_os = "windows")]
+        {
+            assert!(reg.find("smtc").is_some());
+            assert!(reg.find("mpris").is_none());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert!(reg.find("mpris").is_some());
+            assert!(reg.find("smtc").is_none());
+        }
     }
 }
