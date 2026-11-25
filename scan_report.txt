@@ -1,0 +1,513 @@
+=== KnobContext System Scan Report ===
+SO: windows (x86_64)
+
+## 1. APIs e Integrações Detectadas ao Vivo
+- OBS WebSocket (127.0.0.1:4455): fechada / não em execução
+- Discord RPC (named pipe): não detectado
+- SMTC (mídia Windows): 1 sessão(ões) ativa(s):
+    * [Paused] app='308046B0AF4A39CB' | título='YouTube' | artista='' | álbum='' | capa=não
+
+## 2. Aplicativos Relevantes Detectados
+- [Navegador] Google Chrome (instalado) | API: SMTC (mídia/vídeo) + atalhos | Local: C:\Program Files\Google, C:\Program Files (x86)\Google, %LOCALAPPDATA%\Google
+- [Navegador] Mozilla Firefox (RODANDO) | API: SMTC (mídia/vídeo) + atalhos | Local: C:\Program Files\Mozilla Firefox
+- [Editor / IDE] Visual Studio Code (RODANDO) | API: Atalhos / Paleta de comandos | Local: C:\Program Files\Microsoft VS Code
+- [Editor / IDE] Visual Studio (instalado) | API: Atalhos | Local: C:\Program Files\Microsoft Visual Studio, C:\Program Files (x86)\Microsoft Visual Studio
+- [Editor / IDE] JetBrains IDEs (instalado) | API: Atalhos | Local: C:\Program Files\JetBrains, %LOCALAPPDATA%\JetBrains
+- [Mídia] VLC Media Player (instalado) | API: SMTC / HTTP API | Local: C:\Program Files\VideoLAN
+- [Streaming / Áudio] OBS Studio (instalado) | API: OBS WebSocket 5.x (porta 4455) | Local: C:\Program Files\obs-studio
+- [Comunicação] Discord (instalado) | API: Discord RPC (named pipe) / Push-to-Mute | Local: %LOCALAPPDATA%\Discord
+- [Criativo] Adobe Photoshop / Premiere / After Effects / Illustrator (instalado) | API: Atalhos (brush/timeline/zoom) | Local: C:\Program Files\Adobe, C:\Program Files (x86)\Adobe, %LOCALAPPDATA%\Adobe
+- [Criativo] GIMP / Krita / Blender / DaVinci Resolve / Figma (instalado) | API: Atalhos (brush/timeline/zoom) | Local: C:\Program Files\Blackmagic Design, C:\Program Files (x86)\Blackmagic Design, %LOCALAPPDATA%\krita
+- [Jogos / Launcher] Steam / Epic Games / Riot / Xbox / Battle.net (RODANDO) | API: Perfis de jogos (scroll/atalhos) | Local: C:\Program Files\Epic Games, C:\Program Files (x86)\Battle.net, %LOCALAPPDATA%\Battle.net
+- [Terminal] Windows Terminal / PowerShell / Git Bash (RODANDO) | API: Atalhos de terminal | Local: C:\Program Files\Git
+
+## 3. Processos em Execução (100 únicos)
+  - AgentSvc.exe
+  - agy.exe
+  - ApplicationFrameHost.exe
+  - audiodg.exe
+  - backgroundTaskHost.exe
+  - BatteryHub.exe
+  - CastSrv.exe
+  - cms_app.exe
+  - Code.exe
+  - conhost.exe
+  - copilot-runtime.exe
+  - crashhelper.exe
+  - crashpad_handler.exe
+  - CrossDeviceResume.exe
+  - CrossDeviceService.exe
+  - csrss.exe
+  - ctfmon.exe
+  - dasHost.exe
+  - DefenderAiPlatformHost.exe
+  - DefenderSessionHelper.exe
+  - dllhost.exe
+  - dwm.exe
+  - EncoderServer.exe
+  - explorer.exe
+  - firefox.exe
+  - fontdrvhost.exe
+  - GameInputRawInputProxy.exe
+  - GameInputRedistService.exe
+  - gamingservices.exe
+  - gamingservicesnet.exe
+  - HidHideWatchdog.exe
+  - hub_audio_helper.exe
+  - knobcontext.exe
+  - LsaIso.exe
+  - lsass.exe
+  - Memory Compression
+  - MicrosoftStartFeedProvider.exe
+  - MidiSrv.exe
+  - MpDefenderCoreService.exe
+  - msedgewebview2.exe
+  - MSIAfterburner.exe
+  - MsMpEng.exe
+  - NgcIso.exe
+  - NisSrv.exe
+  - nTuneCmd.exe
+  - nTuneService.exe
+  - nvcontainer.exe
+  - NVDisplay.Container.exe
+  - NVIDIA Overlay.exe
+  - nvsphelper64.exe
+  - OpenConsole.exe
+  - PhoneExperienceHost.exe
+  - powershell.exe
+  - pselamsvc.exe
+  - RAVCpl64.exe
+  - Registry
+  - RTSS.exe
+  - RTSSHooksLoader64.exe
+  - RuntimeBroker.exe
+  - RvControlSvc.exe
+  - SearchFilterHost.exe
+  - SearchHost.exe
+  - SearchIndexer.exe
+  - SearchProtocolHost.exe
+  - Secure System
+  - SecurityHealthService.exe
+  - services.exe
+  - ShellExperienceHost.exe
+  - ShellHost.exe
+  - sihost.exe
+  - smartscreen.exe
+  - smss.exe
+  - spoolsv.exe
+  - SpotifyLauncher.exe
+  - StartMenuExperienceHost.exe
+  - steam.exe
+  - steamservice.exe
+  - steamwebhelper.exe
+  - svchost.exe
+  - System
+  - System Idle Process
+  - TabTip.exe
+  - taskhostw.exe
+  - tasklist.exe
+  - TextInputHost.exe
+  - TranslucentTB.exe
+  - UserOOBEBroker.exe
+  - vctip.exe
+  - voicemeeter_x64.exe
+  - wallpaper32.exe
+  - wallpaperservice32.exe
+  - warp-svc.exe
+  - WidgetBoard.exe
+  - WidgetService.exe
+  - wininit.exe
+  - winlogon.exe
+  - WmiPrvSE.exe
+  - WUDFHost.exe
+  - XboxPcAppFT.exe
+  - XboxService.exe
+
+## 4. Diretórios de Aplicativos Instalados
+### C:\Program Files (70 itens)
+  - Adobe
+  - AMD
+  - Application Verifier
+  - Arquivos Comuns
+  - Black Tree Gaming Ltd
+  - Blackmagic Design
+  - Bonjour
+  - Calibre2
+  - Cloudflare
+  - Common Files
+  - CPUID
+  - CrystalDiskInfo
+  - Denuvo Anti-Cheat
+  - DLSS AiO Swapper by Machiavelli
+  - DODI-Repacks
+  - dotnet
+  - EA
+  - EA Games
+  - Electronic Arts
+  - Epic Games
+  - FileZilla FTP Client
+  - fpsVR
+  - Geeks3D
+  - Git
+  - Google
+  - HWiNFO64
+  - Internet Explorer
+  - JAM Software
+  - JetBrains
+  - LatencyMon
+  - Lenovo
+  - LocalSend
+  - Microsoft GameInput
+  - Microsoft MPI
+  - Microsoft Update Health Tools
+  - Microsoft Visual Studio
+  - Microsoft VS Code
+  - MiniTool Partition Wizard 12
+  - ModifiableWindowsApps
+  - Modrinth App
+  - Mozilla Firefox
+  - MSBuild
+  - MySQL
+  - Nefarius Software Solutions
+  - NVIDIA Corporation
+  - obs-studio
+  - Oculus
+  - Pylo
+  - qBittorrent
+  - Realtek
+  - Reference Assemblies
+  - Riot Vanguard
+  - Rockstar Games
+  - Samsung
+  - Sony
+  - Uninstall Information
+  - VB
+  - VideoLAN
+  - Windows Defender
+  - Windows Defender Advanced Threat Protection
+  - Windows Mail
+  - Windows Media Player
+  - Windows NT
+  - Windows Photo Viewer
+  - Windows Sidebar
+  - WindowsApps
+  - WindowsPowerShell
+  - WinRAR
+  - XboxService
+  - Xteink Unlocker
+### C:\Program Files (x86) (62 itens)
+  - Adobe
+  - Application Verifier
+  - Attack SharkX6Mouse
+  - Battle.net
+  - Blackmagic Design
+  - Bonjour
+  - by Decepticon
+  - Common Files
+  - Diablo IV
+  - DODI-Repacks
+  - dotnet
+  - DSDCS
+  - DualSenseAT
+  - EasyAntiCheat
+  - EasyAntiCheat_EOS
+  - Epic Games
+  - games
+  - GOG Galaxy
+  - Google
+  - GPU-Z
+  - InstallShield Installation Information
+  - Internet Explorer
+  - Java
+  - LibreOffice Maintenance Service
+  - lOL
+  - Microsoft
+  - Microsoft DirectX SDK (June 2010)
+  - Microsoft SDKs
+  - Microsoft Visual Studio
+  - Microsoft XNA
+  - Microsoft.NET
+  - Mozilla Maintenance Service
+  - MSBuild
+  - MSI Afterburner
+  - MyTablet
+  - Notepad++
+  - NuGet
+  - NVIDIA Corporation
+  - OpenAL
+  - Overwatch
+  - Panda Security
+  - Radmin VPN
+  - Realtek
+  - Reference Assemblies
+  - RivaTuner Statistics Server
+  - Rockstar Games
+  - Sony
+  - Steam
+  - Temp
+  - Ubisoft
+  - Uninstall Information
+  - VB
+  - VulkanRT
+  - Windows Defender
+  - Windows Kits
+  - Windows Mail
+  - Windows Media Player
+  - Windows NT
+  - Windows Photo Viewer
+  - Windows Sidebar
+  - WindowsPowerShell
+  - ZeroTier
+### %LOCALAPPDATA%\Programs (12 itens)
+  - Attack Shark Driver
+  - bs-manager
+  - CD Projekt Red
+  - Common
+  - CurseForge Windows
+  - DLSS 5 Swapper
+  - Hydra
+  - icat
+  - launcher
+  - LNV
+  - obsidian
+  - rave-desktop
+### %LOCALAPPDATA% (239 itens)
+  - 11bitstudios
+  - __FIRAPP_DEFAULT
+  - __SHARED
+  - Activision
+  - Adobe
+  - ads_event_reporter
+  - AMD
+  - AMD Ryzen Master
+  - Android
+  - Annapurna Interactive
+  - AnybrainSDK
+  - appsflyer
+  - Arkane Studios
+  - ASC
+  - Astro
+  - AtomicHeart
+  - attack shark driver-updater
+  - Avalanche
+  - Avalanche Studios
+  - Backup
+  - Battle.net
+  - Battlefield V
+  - BattlefieldGameData.CH1-qol.Win32
+  - BattlEye
+  - BeMyHorde
+  - BitTorrentHelper
+  - Blizzard Entertainment
+  - blow_the_leaves_away
+  - BRLink
+  - bs-manager-updater
+  - cache
+  - calibre-cache
+  - CAPCOM
+  - CD Projekt Red
+  - CEF
+  - Cemu
+  - cloud-code
+  - Cloudflare
+  - CMakeTools
+  - com.modrinth.theseus
+  - com.sofriendly.crosspoint.unlocker
+  - Comms
+  - ConanSandbox
+  - conda
+  - ConnectedDevicesPlatform
+  - copilot
+  - CrashDumps
+  - CrashReportClient
+  - CrashRpt
+  - curseforge-updater
+  - D3DSCache
+  - Dados de Aplicativos
+  - Dart
+  - DBG
+  - DeadByDaylight
+  - Dingo.dingo-ship.Win32
+  - Discord
+  - Discovery
+  - dlss5-swapper-updater
+  - DLSS5Manager
+  - dlss5oneclick
+  - Downloaded Installations
+  - DualSenseX
+  - Dungeonborne
+  - Dust
+  - EAConnect_microsoft
+  - EACrashReporter
+  - EADesktop
+  - EALaunchHelper
+  - Electronic Arts
+  - ElevatedDiagnostics
+  - Embark
+  - Epic Games
+  - EpicGamesLauncher
+  - FabPlugins
+  - Fairlight Studio Utility
+  - Falcon
+  - FarMech
+  - FileZilla
+  - firebase-heartbeat
+  - FlightSimulator
+  - FLiNGTrainer
+  - fontconfig
+  - FortniteGame
+  - FPSChess
+  - fpsVR
+  - FromSoftware
+  - GameAnalytics
+  - Geckofx
+  - GeometryDash
+  - Ghostrunner
+  - Ghostrunner_Demo
+  - Godot
+  - GOG.com
+  - Google
+  - gtk-3.0
+  - HalfSwordUE5
+  - HatchZip
+  - Haze1
+  - Helios
+  - Hellblade2
+  - Histórico
+  - HLL
+  - hotwheels
+  - HW2
+  - hydra
+  - hydralauncher-updater
+  - icat-updater
+  - IdentityNexusIntegration
+  - INetHistory
+  - install
+  - IO Interactive
+  - IragonProject
+  - IronGalaxy
+  - ItTakesTwo
+  - JetBrains
+  - K616RGB
+  - kotlin
+  - krita
+  - launcher-updater
+  - LiesofP
+  - Link2EA
+  - LogMeIn
+  - LogMeIn Hamachi
+  - Lossless Scaling
+  - main.kts.compiled.cache
+  - Maine
+  - Marvel
+  - Marvel's Spider-Man 2
+  - MarvelRivals_Launcher
+  - MasterPlusApp
+  - Mega Limited
+  - Mercury
+  - Microsoft
+  - Microsoft SDKs
+  - Microsoft_Corporation
+  - MinecraftInstaller
+  - MinitoolLimited
+  - mod.io
+  - ModInstaller
+  - ModOrganizer
+  - Modrinth
+  - Modrinth App
+  - ModrinthApp
+  - Mordhau
+  - Mozilla
+  - NCSOFT
+  - Nemesis
+  - Netease
+  - NgConsentManager
+  - NVIDIA
+  - NVIDIA Corporation
+  - NVIDIA Profile Inspector
+  - nwjs
+  - Oculus
+  - OneDrive
+  - openvr
+  - Origin
+  - osu!
+  - Overwolf
+  - Package Cache
+  - Packages
+  - Pal
+  - PDFgear
+  - Pearl Abyss
+  - PeerDistRepub
+  - Phoenix
+  - PlaceholderTileLogoFolder
+  - plastic4
+  - PortalWars
+  - PortalWars2
+  - Predecessor
+  - Programs
+  - ProjectBakery
+  - Proton
+  - Pub
+  - Publishers
+  - PVideoPlayer
+  - qBittorrent
+  - REDEngine
+  - Riot Games
+  - Roblox
+  - Rocket League
+  - Rockstar Games
+  - Rookie.WTF
+  - Runtime
+  - Sandfall
+  - Scorn
+  - Sentry
+  - ServiceHub
+  - Setup
+  - Sifu
+  - Skate
+  - Skyrim Special Edition
+  - SniperElite4
+  - Snowfall
+  - Solar
+  - Sony Corporation
+  - SourceServer
+  - speech
+  - SplitFiction
+  - SquirrelTemp
+  - Steam
+  - SteamVR
+  - Strinova
+  - Suicide Squad - Kill the Justice League
+  - superchickenjumper_versao_23
+  - SwGame
+  - Syncthing
+  - TeamViewer
+  - Temp
+  - Tempb6c6c3e736d82f87e133fe9e7c4a075f
+  - Temporary Internet Files
+  - TempPMBThumbnailCache
+  - ToastNotificationManagerCompat
+  - Towers
+  - ToysWorkshop
+  - translator++
+  - Ubisoft
+  - Ubisoft Game Launcher
+  - UL
+  - UniCompactView
+  - UniSDK
+  - UniSDK_FirstOpen
+  - UnrealEngine
+  - UnrealEngineLauncher
+  - User Data
+  - VALORANT
+  - VirtualStore
+  - Vivox
+  - vortex-updater
+  - VortxEngine
+  - Warframe
+  - WB Games
+  - WhirlwindFX
+  - WirelessBattery
+  - xournalpp
+  - ZeroTier
+  - Zoom
