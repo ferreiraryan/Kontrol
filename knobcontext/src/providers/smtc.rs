@@ -325,11 +325,12 @@ mod winrt_impl {
         GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
     };
     use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 
     fn ensure_com() {
-        // SAFETY: inicialização COM padrão para chamadas WinRT na thread atual.
-        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        // SAFETY: inicializa COM em modo STA (`COINIT_APARTMENTTHREADED`), compatível com
+        // `OleInitialize` usado pelo `winit`/`rfd` na thread principal (evita `RPC_E_CHANGED_MODE`).
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     }
 
     fn read_thumbnail(thumb_ref: &IRandomAccessStreamReference) -> Option<SmtcThumbnail> {

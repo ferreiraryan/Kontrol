@@ -200,10 +200,10 @@ fn probe_smtc_sessions() -> (Vec<SmtcSessionSummary>, Option<String>) {
         GlobalSystemMediaTransportControlsSessionManager,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
     };
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 
-    // SAFETY: inicialização COM padrão para thread atual antes de chamadas WinRT.
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    // SAFETY: inicialização COM STA compatível com WinRT e threads de UI.
+    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
     let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
         .and_then(|op| op.join())
