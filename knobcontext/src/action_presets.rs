@@ -135,7 +135,12 @@ pub fn suggested_app_index(profile_hint: &str) -> usize {
     {
         return pos;
     }
-    if hint.contains("code") || hint.contains("codium") {
+    if hint.contains("chrome") || hint.contains("msedge") || hint.contains("navegador") {
+        if let Some(pos) = app_list.iter().position(|app| *app == "Firefox") {
+            return pos;
+        }
+    }
+    if hint.contains("code") || hint.contains("codium") || hint.contains("cursor") {
         if let Some(pos) = app_list.iter().position(|app| *app == "VSCode") {
             return pos;
         }
@@ -145,6 +150,10 @@ pub fn suggested_app_index(profile_hint: &str) -> usize {
         || hint.contains("foot")
         || hint.contains("wezterm")
         || hint.contains("ghostty")
+        || hint.contains("windowsterminal")
+        || hint.contains("powershell")
+        || hint.contains("pwsh")
+        || hint.contains("cmd")
     {
         if let Some(pos) = app_list.iter().position(|app| *app == "Terminal") {
             return pos;

@@ -333,6 +333,7 @@ const POST_CLOSE_SUPPRESS_MS: u64 = 350;
 
 /// Máquina de estados hierárquica do Hub Interativo em Carrossel Horizontal.
 pub struct HubController {
+    platform: PlatformKind,
     open: bool,
     settings_open: bool,
     screen: HubScreen,
@@ -364,6 +365,7 @@ impl HubController {
 
     pub fn with_desktop_apps(desktop_apps: Vec<DesktopApp>) -> Self {
         Self {
+            platform: PlatformKind::current(),
             open: false,
             settings_open: false,
             screen: HubScreen::Root,
@@ -388,8 +390,18 @@ impl HubController {
     }
 
     #[cfg(test)]
+    pub fn with_platform(mut self, platform: PlatformKind) -> Self {
+        self.platform = platform;
+        self
+    }
+
+    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    pub fn is_settings_open(&self) -> bool {
+        self.settings_open
     }
 
     pub fn set_settings_open(&mut self, open: bool) {
@@ -413,6 +425,7 @@ impl HubController {
     }
 
     fn resolve_enabled_modules(
+        platform: PlatformKind,
         config: &Config,
         mode: &ProfileMode,
         contextual_profile: &str,
@@ -422,7 +435,10 @@ impl HubController {
             ProfileMode::Auto => contextual_profile,
         };
         let (modules, _) = config.resolve_hub_modules(effective_profile);
-        modules.into_iter().filter(|i| i.enabled).collect()
+        modules
+            .into_iter()
+            .filter(|i| i.enabled && i.kind.is_supported_on(platform))
+            .collect()
     }
 
     fn is_confirm_event(event: KnobEvent, overlay: &OverlayConfig) -> bool {
@@ -466,7 +482,8 @@ impl HubController {
                 self.suppress_after_close = None;
             }
             if event == KnobEvent::KnobPress && !self.settings_open {
-                let items = Self::resolve_enabled_modules(config, mode, contextual_profile);
+                let items =
+                    Self::resolve_enabled_modules(self.platform, config, mode, contextual_profile);
                 if items.is_empty() {
                     return Vec::new();
                 }
@@ -1536,7 +1553,15 @@ impl HubController {
                         OverlayItemKind::BrowserTabs => {
                             ("Abas do Navegador".to_string(), "⇥", None)
                         }
-                        OverlayItemKind::MediaControl => ("playerctl".to_string(), "⏯", None),
+                        OverlayItemKind::MediaControl => (
+                            if self.platform.is_windows() {
+                                "Mídia Windows (SMTC)".to_string()
+                            } else {
+                                "playerctl".to_string()
+                            },
+                            "⏯",
+                            None,
+                        ),
                         OverlayItemKind::Zoom => ("Zoom +/-/0".to_string(), "⊕", None),
                         OverlayItemKind::ScrollPage => ("Página".to_string(), "⇕", None),
                         OverlayItemKind::BrushSize => ("Pincel [ / ]".to_string(), "●", None),
@@ -2223,6 +2248,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::ProfileMode;
     use crate::input::KnobEvent;
+    use crate::platform::PlatformKind;
     use crate::system::audio::{AudioMixerSnapshot, AudioStreamItem};
     use crate::system::brightness::{BrightnessSnapshot, MonitorBrightnessItem};
     use crate::system::caelestia::{WallpaperItem, WallpapersSnapshot};
@@ -2283,7 +2309,8 @@ mod tests {
     fn full_audio_mixer_navigation_lock_adjust_mute_unlock_back_flow() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
-        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let mut hub =
+            HubController::with_desktop_apps(Vec::new()).with_platform(PlatformKind::Linux);
         let t0 = Instant::now();
 
         assert_eq!(
@@ -2424,7 +2451,8 @@ mod tests {
     fn brightness_adjusting_and_wallpaper_apply_only_on_confirm() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
-        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let mut hub =
+            HubController::with_desktop_apps(Vec::new()).with_platform(PlatformKind::Linux);
         let t0 = Instant::now();
 
         let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
@@ -2565,7 +2593,8 @@ mod tests {
     fn timeout_is_longer_in_adjusting_mode() {
         let cfg = Config::default();
         let mode = ProfileMode::Auto;
-        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let mut hub =
+            HubController::with_desktop_apps(Vec::new()).with_platform(PlatformKind::Linux);
         let t0 = Instant::now();
 
         let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
@@ -3062,5 +3091,22 @@ mod tests {
         assert!(vm_sp.cards[3].inline_rgba.is_some());
         assert!(vm_sp.cards[3].is_playing);
         assert_eq!(vm_sp.cards[3].badge, "TOCANDO");
+    }
+
+    #[test]
+    fn windows_hub_filters_out_linux_only_modules_even_from_dual_boot_config() {
+        // `Config::default()` contém os 7 módulos Linux (Profiles + 6 Linux-only)
+        let cfg = Config::default();
+        let mode = ProfileMode::Auto;
+        let mut hub =
+            HubController::with_desktop_apps(Vec::new()).with_platform(PlatformKind::Windows);
+        let fx = hub.handle_event(KnobEvent::KnobPress, Instant::now(), &cfg, &mode, "global");
+
+        let Some(HubEffect::RenderOverlay(vm)) = fx.first() else {
+            panic!("esperava RenderOverlay");
+        };
+        // Apenas `Perfis` deve aparecer no Windows; os 6 módulos Linux-only são filtrados
+        assert_eq!(vm.cards[3].title, "Perfis");
+        assert_eq!(vm.scroll_indicator, "1 / 1");
     }
 }

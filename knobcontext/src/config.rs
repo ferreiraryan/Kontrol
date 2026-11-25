@@ -161,6 +161,26 @@ pub enum OverlayItemKind {
 }
 
 impl OverlayItemKind {
+    /// Indica se este tipo de módulo do Hub é suportado na plataforma informada.
+    ///
+    /// Módulos exclusivos de Linux (PipeWire/`pactl`, Hyprland, `qs`/Caelestia, `brightnessctl`)
+    /// retornam `false` no Windows para não aparecerem quebrados no Hub ou em pickers, mantendo
+    /// compatibilidade de leitura/gravação com `config.toml` compartilhado (dual-boot).
+    pub fn is_supported_on(&self, platform: crate::platform::PlatformKind) -> bool {
+        match platform {
+            crate::platform::PlatformKind::Windows => !matches!(
+                self,
+                Self::AudioMixer
+                    | Self::AudioOutputs
+                    | Self::Workspaces
+                    | Self::Brightness
+                    | Self::CaelestiaWallpapers
+                    | Self::CaelestiaToggles
+            ),
+            crate::platform::PlatformKind::Linux | crate::platform::PlatformKind::Other => true,
+        }
+    }
+
     pub fn kind_label(&self) -> &'static str {
         match self {
             Self::Profiles => "Perfis / Modo",
@@ -179,6 +199,42 @@ impl OverlayItemKind {
             Self::QuickAction { .. } => "Ação Rápida",
             Self::CustomGroup { .. } => "Submenu Customizado",
             Self::CustomSlider { .. } => "Slider Customizado",
+        }
+    }
+}
+
+/// Modelos prontos de módulos nativos disponíveis no seletor "+ Adicionar módulo" para a plataforma.
+pub fn builtin_hub_module_templates_for_platform(
+    platform: crate::platform::PlatformKind,
+) -> Vec<OverlayItemConfig> {
+    builtin_hub_module_templates()
+        .into_iter()
+        .filter(|t| t.kind.is_supported_on(platform))
+        .collect()
+}
+
+/// Itens padrão do Hub para a plataforma informada (usado no botão "Padrão" e no 1º startup).
+pub fn default_overlay_items_for_platform(
+    platform: crate::platform::PlatformKind,
+) -> Vec<OverlayItemConfig> {
+    match platform {
+        crate::platform::PlatformKind::Windows => {
+            crate::presets_windows::default_windows_hub_items()
+        }
+        crate::platform::PlatformKind::Linux | crate::platform::PlatformKind::Other => {
+            default_overlay_items()
+        }
+    }
+}
+
+/// Presets contextuais prontos no seletor `+ Preset` adaptados à plataforma informada.
+pub fn builtin_profile_presets_for_platform(
+    platform: crate::platform::PlatformKind,
+) -> Vec<ProfilePreset> {
+    match platform {
+        crate::platform::PlatformKind::Windows => crate::presets_windows::windows_profile_presets(),
+        crate::platform::PlatformKind::Linux | crate::platform::PlatformKind::Other => {
+            builtin_profile_presets()
         }
     }
 }
@@ -1398,12 +1454,16 @@ impl Config {
         })
     }
 
-    /// Salva no caminho padrão `~/.config/knobcontext/config.toml`.
+    /// Salva no caminho padrão (`~/.config/knobcontext/config.toml` no Linux ou `%APPDATA%\knobcontext\config.toml` no Windows).
     pub fn save_default_location(&self) -> Result<PathBuf, KnobError> {
         let path = Self::default_path().ok_or_else(|| {
             KnobError::ConfigValidation(
-                "não foi possível determinar ~/.config/knobcontext/config.toml (HOME/XDG_CONFIG_HOME ausente)"
-                    .to_string(),
+                if crate::platform::PlatformKind::current().is_windows() {
+                    "não foi possível determinar %APPDATA%\\knobcontext\\config.toml (APPDATA/USERPROFILE ausente)"
+                } else {
+                    "não foi possível determinar ~/.config/knobcontext/config.toml (HOME/XDG_CONFIG_HOME ausente)"
+                }
+                .to_string(),
             )
         })?;
         self.save_to_path(&path)?;
@@ -2131,5 +2191,47 @@ key2 = "Provider:mpris:play_pause"
 
         assert_eq!(cfg.ui.renderer, crate::config::UiRendererKind::Femtovg);
         assert!(cfg.providers.smtc.enabled);
+    }
+
+    #[test]
+    fn platform_hub_templates_and_presets_exclude_linux_only_modules_on_windows() {
+        use crate::config::{
+            builtin_hub_module_templates_for_platform, builtin_profile_presets_for_platform,
+            default_overlay_items_for_platform, OverlayItemKind,
+        };
+        use crate::platform::PlatformKind;
+
+        let win_templates = builtin_hub_module_templates_for_platform(PlatformKind::Windows);
+        assert!(!win_templates.is_empty());
+        assert!(win_templates
+            .iter()
+            .all(|t| t.kind.is_supported_on(PlatformKind::Windows)));
+        assert!(!win_templates.iter().any(|t| matches!(
+            t.kind,
+            OverlayItemKind::Workspaces
+                | OverlayItemKind::CaelestiaWallpapers
+                | OverlayItemKind::CaelestiaToggles
+                | OverlayItemKind::AudioMixer
+                | OverlayItemKind::AudioOutputs
+                | OverlayItemKind::Brightness
+        )));
+
+        let win_defaults = default_overlay_items_for_platform(PlatformKind::Windows);
+        assert!(win_defaults
+            .iter()
+            .all(|i| i.kind.is_supported_on(PlatformKind::Windows)));
+
+        let win_presets = builtin_profile_presets_for_platform(PlatformKind::Windows);
+        assert!(win_presets.len() >= 8);
+        for preset in &win_presets {
+            if let Some(ref mods) = preset.profile.hub_modules {
+                assert!(
+                    mods.iter()
+                        .all(|m| m.kind.is_supported_on(PlatformKind::Windows)),
+                    "preset Windows '{}' contém módulo Linux-only",
+                    preset.label
+                );
+            }
+        }
     }
 }
