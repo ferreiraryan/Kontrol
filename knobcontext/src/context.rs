@@ -1,9 +1,16 @@
 use crate::config::{Config, ProfileConfig, GLOBAL_PROFILE_NAME};
-use log::{debug, info, warn};
+#[cfg(target_os = "linux")]
+use log::warn;
+use log::{debug, info};
+#[cfg(any(target_os = "linux", test))]
 use serde::Deserialize;
+#[cfg(target_os = "linux")]
 use std::env;
+#[cfg(target_os = "linux")]
 use std::io::{self, BufRead, BufReader, Read, Write};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -29,6 +36,7 @@ pub struct ActiveWindowInfo {
 }
 
 /// Eventos relevantes recebidos do `socket2` do Hyprland.
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HyprlandEvent {
     ActiveWindow(Option<(String, String)>),
@@ -97,6 +105,7 @@ impl ContextState {
         self.active_window = normalized;
     }
 
+    #[cfg(target_os = "linux")]
     pub fn set_fullscreen(&mut self, fullscreen: bool) {
         if let Some(ref mut w) = self.active_window {
             w.fullscreen = fullscreen;
@@ -258,6 +267,7 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 }
 
 /// Faz o parsing de uma linha do `socket2` do Hyprland (`EVENT>>DATA`).
+#[cfg(any(target_os = "linux", test))]
 pub fn parse_hyprland_event(line: &str) -> Option<HyprlandEvent> {
     let clean = line.trim_end_matches(['\r', '\n']);
     if let Some(payload) = clean.strip_prefix("activewindow>>") {
@@ -281,6 +291,7 @@ pub fn parse_hyprland_event(line: &str) -> Option<HyprlandEvent> {
     None
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Deserialize)]
 struct HyprActiveWindowJson {
     #[serde(default)]
@@ -291,6 +302,7 @@ struct HyprActiveWindowJson {
     fullscreen: i32,
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_activewindow_json_response(response: &str) -> Option<ActiveWindowInfo> {
     let parsed: HyprActiveWindowJson = serde_json::from_str(response).ok()?;
     let class = parsed.class.trim().to_string();
@@ -305,6 +317,7 @@ fn parse_activewindow_json_response(response: &str) -> Option<ActiveWindowInfo> 
     })
 }
 
+#[cfg(target_os = "linux")]
 pub fn hyprland_socket_paths() -> Option<(PathBuf, PathBuf)> {
     let sig = env::var("HYPRLAND_INSTANCE_SIGNATURE")
         .ok()
@@ -319,6 +332,7 @@ pub fn hyprland_socket_paths() -> Option<(PathBuf, PathBuf)> {
     Some((dir.join(".socket.sock"), dir.join(".socket2.sock")))
 }
 
+#[cfg(target_os = "linux")]
 fn query_initial_active_window(socket1_path: &Path) -> Option<ActiveWindowInfo> {
     let mut stream = UnixStream::connect(socket1_path).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
@@ -333,6 +347,7 @@ fn query_initial_active_window(socket1_path: &Path) -> Option<ActiveWindowInfo> 
 ///
 /// Se `HYPRLAND_INSTANCE_SIGNATURE` não estiver presente, loga um único warning e
 /// retorna `None` (modo global).
+#[cfg(target_os = "linux")]
 pub fn spawn_hyprland_listener(
     state: Arc<RwLock<ContextState>>,
     running: Arc<AtomicBool>,
@@ -450,6 +465,140 @@ pub fn spawn_hyprland_listener(
     });
 
     Some(handle)
+}
+
+#[cfg(target_os = "windows")]
+fn query_windows_active_window() -> Option<ActiveWindowInfo> {
+    use std::path::Path;
+    use windows_sys::Win32::Foundation::{CloseHandle, MAX_PATH, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId,
+    };
+
+    // SAFETY: chamadas Win32 padrão com buffers alocados e handles fechados corretamente.
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let len = GetWindowTextLengthW(hwnd);
+        let title = if len > 0 {
+            let mut buf = vec![0u16; (len as usize) + 1];
+            let read = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if read > 0 {
+                String::from_utf16_lossy(&buf[..read as usize])
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        let class = if pid != 0 {
+            let proc_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if !proc_handle.is_null() {
+                let mut path_buf = vec![0u16; (MAX_PATH as usize) * 4];
+                let mut size = path_buf.len() as u32;
+                let ok =
+                    QueryFullProcessImageNameW(proc_handle, 0, path_buf.as_mut_ptr(), &mut size);
+                CloseHandle(proc_handle);
+                if ok != 0 && size > 0 {
+                    let full = String::from_utf16_lossy(&path_buf[..size as usize]);
+                    Path::new(&full)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if class.is_empty() && title.is_empty() {
+            return None;
+        }
+
+        let mut fullscreen = false;
+        let is_shell_desktop = matches!(
+            class.as_str(),
+            "explorer" | "searchhost" | "shellexperiencehost"
+        ) && title.is_empty();
+        if !is_shell_desktop {
+            let mut rect: RECT = std::mem::zeroed();
+            if GetWindowRect(hwnd, &mut rect) != 0 {
+                let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                let mut mi: MONITORINFO = std::mem::zeroed();
+                mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+                if GetMonitorInfoW(hmon, &mut mi) != 0 {
+                    let m = mi.rcMonitor;
+                    fullscreen = rect.left <= m.left
+                        && rect.top <= m.top
+                        && rect.right >= m.right
+                        && rect.bottom >= m.bottom;
+                }
+            }
+        }
+
+        Some(ActiveWindowInfo {
+            class,
+            title,
+            fullscreen,
+        })
+    }
+}
+
+/// Inicia uma thread dedicada monitorando a janela em primeiro plano no Windows (Win32).
+#[cfg(target_os = "windows")]
+pub fn spawn_hyprland_listener(
+    state: Arc<RwLock<ContextState>>,
+    running: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    info!("Listener contextual Win32 (janela em primeiro plano) iniciado.");
+    let handle = thread::spawn(move || {
+        let mut last: Option<ActiveWindowInfo> = None;
+        while running.load(Ordering::SeqCst) {
+            let current = query_windows_active_window();
+            if current != last {
+                if let Some(ref info_win) = current {
+                    debug!(
+                        "Win32 activewindow -> class='{}', title='{}', fullscreen={}",
+                        info_win.class, info_win.title, info_win.fullscreen
+                    );
+                }
+                if let Ok(mut guard) = state.write() {
+                    guard.set_active_window_info(current.clone());
+                }
+                last = current;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
+    Some(handle)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn spawn_hyprland_listener(
+    _state: Arc<RwLock<ContextState>>,
+    _running: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    None
 }
 
 #[cfg(test)]

@@ -1,7 +1,10 @@
+#[cfg(target_os = "linux")]
 use crate::context::hyprland_socket_paths;
 use crate::error::KnobError;
 use serde::Deserialize;
+#[cfg(target_os = "linux")]
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
@@ -70,6 +73,7 @@ fn default_scale() -> f32 {
     1.0
 }
 
+#[cfg(target_os = "linux")]
 fn hypr_socket1_command(cmd: &str) -> Result<String, KnobError> {
     let Some((socket1_path, _)) = hyprland_socket_paths() else {
         return Err(KnobError::InputSimulation(
@@ -90,6 +94,13 @@ fn hypr_socket1_command(cmd: &str) -> Result<String, KnobError> {
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
     Ok(response)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn hypr_socket1_command(_cmd: &str) -> Result<String, KnobError> {
+    Err(KnobError::InputSimulation(
+        "Hyprland IPC disponível apenas no Linux.".to_string(),
+    ))
 }
 
 pub fn parse_workspaces_json(
@@ -165,6 +176,7 @@ pub fn parse_monitors_json(raw: &str) -> Result<Vec<MonitorInfo>, KnobError> {
 }
 
 /// Calcula a posição `(x, y)` na parte inferior central do monitor, respeitando `scale` e `transform`.
+#[cfg(any(target_os = "linux", test))]
 pub fn compute_bottom_center_position(
     mon: &MonitorInfo,
     win_w: i32,
@@ -183,6 +195,7 @@ pub fn compute_bottom_center_position(
     (x, y)
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Deserialize)]
 struct HyprClientJson {
     #[serde(default)]
@@ -193,6 +206,7 @@ struct HyprClientJson {
     at: [i32; 2],
 }
 
+#[cfg(target_os = "linux")]
 fn find_client_by_title(title: &str) -> Option<HyprClientJson> {
     let raw = hypr_socket1_command("j/clients").ok()?;
     let clients: Vec<HyprClientJson> = serde_json::from_str(&raw).ok()?;
@@ -202,6 +216,7 @@ fn find_client_by_title(title: &str) -> Option<HyprClientJson> {
 }
 
 /// Calcula a posição `(x, y)` no canto inferior direito do monitor, respeitando `scale` e `transform`.
+#[cfg(target_os = "linux")]
 pub fn compute_bottom_right_position(
     mon: &MonitorInfo,
     win_w: i32,
@@ -243,6 +258,7 @@ pub fn register_hud_window_rule(margin: i32) {
     let _ = hypr_socket1_command(&lua_rule);
 }
 
+#[cfg(target_os = "linux")]
 fn move_titled_window_to(title: &str, x: i32, y: i32) {
     for attempt in 0..12 {
         if attempt > 0 {
@@ -272,6 +288,7 @@ fn move_titled_window_to(title: &str, x: i32, y: i32) {
 }
 
 /// Posiciona a janela `KnobContext Overlay` na parte inferior central do monitor focado via IPC.
+#[cfg(target_os = "linux")]
 pub fn position_overlay_bottom_center(
     win_w: i32,
     win_h: i32,
@@ -291,6 +308,7 @@ pub fn position_overlay_bottom_center(
 }
 
 /// Posiciona a janela `KnobContext HUD` no canto inferior direito do monitor focado via IPC.
+#[cfg(target_os = "linux")]
 pub fn position_hud_bottom_right(win_w: i32, win_h: i32, margin: i32) -> Result<(), KnobError> {
     let monitors = fetch_monitors()?;
     let Some(target) = monitors
@@ -302,6 +320,113 @@ pub fn position_hud_bottom_right(win_w: i32, win_h: i32, margin: i32) -> Result<
     };
     let (x, y) = compute_bottom_right_position(target, win_w, win_h, margin);
     move_titled_window_to("KnobContext HUD", x, y);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn position_hud_bottom_right(win_w: i32, win_h: i32, margin: i32) -> Result<(), KnobError> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+    };
+
+    let title_wide: Vec<u16> = "KnobContext HUD"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    for attempt in 0..12 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // SAFETY: `title_wide` é uma string UTF-16 terminada em nulo válida.
+        let hwnd = unsafe { FindWindowW(std::ptr::null(), title_wide.as_ptr()) };
+        if hwnd.is_null() {
+            continue;
+        }
+        // SAFETY: APIs Win32 padrão com ponteiros/handles válidos.
+        unsafe {
+            let fg = GetForegroundWindow();
+            let ref_hwnd = if fg.is_null() { hwnd } else { fg };
+            let hmon = MonitorFromWindow(ref_hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut mi: MONITORINFO = std::mem::zeroed();
+            mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(hmon, &mut mi) != 0 {
+                let work = mi.rcWork;
+                let mon_w = work.right - work.left;
+                let mon_h = work.bottom - work.top;
+                let m = margin.max(0);
+                let x = work.left + (mon_w - win_w - m).max(0);
+                let y = work.top + (mon_h - win_h - m).max(0);
+                SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn position_hud_bottom_right(_win_w: i32, _win_h: i32, _margin: i32) -> Result<(), KnobError> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn position_overlay_bottom_center(
+    win_w: i32,
+    win_h: i32,
+    bottom_margin: i32,
+) -> Result<(), KnobError> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+    };
+
+    let title_wide: Vec<u16> = "KnobContext Overlay"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    for attempt in 0..12 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // SAFETY: `title_wide` é uma string UTF-16 terminada em nulo válida.
+        let hwnd = unsafe { FindWindowW(std::ptr::null(), title_wide.as_ptr()) };
+        if hwnd.is_null() {
+            continue;
+        }
+        // SAFETY: APIs Win32 padrão com ponteiros/handles válidos.
+        unsafe {
+            let fg = GetForegroundWindow();
+            let ref_hwnd = if fg.is_null() { hwnd } else { fg };
+            let hmon = MonitorFromWindow(ref_hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut mi: MONITORINFO = std::mem::zeroed();
+            mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(hmon, &mut mi) != 0 {
+                let work = mi.rcWork;
+                let mon_w = work.right - work.left;
+                let mon_h = work.bottom - work.top;
+                let x = work.left + ((mon_w - win_w) / 2).max(0);
+                let y = work.top + (mon_h - win_h - bottom_margin.max(0)).max(0);
+                SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn position_overlay_bottom_center(
+    _win_w: i32,
+    _win_h: i32,
+    _bottom_margin: i32,
+) -> Result<(), KnobError> {
     Ok(())
 }
 

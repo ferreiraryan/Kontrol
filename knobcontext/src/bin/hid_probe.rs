@@ -4,6 +4,7 @@ use std::env;
 struct Filter {
     vid: Option<u16>,
     pid: Option<u16>,
+    monitor: bool,
 }
 
 fn parse_hex_u16(input: &str) -> Result<u16, String> {
@@ -19,6 +20,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Filter, String>
     let mut filter = Filter {
         vid: None,
         pid: None,
+        monitor: false,
     };
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -35,10 +37,16 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Filter, String>
                     .ok_or_else(|| "faltando valor após --pid".to_string())?;
                 filter.pid = Some(parse_hex_u16(&val)?);
             }
+            "--monitor" => {
+                filter.monitor = true;
+            }
             "--help" | "-h" => {
-                println!("Uso: hid_probe [--vid <hex>] [--pid <hex>]");
+                println!("Uso: hid_probe [--vid <hex>] [--pid <hex>] [--monitor]");
                 println!("  Sem argumentos: lista todos os dispositivos HID.");
                 println!("  Com --vid/--pid: filtra e testa leitura (somente leitura) de Feature Reports.");
+                println!(
+                    "  Com --monitor: escuta relatórios HID (0x000C) e eventos WH_KEYBOARD_LL."
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("argumento desconhecido: {other}")),
@@ -138,6 +146,121 @@ fn main() {
     }
 
     println!("\nNota: nenhuma escrita HID foi enviada (modo somente leitura).");
+
+    if filter.monitor {
+        monitor_events(&api, &filter);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn monitor_events(api: &HidApi, filter: &Filter) {
+    use std::ptr;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+    use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
+        WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    };
+
+    static HOOK_TX: std::sync::Mutex<Option<mpsc::Sender<String>>> = std::sync::Mutex::new(None);
+
+    unsafe extern "system" fn diag_kb_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code >= 0 {
+            let msg = wparam as u32;
+            let state = match msg {
+                WM_KEYDOWN | WM_SYSKEYDOWN => Some("DOWN"),
+                WM_KEYUP | WM_SYSKEYUP => Some("UP"),
+                _ => None,
+            };
+            if let Some(st) = state {
+                let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+                let injected = (kb.flags & LLKHF_INJECTED) != 0;
+                if let Ok(guard) = HOOK_TX.lock() {
+                    if let Some(tx) = guard.as_ref() {
+                        let _ = tx.send(format!(
+                            "[WH_KEYBOARD_LL] {st} vk=0x{:02X} scan=0x{:02X} flags=0x{:02X} injected={injected}",
+                            kb.vkCode, kb.scanCode, kb.flags
+                        ));
+                    }
+                }
+            }
+        }
+        unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
+    }
+
+    let mut hid_devices = Vec::new();
+    for info in api.device_list() {
+        if let Some(vid) = filter.vid {
+            if info.vendor_id() != vid {
+                continue;
+            }
+        }
+        if let Some(pid) = filter.pid {
+            if info.product_id() != pid {
+                continue;
+            }
+        }
+        if info.usage_page() == 0x000c || info.usage_page() == 0xff00 {
+            if let Ok(dev) = api.open_path(info.path()) {
+                let _ = dev.set_blocking_mode(false);
+                println!(
+                    "[monitor] HID aberto: iface={} usage_page=0x{:04x} usage=0x{:04x}",
+                    info.interface_number(),
+                    info.usage_page(),
+                    info.usage()
+                );
+                hid_devices.push((info.interface_number(), info.usage_page(), dev));
+            }
+        }
+    }
+
+    let (tx, rx) = mpsc::channel::<String>();
+    if let Ok(mut guard) = HOOK_TX.lock() {
+        *guard = Some(tx);
+    }
+
+    thread::spawn(move || unsafe {
+        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(diag_kb_proc), ptr::null_mut(), 0);
+        if hook.is_null() {
+            eprintln!("[monitor] Falha ao instalar WH_KEYBOARD_LL");
+            return;
+        }
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        UnhookWindowsHookEx(hook);
+    });
+
+    println!("\n=== Monitorando eventos (gire e clique o knob; Ctrl+C para sair) ===");
+    let mut buf = [0u8; 64];
+    loop {
+        for (iface, up, dev) in &hid_devices {
+            while let Ok(n) = dev.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                println!(
+                    "[HID iface={iface} up=0x{up:04x}] {} bytes: {:02x?}",
+                    n,
+                    &buf[..n]
+                );
+            }
+        }
+        while let Ok(line) = rx.try_recv() {
+            println!("{line}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn monitor_events(_api: &HidApi, _filter: &Filter) {
+    println!("--monitor está disponível apenas no Windows.");
 }
 
 #[cfg(test)]

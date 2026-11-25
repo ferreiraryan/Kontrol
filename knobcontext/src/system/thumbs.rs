@@ -31,6 +31,28 @@ pub struct DecodedThumbnail {
 }
 
 pub fn default_thumb_cache_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_appdata) = env::var("LOCALAPPDATA") {
+            if !local_appdata.trim().is_empty() {
+                return Some(
+                    PathBuf::from(local_appdata)
+                        .join("knobcontext")
+                        .join("thumbs"),
+                );
+            }
+        }
+        if let Ok(profile) = env::var("USERPROFILE") {
+            if !profile.trim().is_empty() {
+                return Some(
+                    PathBuf::from(profile)
+                        .join(".cache")
+                        .join("knobcontext")
+                        .join("thumbs"),
+                );
+            }
+        }
+    }
     if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
         if !xdg.trim().is_empty() {
             return Some(PathBuf::from(xdg).join("knobcontext").join("thumbs"));

@@ -303,15 +303,23 @@ impl ActionExecutor for EnigoExecutor {
                 KnobError::InputSimulation(format!("falha ao abrir '{target}': {err}"))
             }),
             ActionConfig::Exec { command } => {
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .spawn()
-                    .map_err(|err| {
-                        KnobError::InputSimulation(format!(
-                            "falha ao executar comando '{command}': {err}"
-                        ))
-                    })?;
+                #[cfg(target_os = "windows")]
+                let mut cmd = {
+                    let mut c = Command::new("cmd");
+                    c.args(["/C", command]);
+                    c
+                };
+                #[cfg(not(target_os = "windows"))]
+                let mut cmd = {
+                    let mut c = Command::new("sh");
+                    c.args(["-c", command]);
+                    c
+                };
+                cmd.spawn().map_err(|err| {
+                    KnobError::InputSimulation(format!(
+                        "falha ao executar comando '{command}': {err}"
+                    ))
+                })?;
                 Ok(())
             }
             ActionConfig::Macro { steps } => execute_macro_with_backend(&mut self.enigo, steps),
@@ -351,6 +359,13 @@ impl EnigoExecutor {
     }
 
     fn click_key(&mut self, key: Key) -> Result<(), KnobError> {
+        #[cfg(target_os = "windows")]
+        let _guard = matches!(
+            key,
+            Key::VolumeUp | Key::VolumeDown | Key::VolumeMute | Key::MediaPlayPause
+        )
+        .then(crate::input::SelfMediaInjectionGuard::enter);
+
         self.enigo
             .key(key, Direction::Click)
             .map_err(|err| KnobError::InputSimulation(err.to_string()))

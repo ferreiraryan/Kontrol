@@ -25,6 +25,7 @@ pub enum KnobError {
     #[error("configuração inválida: {0}")]
     ConfigValidation(String),
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[error("falha ao abrir dispositivo de entrada '{path}': {source}")]
     DeviceOpen {
         path: PathBuf,
@@ -32,6 +33,7 @@ pub enum KnobError {
         source: io::Error,
     },
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[error("falha ao capturar exclusivamente (grab) '{path}': {source}")]
     DeviceGrab {
         path: PathBuf,
@@ -39,6 +41,7 @@ pub enum KnobError {
         source: io::Error,
     },
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[error("falha ao ler eventos de '{path}': {source}")]
     DeviceRead {
         path: PathBuf,
