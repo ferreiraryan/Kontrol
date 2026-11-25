@@ -64,8 +64,11 @@ pub fn parse_tasklist_csv(raw: &str) -> Vec<String> {
 fn list_running_processes() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         if let Ok(output) = Command::new("tasklist")
             .args(["/FO", "CSV", "/NH"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             if output.status.success() {

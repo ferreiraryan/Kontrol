@@ -1,26 +1,37 @@
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod audio;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod brightness;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod caelestia;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod hyprland;
 pub mod icons;
 pub mod thumbs;
 
 use crate::providers::smtc::{fetch_smtc_hub_snapshot, SmtcHubSnapshot};
+#[cfg(target_os = "linux")]
 use crate::system::audio::{
     fetch_audio_mixer, fetch_audio_outputs, set_app_volume, set_default_audio_output,
-    set_master_volume, toggle_app_mute, toggle_master_mute, AudioMixerSnapshot,
-    AudioOutputsSnapshot,
+    set_master_volume, toggle_app_mute, toggle_master_mute,
 };
-use crate::system::brightness::{fetch_brightness, set_brightness, BrightnessSnapshot};
+use crate::system::audio::{AudioMixerSnapshot, AudioOutputsSnapshot};
+use crate::system::brightness::BrightnessSnapshot;
+#[cfg(target_os = "linux")]
+use crate::system::brightness::{fetch_brightness, set_brightness};
+#[cfg(target_os = "linux")]
 use crate::system::caelestia::{
     fetch_caelestia_toggles, fetch_wallpapers, set_random_wallpaper, set_wallpaper,
-    trigger_caelestia_toggle, CaelestiaToggleKind, CaelestiaTogglesSnapshot, WallpapersSnapshot,
+    trigger_caelestia_toggle,
 };
+use crate::system::caelestia::{CaelestiaToggleKind, CaelestiaTogglesSnapshot, WallpapersSnapshot};
+#[cfg(target_os = "linux")]
+use crate::system::hyprland::{fetch_workspaces, switch_workspace, toggle_special_workspace};
 use crate::system::hyprland::{
-    fetch_workspaces, position_hud_bottom_right, position_overlay_bottom_center, switch_workspace,
-    toggle_special_workspace, WorkspacesSnapshot,
+    position_hud_bottom_right, position_overlay_bottom_center, WorkspacesSnapshot,
 };
 use crate::system::thumbs::{load_or_generate_thumbnail, DecodedThumbnail, ThumbnailRequest};
+#[cfg(target_os = "linux")]
 use log::warn;
 use std::collections::VecDeque;
 use std::process::Command;
@@ -91,6 +102,7 @@ pub enum SystemRequest {
 
 /// Respostas assíncronas enviadas pelo `SystemWorker` para a thread principal.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum SystemResponse {
     AudioMixer(AudioMixerSnapshot),
     AudioOutputs(AudioOutputsSnapshot),
@@ -254,147 +266,251 @@ impl SystemWorker {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn linux_only_response(feature: &str) -> Option<SystemResponse> {
+    log::debug!("Requisição Linux-only ignorada nesta plataforma: {feature}");
+    Some(SystemResponse::Error(format!(
+        "{feature} disponível apenas no Linux."
+    )))
+}
+
 fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
     match req {
-        SystemRequest::FetchAudioMixer => match fetch_audio_mixer() {
-            Ok(snap) => Some(SystemResponse::AudioMixer(snap)),
-            Err(err) => {
-                warn!("Erro ao carregar mixer de áudio: {err}");
-                Some(SystemResponse::Error(err.to_string()))
+        SystemRequest::FetchAudioMixer => {
+            #[cfg(target_os = "linux")]
+            match fetch_audio_mixer() {
+                Ok(snap) => Some(SystemResponse::AudioMixer(snap)),
+                Err(err) => {
+                    warn!("Erro ao carregar mixer de áudio: {err}");
+                    Some(SystemResponse::Error(err.to_string()))
+                }
             }
-        },
-        SystemRequest::FetchAudioOutputs => match fetch_audio_outputs() {
-            Ok(snap) => Some(SystemResponse::AudioOutputs(snap)),
-            Err(err) => {
-                warn!("Erro ao carregar saídas de áudio: {err}");
-                Some(SystemResponse::Error(err.to_string()))
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Mixer de áudio (PipeWire/pactl)")
+        }
+        SystemRequest::FetchAudioOutputs => {
+            #[cfg(target_os = "linux")]
+            match fetch_audio_outputs() {
+                Ok(snap) => Some(SystemResponse::AudioOutputs(snap)),
+                Err(err) => {
+                    warn!("Erro ao carregar saídas de áudio: {err}");
+                    Some(SystemResponse::Error(err.to_string()))
+                }
             }
-        },
-        SystemRequest::FetchWorkspaces => match fetch_workspaces() {
-            Ok(snap) => Some(SystemResponse::Workspaces(snap)),
-            Err(err) => {
-                warn!("Erro ao carregar workspaces do Hyprland: {err}");
-                Some(SystemResponse::Error(err.to_string()))
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Saídas de áudio (PipeWire/pactl)")
+        }
+        SystemRequest::FetchWorkspaces => {
+            #[cfg(target_os = "linux")]
+            match fetch_workspaces() {
+                Ok(snap) => Some(SystemResponse::Workspaces(snap)),
+                Err(err) => {
+                    warn!("Erro ao carregar workspaces do Hyprland: {err}");
+                    Some(SystemResponse::Error(err.to_string()))
+                }
             }
-        },
-        SystemRequest::FetchBrightness => match fetch_brightness() {
-            Ok(snap) => Some(SystemResponse::Brightness(snap)),
-            Err(err) => {
-                warn!("Erro ao carregar brilho dos monitores: {err}");
-                Some(SystemResponse::Error(err.to_string()))
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Workspaces (Hyprland)")
+        }
+        SystemRequest::FetchBrightness => {
+            #[cfg(target_os = "linux")]
+            match fetch_brightness() {
+                Ok(snap) => Some(SystemResponse::Brightness(snap)),
+                Err(err) => {
+                    warn!("Erro ao carregar brilho dos monitores: {err}");
+                    Some(SystemResponse::Error(err.to_string()))
+                }
             }
-        },
-        SystemRequest::FetchWallpapers => match fetch_wallpapers() {
-            Ok(snap) => Some(SystemResponse::Wallpapers(snap)),
-            Err(err) => {
-                warn!("Erro ao listar wallpapers do Caelestia: {err}");
-                Some(SystemResponse::Error(err.to_string()))
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Brilho dos monitores (Caelestia/brightnessctl)")
+        }
+        SystemRequest::FetchWallpapers => {
+            #[cfg(target_os = "linux")]
+            match fetch_wallpapers() {
+                Ok(snap) => Some(SystemResponse::Wallpapers(snap)),
+                Err(err) => {
+                    warn!("Erro ao listar wallpapers do Caelestia: {err}");
+                    Some(SystemResponse::Error(err.to_string()))
+                }
             }
-        },
-        SystemRequest::FetchCaelestiaToggles => match fetch_caelestia_toggles() {
-            Ok(snap) => Some(SystemResponse::CaelestiaToggles(snap)),
-            Err(err) => {
-                warn!("Erro ao consultar controles do Caelestia: {err}");
-                Some(SystemResponse::Error(err.to_string()))
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Wallpapers (Caelestia)")
+        }
+        SystemRequest::FetchCaelestiaToggles => {
+            #[cfg(target_os = "linux")]
+            match fetch_caelestia_toggles() {
+                Ok(snap) => Some(SystemResponse::CaelestiaToggles(snap)),
+                Err(err) => {
+                    warn!("Erro ao consultar controles do Caelestia: {err}");
+                    Some(SystemResponse::Error(err.to_string()))
+                }
             }
-        },
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Controles Caelestia")
+        }
         SystemRequest::FetchSmtcMedia => Some(SystemResponse::SmtcMedia(fetch_smtc_hub_snapshot())),
         SystemRequest::SetMasterVolume {
-            sink_name,
-            percent,
-            max_percent,
+            sink_name: _sink_name,
+            percent: _percent,
+            max_percent: _max_percent,
         } => {
-            if let Err(err) = set_master_volume(&sink_name, percent, max_percent) {
-                warn!("Erro ao ajustar volume global: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = set_master_volume(&_sink_name, _percent, _max_percent) {
+                    warn!("Erro ao ajustar volume global: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                None
             }
-            None
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Ajuste de volume via pactl")
         }
-        SystemRequest::ToggleMasterMute { sink_name } => {
-            if let Err(err) = toggle_master_mute(&sink_name) {
-                warn!("Erro ao alternar mudo global: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+        SystemRequest::ToggleMasterMute {
+            sink_name: _sink_name,
+        } => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = toggle_master_mute(&_sink_name) {
+                    warn!("Erro ao alternar mudo global: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_audio_mixer().ok().map(SystemResponse::AudioMixer)
             }
-            fetch_audio_mixer().ok().map(SystemResponse::AudioMixer)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Mudo via pactl")
         }
         SystemRequest::SetAppVolume {
-            index,
-            percent,
-            max_percent,
+            index: _index,
+            percent: _percent,
+            max_percent: _max_percent,
         } => {
-            if let Err(err) = set_app_volume(index, percent, max_percent) {
-                warn!("Erro ao ajustar volume do app {index}: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = set_app_volume(_index, _percent, _max_percent) {
+                    warn!("Erro ao ajustar volume do app {_index}: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                None
             }
-            None
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Volume por app via pactl")
         }
-        SystemRequest::ToggleAppMute { index } => {
-            if let Err(err) = toggle_app_mute(index) {
-                warn!("Erro ao alternar mudo do app {index}: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+        SystemRequest::ToggleAppMute { index: _index } => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = toggle_app_mute(_index) {
+                    warn!("Erro ao alternar mudo do app {_index}: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_audio_mixer().ok().map(SystemResponse::AudioMixer)
             }
-            fetch_audio_mixer().ok().map(SystemResponse::AudioMixer)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Mudo por app via pactl")
         }
-        SystemRequest::SetDefaultAudioOutput { sink_name } => {
-            if let Err(err) = set_default_audio_output(&sink_name) {
-                warn!("Erro ao trocar saída de som para '{sink_name}': {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+        SystemRequest::SetDefaultAudioOutput {
+            sink_name: _sink_name,
+        } => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = set_default_audio_output(&_sink_name) {
+                    warn!("Erro ao trocar saída de som para '{_sink_name}': {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_audio_outputs().ok().map(SystemResponse::AudioOutputs)
             }
-            fetch_audio_outputs().ok().map(SystemResponse::AudioOutputs)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Troca de saída via pactl")
         }
-        SystemRequest::SwitchWorkspace { id } => {
-            if let Err(err) = switch_workspace(id) {
-                warn!("Erro ao trocar para workspace {id}: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+        SystemRequest::SwitchWorkspace { id: _id } => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = switch_workspace(_id) {
+                    warn!("Erro ao trocar para workspace {_id}: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_workspaces().ok().map(SystemResponse::Workspaces)
             }
-            fetch_workspaces().ok().map(SystemResponse::Workspaces)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Workspaces (Hyprland)")
         }
         SystemRequest::ToggleSpecialWorkspace => {
-            if let Err(err) = toggle_special_workspace() {
-                warn!("Erro ao alternar special workspace: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = toggle_special_workspace() {
+                    warn!("Erro ao alternar special workspace: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                None
             }
-            None
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Special Workspace (Hyprland)")
         }
         SystemRequest::SetBrightness {
-            monitor_name,
-            percent,
+            monitor_name: _monitor_name,
+            percent: _percent,
         } => {
-            if let Err(err) = set_brightness(monitor_name.as_deref(), percent) {
-                warn!("Erro ao ajustar brilho: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = set_brightness(_monitor_name.as_deref(), _percent) {
+                    warn!("Erro ao ajustar brilho: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                None
             }
-            None
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Brilho dos monitores")
         }
-        SystemRequest::SetWallpaper { path } => {
-            if let Err(err) = set_wallpaper(&path) {
-                warn!("Erro ao aplicar wallpaper '{path}': {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+        SystemRequest::SetWallpaper { path: _path } => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = set_wallpaper(&_path) {
+                    warn!("Erro ao aplicar wallpaper '{_path}': {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_wallpapers().ok().map(SystemResponse::Wallpapers)
             }
-            fetch_wallpapers().ok().map(SystemResponse::Wallpapers)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Wallpapers (Caelestia)")
         }
         SystemRequest::SetRandomWallpaper => {
-            if let Err(err) = set_random_wallpaper() {
-                warn!("Erro ao aplicar wallpaper aleatório: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = set_random_wallpaper() {
+                    warn!("Erro ao aplicar wallpaper aleatório: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_wallpapers().ok().map(SystemResponse::Wallpapers)
             }
-            fetch_wallpapers().ok().map(SystemResponse::Wallpapers)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Wallpaper aleatório (Caelestia)")
         }
-        SystemRequest::TriggerCaelestiaToggle { kind } => {
-            if let Err(err) = trigger_caelestia_toggle(kind) {
-                warn!("Erro ao alternar controle Caelestia {kind:?}: {err}");
-                return Some(SystemResponse::Error(err.to_string()));
+        SystemRequest::TriggerCaelestiaToggle { kind: _kind } => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = trigger_caelestia_toggle(_kind) {
+                    warn!("Erro ao alternar controle Caelestia {_kind:?}: {err}");
+                    return Some(SystemResponse::Error(err.to_string()));
+                }
+                fetch_caelestia_toggles()
+                    .ok()
+                    .map(SystemResponse::CaelestiaToggles)
             }
-            fetch_caelestia_toggles()
-                .ok()
-                .map(SystemResponse::CaelestiaToggles)
+            #[cfg(not(target_os = "linux"))]
+            linux_only_response("Controles Caelestia")
         }
         SystemRequest::ReadCustomSlider {
             item_id,
             read_command,
         } => {
             #[cfg(target_os = "windows")]
-            let output = Command::new("cmd").args(["/C", &read_command]).output();
+            let output = {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                Command::new("cmd")
+                    .args(["/C", &read_command])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+            };
             #[cfg(not(target_os = "windows"))]
             let output = Command::new("sh").args(["-c", &read_command]).output();
 

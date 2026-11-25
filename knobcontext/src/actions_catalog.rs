@@ -188,7 +188,14 @@ pub fn action_summary(action: &ActionType, apps: &[DesktopApp]) -> String {
             .iter()
             .find(|a| a.desktop_file == *file)
             .map(|a| a.name.clone())
-            .unwrap_or_else(|| file.trim_end_matches(".desktop").to_string()),
+            .unwrap_or_else(|| {
+                Path::new(file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| file.trim_end_matches(".desktop").to_string())
+            }),
         ActionType::OpenUrl(url) => {
             let short = url
                 .trim_start_matches("https://")
@@ -544,6 +551,7 @@ fn strip_prefix_ignore_case<'a>(input: &'a str, prefix: &str) -> Option<&'a str>
 }
 
 /// Diretórios padrão de arquivos `.desktop` no Linux (usuário primeiro para prioridade).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn default_desktop_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = env::var("HOME") {
@@ -555,9 +563,121 @@ pub fn default_desktop_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Lista aplicativos `.desktop` disponíveis em `/usr/share/applications` e `~/.local/share/applications`.
+/// Diretórios padrão de atalhos do Menu Iniciar no Windows.
+#[cfg(any(target_os = "windows", test))]
+pub fn default_windows_start_menu_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(appdata) = env::var("APPDATA") {
+        if !appdata.trim().is_empty() {
+            dirs.push(
+                PathBuf::from(appdata)
+                    .join("Microsoft")
+                    .join("Windows")
+                    .join("Start Menu")
+                    .join("Programs"),
+            );
+        }
+    }
+    if let Ok(progdata) = env::var("ProgramData") {
+        if !progdata.trim().is_empty() {
+            dirs.push(
+                PathBuf::from(progdata)
+                    .join("Microsoft")
+                    .join("Windows")
+                    .join("Start Menu")
+                    .join("Programs"),
+            );
+        }
+    }
+    dirs
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn is_ignored_windows_shortcut_name(stem_lower: &str) -> bool {
+    const IGNORED_KEYWORDS: &[&str] = &[
+        "uninstall",
+        "desinstalar",
+        "readme",
+        "license",
+        "licença",
+        "manual",
+        "documentation",
+        "help",
+        "website",
+        "release notes",
+    ];
+    IGNORED_KEYWORDS.iter().any(|kw| stem_lower.contains(kw))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn collect_lnk_shortcuts_recursive(
+    dir: &Path,
+    depth: usize,
+    seen_names: &mut HashSet<String>,
+    out: &mut Vec<DesktopApp>,
+) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_lnk_shortcuts_recursive(&path, depth + 1, seen_names, out);
+            continue;
+        }
+        let is_lnk = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
+        if !is_lnk {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let name = stem.trim();
+        let lower = name.to_ascii_lowercase();
+        if name.is_empty() || is_ignored_windows_shortcut_name(&lower) || !seen_names.insert(lower)
+        {
+            continue;
+        }
+        let full_path = path.to_string_lossy().into_owned();
+        out.push(DesktopApp {
+            desktop_file: full_path.clone(),
+            name: name.to_string(),
+            exec: full_path,
+            icon: None,
+        });
+    }
+}
+
+/// Lista aplicativos instalados a partir de diretórios de atalhos `.lnk` do Menu Iniciar (Windows).
+#[cfg(any(target_os = "windows", test))]
+pub fn list_windows_apps_in_dirs(dirs: &[PathBuf]) -> Vec<DesktopApp> {
+    let mut seen = HashSet::new();
+    let mut apps = Vec::new();
+    for dir in dirs {
+        collect_lnk_shortcuts_recursive(dir, 0, &mut seen, &mut apps);
+    }
+    apps.sort_by_key(|a| a.name.to_lowercase());
+    apps
+}
+
+/// Lista aplicativos disponíveis na plataforma atual:
+/// - Windows: atalhos `.lnk` do Menu Iniciar (`Start Menu\Programs`).
+/// - Linux: arquivos `.desktop` em `/usr/share/applications` e `~/.local/share/applications`.
 pub fn list_desktop_apps() -> Vec<DesktopApp> {
-    list_desktop_apps_in_dirs(&default_desktop_dirs())
+    #[cfg(target_os = "windows")]
+    {
+        list_windows_apps_in_dirs(&default_windows_start_menu_dirs())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        list_desktop_apps_in_dirs(&default_desktop_dirs())
+    }
 }
 
 /// Lista aplicativos `.desktop` a partir de uma lista explícita de diretórios (testável).
@@ -640,6 +760,7 @@ fn parse_desktop_entry(desktop_file: &str, content: &str) -> Option<DesktopApp> 
 }
 
 /// Resolve o campo `Exec=` de um arquivo `.desktop` em argumentos seguros para `Command` (sem shell).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn resolve_desktop_exec(desktop_file: &str) -> Result<Vec<String>, KnobError> {
     resolve_desktop_exec_in_dirs(desktop_file, &default_desktop_dirs())
 }
@@ -912,6 +1033,24 @@ mod tests {
         let quoted =
             parse_desktop_exec_tokens("\"my app\" --flag %F").expect("tokenizar com aspas");
         assert_eq!(quoted, vec!["my app", "--flag"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_windows_lnk_shortcuts_and_ignores_uninstallers() {
+        let dir = temp_dir_unique("win_apps");
+        let sub = dir.join("Adobe");
+        fs::create_dir_all(&sub).expect("criar subpasta");
+        fs::write(dir.join("Spotify.lnk"), b"lnk").expect("spotify");
+        fs::write(dir.join("Uninstall Spotify.lnk"), b"lnk").expect("uninstall");
+        fs::write(sub.join("Photoshop.lnk"), b"lnk").expect("photoshop");
+        fs::write(sub.join("Readme.lnk"), b"lnk").expect("readme");
+        fs::write(dir.join("notes.txt"), b"txt").expect("txt");
+
+        let apps = super::list_windows_apps_in_dirs(std::slice::from_ref(&dir));
+        let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["Photoshop", "Spotify"]);
 
         let _ = fs::remove_dir_all(&dir);
     }

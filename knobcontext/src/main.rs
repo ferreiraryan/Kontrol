@@ -170,7 +170,9 @@ impl AppRuntime {
                                                 margin: self.config.overlay.bottom_margin_px,
                                             });
                                         }
-                                        if should_query_vol {
+                                        if should_query_vol
+                                            && !platform::PlatformKind::current().is_windows()
+                                        {
                                             self.system.send(SystemRequest::FetchAudioMixer);
                                         }
                                         if platform::PlatformKind::current().is_windows()
@@ -248,6 +250,10 @@ impl AppRuntime {
     fn handle_knob_event(&mut self, event: KnobEvent, settings: &SettingsController) {
         if event == KnobEvent::OpenSettings {
             self.open_settings(settings);
+            return;
+        }
+        if event == KnobEvent::KnobPress && self.hub.is_settings_open() {
+            info!("Clique no knob ignorado enquanto a janela de configurações está aberta (feche as configurações para abrir o Hub).");
             return;
         }
 
@@ -368,11 +374,61 @@ fn select_slint_renderer(_renderer: crate::config::UiRendererKind) -> bool {
     false
 }
 
+#[cfg(target_os = "windows")]
+struct SingleInstanceGuard {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(target_os = "windows")]
+impl SingleInstanceGuard {
+    fn acquire() -> Result<Self, String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+        use windows_sys::Win32::System::Threading::CreateMutexW;
+
+        let name: Vec<u16> = "Local\\KnobContextSingleInstance"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: `name` é UTF-16 terminado em nulo válido; handle liberado no `Drop` ou em erro.
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let err = unsafe { GetLastError() };
+        if err == ERROR_ALREADY_EXISTS {
+            unsafe {
+                CloseHandle(handle);
+            }
+            return Err("outra instância do KnobContext já está em execução".to_string());
+        }
+        Ok(Self { handle })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
 fn run() -> Result<(), KnobError> {
     if env::args().skip(1).any(|arg| arg == "--scan") {
         scan::run_scan_command().map_err(KnobError::InputSimulation)?;
         return Ok(());
     }
+    #[cfg(target_os = "windows")]
+    let _single_instance = match SingleInstanceGuard::acquire() {
+        Ok(guard) => guard,
+        Err(reason) => {
+            warn!("Não foi possível iniciar nova instância ({reason}). Encerrando para evitar leitura duplicada de teclas.");
+            return Ok(());
+        }
+    };
     #[cfg(target_os = "windows")]
     {
         // Garante COM em modo STA na thread principal antes de qualquer crate/UI (`winit::OleInitialize`).
@@ -416,6 +472,9 @@ fn run() -> Result<(), KnobError> {
     system::hyprland::register_overlay_window_rule(config.overlay.bottom_margin_px);
     system::hyprland::register_hud_window_rule(config.overlay.bottom_margin_px);
 
+    #[cfg(target_os = "windows")]
+    info!("Inicializando captura HID 1189:8890 via Win32 (WH_KEYBOARD_LL).");
+    #[cfg(not(target_os = "windows"))]
     info!(
         "Capturando dispositivos: kbd='{}', media='{}'",
         config.device.kbd_path.display(),

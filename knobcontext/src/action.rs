@@ -1,4 +1,6 @@
-use crate::actions_catalog::{resolve_desktop_exec, MacroStep};
+#[cfg(not(target_os = "windows"))]
+use crate::actions_catalog::resolve_desktop_exec;
+use crate::actions_catalog::MacroStep;
 use crate::config::{ActionConfig, ProfileConfig};
 use crate::error::KnobError;
 use crate::input::KnobEvent;
@@ -237,13 +239,34 @@ impl<E: ActionExecutor> ActionDispatcher<E> {
 
 /// Calcula o deslocamento contínuo (pixels no Wayland `wlr_virtual_pointer::axis`)
 /// multiplicando a quantidade de cliques pelo fator `scroll_step`.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn compute_scroll_delta(delta: i32, scroll_step: i32) -> i32 {
     delta.saturating_mul(scroll_step.max(1))
+}
+
+/// Normaliza alvos de `Open:` para a plataforma atual.
+///
+/// No Windows, URIs `file:///C:/...` ou `file://C:\...` podem falhar no `ShellExecuteW`;
+/// converte para o caminho local limpo (`C:\...`) preservando URLs `http://`/`https://`.
+pub fn normalize_open_target(target: &str, is_windows: bool) -> String {
+    let trimmed = target.trim();
+    if !is_windows {
+        return trimmed.to_string();
+    }
+    if let Some(rest) = trimmed.strip_prefix("file://") {
+        let cleaned = rest
+            .strip_prefix('/')
+            .filter(|after| after.as_bytes().get(1) == Some(&b':'))
+            .unwrap_or(rest);
+        return cleaned.replace('/', "\\");
+    }
+    trimmed.to_string()
 }
 
 /// Executor real baseado na crate `enigo` (backend Wayland) + `ProviderRegistry` genérico.
 pub struct EnigoExecutor {
     enigo: Enigo,
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     scroll_step: i32,
     providers: Arc<RwLock<ProviderRegistry>>,
 }
@@ -286,6 +309,11 @@ impl ActionExecutor for EnigoExecutor {
                 } else {
                     Axis::Vertical
                 };
+                // No Windows, `enigo::scroll` já multiplica por `WHEEL_DELTA` (120);
+                // multiplicar por `scroll_step` (pixels Wayland) geraria 20× mais rolagem.
+                #[cfg(target_os = "windows")]
+                let scaled = *delta;
+                #[cfg(not(target_os = "windows"))]
                 let scaled = compute_scroll_delta(*delta, self.scroll_step);
                 self.enigo
                     .scroll(scaled, axis)
@@ -293,28 +321,65 @@ impl ActionExecutor for EnigoExecutor {
             }
             ActionConfig::Shortcut { keys } => self.execute_shortcut(keys),
             ActionConfig::Launch { desktop_file } => {
-                let tokens = resolve_desktop_exec(desktop_file)?;
-                let program = tokens
-                    .first()
-                    .ok_or_else(|| KnobError::InvalidAction("Exec= vazio".to_string()))?;
-                Command::new(program)
-                    .args(&tokens[1..])
-                    .spawn()
-                    .map_err(|err| {
-                        KnobError::InputSimulation(format!(
-                            "falha ao abrir aplicativo '{desktop_file}' ({program}): {err}"
-                        ))
-                    })?;
-                Ok(())
+                #[cfg(target_os = "windows")]
+                {
+                    let trimmed = desktop_file.trim();
+                    let lower = trimmed.to_ascii_lowercase();
+                    if lower.ends_with(".exe") {
+                        Command::new(trimmed).spawn().map_err(|err| {
+                            KnobError::InputSimulation(format!(
+                                "falha ao abrir executável '{trimmed}': {err}"
+                            ))
+                        })?;
+                    } else if lower.ends_with(".lnk")
+                        || lower.ends_with(".url")
+                        || std::path::Path::new(trimmed).exists()
+                    {
+                        open::that_detached(trimmed).map_err(|err| {
+                            KnobError::InputSimulation(format!(
+                                "falha ao abrir aplicativo '{trimmed}': {err}"
+                            ))
+                        })?;
+                    } else {
+                        return Err(KnobError::InputSimulation(format!(
+                            "aplicativo '{trimmed}' não encontrado no Windows (entradas .desktop são exclusivas do Linux)"
+                        )));
+                    }
+                    Ok(())
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let tokens = resolve_desktop_exec(desktop_file)?;
+                    let program = tokens
+                        .first()
+                        .ok_or_else(|| KnobError::InvalidAction("Exec= vazio".to_string()))?;
+                    Command::new(program)
+                        .args(&tokens[1..])
+                        .spawn()
+                        .map_err(|err| {
+                            KnobError::InputSimulation(format!(
+                                "falha ao abrir aplicativo '{desktop_file}' ({program}): {err}"
+                            ))
+                        })?;
+                    Ok(())
+                }
             }
-            ActionConfig::Open { target } => open::that_detached(target).map_err(|err| {
-                KnobError::InputSimulation(format!("falha ao abrir '{target}': {err}"))
-            }),
+            ActionConfig::Open { target } => {
+                let normalized = normalize_open_target(
+                    target,
+                    crate::platform::PlatformKind::current().is_windows(),
+                );
+                open::that_detached(&normalized).map_err(|err| {
+                    KnobError::InputSimulation(format!("falha ao abrir '{target}': {err}"))
+                })
+            }
             ActionConfig::Exec { command } => {
                 #[cfg(target_os = "windows")]
                 let mut cmd = {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
                     let mut c = Command::new("cmd");
-                    c.args(["/C", command]);
+                    c.args(["/C", command]).creation_flags(CREATE_NO_WINDOW);
                     c
                 };
                 #[cfg(not(target_os = "windows"))]
@@ -686,5 +751,25 @@ mod tests {
             parse_key_name("tecla_inexistente"),
             Err(KnobError::InvalidAction(_))
         ));
+    }
+
+    #[test]
+    fn normalizes_file_uris_for_windows_open() {
+        assert_eq!(
+            super::normalize_open_target("file:///C:/Users/demo/doc.pdf", true),
+            "C:\\Users\\demo\\doc.pdf"
+        );
+        assert_eq!(
+            super::normalize_open_target("file://C:\\Users\\demo\\doc.pdf", true),
+            "C:\\Users\\demo\\doc.pdf"
+        );
+        assert_eq!(
+            super::normalize_open_target("https://example.com/a/b", true),
+            "https://example.com/a/b"
+        );
+        assert_eq!(
+            super::normalize_open_target("file:///home/user/doc.pdf", false),
+            "file:///home/user/doc.pdf"
+        );
     }
 }
