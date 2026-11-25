@@ -181,8 +181,8 @@ fn monitor_events(api: &HidApi, filter: &Filter) {
                 if let Ok(guard) = HOOK_TX.lock() {
                     if let Some(tx) = guard.as_ref() {
                         let _ = tx.send(format!(
-                            "[WH_KEYBOARD_LL] {st} vk=0x{:02X} scan=0x{:02X} flags=0x{:02X} injected={injected}",
-                            kb.vkCode, kb.scanCode, kb.flags
+                            "[WH_KEYBOARD_LL] {st} vk=0x{:02X} scan=0x{:02X} flags=0x{:02X} injected={injected} extra=0x{:X}",
+                            kb.vkCode, kb.scanCode, kb.flags, kb.dwExtraInfo
                         ));
                     }
                 }

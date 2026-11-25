@@ -21,6 +21,48 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+/// No Windows, garante que popups (`KnobContext HUD`, `KnobContext Overlay`) exibidos via
+/// Slint/winit não roubem o foco da janela ativa do usuário (aplicando `WS_EX_NOACTIVATE` +
+/// `WS_EX_TOOLWINDOW` e restaurando o `HWND` anterior caso o foco tenha sido deslocado).
+#[cfg(target_os = "windows")]
+pub fn show_popup_without_stealing_focus<F>(title: &str, show_fn: F) -> Result<(), KnobError>
+where
+    F: FnOnce() -> Result<(), KnobError>,
+{
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow,
+        SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    // SAFETY: chamadas Win32 somente leitura/configuração de estilo de janela própria.
+    let prev_fg = unsafe { GetForegroundWindow() };
+    show_fn()?;
+
+    let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if !hwnd.is_null() {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let target = ex | (WS_EX_NOACTIVATE as isize) | (WS_EX_TOOLWINDOW as isize);
+            if ex != target {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target);
+            }
+            if !prev_fg.is_null() && prev_fg != hwnd && GetForegroundWindow() == hwnd {
+                SetForegroundWindow(prev_fg);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_popup_without_stealing_focus<F>(_title: &str, show_fn: F) -> Result<(), KnobError>
+where
+    F: FnOnce() -> Result<(), KnobError>,
+{
+    show_fn()
+}
+
 pub const OVERLAY_WIDTH_PX: i32 = 960;
 pub const OVERLAY_HEIGHT_PX: i32 = 256;
 const MAX_RAM_THUMBNAILS: usize = 32;
@@ -141,9 +183,11 @@ impl OverlayWindow {
         if let Some(window) = &self.window {
             window.invoke_ensure_focused_visible();
             if just_opened {
-                window
-                    .show()
-                    .map_err(|err| KnobError::UiRun(err.to_string()))?;
+                show_popup_without_stealing_focus("KnobContext Overlay", || {
+                    window
+                        .show()
+                        .map_err(|err| KnobError::UiRun(err.to_string()))
+                })?;
             }
         }
 

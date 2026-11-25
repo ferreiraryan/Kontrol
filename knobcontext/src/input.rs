@@ -75,7 +75,9 @@ impl EventTranslator {
     ) -> Option<KnobEvent> {
         let raw_event = match (key, pressed) {
             (RawKey::Ctrl, true) => {
-                self.ctrl_pressed_at = Some(now);
+                if self.ctrl_pressed_at.is_none() {
+                    self.ctrl_pressed_at = Some(now);
+                }
                 None
             }
             (RawKey::Ctrl, false) => {
@@ -337,6 +339,8 @@ mod platform {
 }
 
 #[cfg(any(target_os = "windows", test))]
+pub const ENIGO_EXTRA_INFO_MARKER: usize = 0x4B4E_4F42;
+#[cfg(any(target_os = "windows", test))]
 pub(crate) const VK_CONTROL_CODE: u32 = 0x11;
 #[cfg(any(target_os = "windows", test))]
 pub(crate) const VK_F1_CODE: u32 = 0x70;
@@ -359,11 +363,15 @@ pub(crate) const VK_MEDIA_PLAY_PAUSE_CODE: u32 = 0xB3;
 ///
 /// Decide quais eventos de hardware devem ser bloqueados (engolidos) para impedir
 /// que os atalhos de firmware do dispositivo `1189:8890` vazem para o Windows,
-/// preservando teclas injetadas (`enigo`) e o uso normal de `Ctrl`/`F1`/`F4`.
+/// preservando teclas injetadas pelo próprio `EnigoExecutor` (identificadas de forma
+/// determinística por `dwExtraInfo == ENIGO_EXTRA_INFO_MARKER`), filtrando auto-repeat
+/// do Windows em botões discretos e preservando o uso normal de `Ctrl`/`F1`/`F4`.
 #[cfg(any(target_os = "windows", test))]
 #[derive(Debug)]
 pub(crate) struct WinHookState {
     translator: EventTranslator,
+    mute_down: bool,
+    play_pause_down: bool,
     swallowed_f1: bool,
     swallowed_f4: bool,
 }
@@ -373,6 +381,8 @@ impl WinHookState {
     pub(crate) fn new(combo_window: Duration) -> Self {
         Self {
             translator: EventTranslator::new(combo_window),
+            mute_down: false,
+            play_pause_down: false,
             swallowed_f1: false,
             swallowed_f4: false,
         }
@@ -383,8 +393,8 @@ impl WinHookState {
     ///
     /// Nota: no Windows, o serviço HID (`hidserv`) sintetiza `VK_VOLUME_*` e `VK_MEDIA_PLAY_PAUSE`
     /// a partir da interface Consumer Control (`0x000C`) com `LLKHF_INJECTED` (`flags=0x11`).
-    /// Por isso, teclas de mídia/knob só são ignoradas quando `self_injecting == true`
-    /// (ou seja, quando o próprio `EnigoExecutor` está executando uma ação).
+    /// Por isso, eventos originados pelo próprio `EnigoExecutor` são distinguidos sem race
+    /// condition via `dwExtraInfo == ENIGO_EXTRA_INFO_MARKER` (`self_injecting == true`).
     pub(crate) fn handle_key(
         &mut self,
         vk: u32,
@@ -395,33 +405,33 @@ impl WinHookState {
         now: Instant,
     ) -> (bool, Option<KnobEvent>) {
         if !active {
+            self.mute_down = false;
+            self.play_pause_down = false;
+            return (false, None);
+        }
+        if self_injecting {
             return (false, None);
         }
 
         match vk {
-            VK_VOLUME_UP_CODE => {
-                if self_injecting {
-                    return (false, None);
-                }
-                (
-                    true,
-                    self.translator
-                        .process_raw_key(RawKey::VolumeUp, pressed, now),
-                )
-            }
-            VK_VOLUME_DOWN_CODE => {
-                if self_injecting {
-                    return (false, None);
-                }
-                (
-                    true,
-                    self.translator
-                        .process_raw_key(RawKey::VolumeDown, pressed, now),
-                )
-            }
+            VK_VOLUME_UP_CODE => (
+                true,
+                self.translator
+                    .process_raw_key(RawKey::VolumeUp, pressed, now),
+            ),
+            VK_VOLUME_DOWN_CODE => (
+                true,
+                self.translator
+                    .process_raw_key(RawKey::VolumeDown, pressed, now),
+            ),
             VK_VOLUME_MUTE_CODE => {
-                if self_injecting {
-                    return (false, None);
+                if pressed {
+                    if self.mute_down {
+                        return (true, None);
+                    }
+                    self.mute_down = true;
+                } else {
+                    self.mute_down = false;
                 }
                 (
                     true,
@@ -429,8 +439,13 @@ impl WinHookState {
                 )
             }
             VK_MEDIA_PLAY_PAUSE_CODE => {
-                if self_injecting {
-                    return (false, None);
+                if pressed {
+                    if self.play_pause_down {
+                        return (true, None);
+                    }
+                    self.play_pause_down = true;
+                } else {
+                    self.play_pause_down = false;
                 }
                 (
                     true,
@@ -491,13 +506,13 @@ impl WinHookState {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::{KnobEvent, WinHookState};
+    use super::{KnobEvent, WinHookState, ENIGO_EXTRA_INFO_MARKER};
     use crate::config::DeviceConfig;
     use crate::error::KnobError;
     use hidapi::HidApi;
     use log::{debug, info, warn};
     use std::ptr;
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
     use std::sync::{Arc, Mutex};
     use std::thread::{self, JoinHandle};
@@ -521,24 +536,6 @@ mod platform {
     }
 
     static HOOK_SHARED: Mutex<Option<HookShared>> = Mutex::new(None);
-    static SELF_MEDIA_DEPTH: AtomicUsize = AtomicUsize::new(0);
-
-    /// Guard RAII que marca quando o próprio `EnigoExecutor` está injetando teclas de mídia
-    /// para que o `WH_KEYBOARD_LL` deixe passar apenas essa injeção sem gerar loop.
-    pub struct SelfMediaInjectionGuard;
-
-    impl SelfMediaInjectionGuard {
-        pub fn enter() -> Self {
-            SELF_MEDIA_DEPTH.fetch_add(1, Ordering::SeqCst);
-            Self
-        }
-    }
-
-    impl Drop for SelfMediaInjectionGuard {
-        fn drop(&mut self) {
-            SELF_MEDIA_DEPTH.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
 
     unsafe extern "system" fn ll_keyboard_proc(
         code: i32,
@@ -555,8 +552,11 @@ mod platform {
 
             if let Some(is_down) = pressed {
                 let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+                let self_injecting = kb.dwExtraInfo == ENIGO_EXTRA_INFO_MARKER;
+                if self_injecting {
+                    return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) };
+                }
                 let injected = (kb.flags & LLKHF_INJECTED) != 0;
-                let self_injecting = SELF_MEDIA_DEPTH.load(Ordering::SeqCst) > 0;
 
                 if let Ok(mut guard) = HOOK_SHARED.lock() {
                     if let Some(shared) = guard.as_mut() {
@@ -566,7 +566,7 @@ mod platform {
                             is_down,
                             injected,
                             active,
-                            self_injecting,
+                            false,
                             Instant::now(),
                         );
                         if let Some(ev) = event {
@@ -753,8 +753,6 @@ mod platform {
 }
 
 pub use platform::KnobInput;
-#[cfg(target_os = "windows")]
-pub use platform::SelfMediaInjectionGuard;
 
 #[cfg(test)]
 mod tests {
@@ -995,5 +993,86 @@ mod tests {
             ),
             (false, Some(KnobEvent::Key2))
         );
+    }
+
+    #[test]
+    fn win_hook_ignores_auto_repeat_on_buttons_and_passes_all_self_injected_keys() {
+        let mut hook = WinHookState::new(Duration::from_millis(200));
+        let t0 = Instant::now();
+
+        // Auto-repeat (múltiplos WM_KEYDOWN antes do WM_KEYUP) em Mute e PlayPause não duplica
+        assert_eq!(
+            hook.handle_key(VK_VOLUME_MUTE_CODE, true, true, true, false, t0),
+            (true, Some(KnobEvent::KnobPress))
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_MUTE_CODE,
+                true,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(120)
+            ),
+            (true, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_MUTE_CODE,
+                false,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(150)
+            ),
+            (true, None)
+        );
+
+        assert_eq!(
+            hook.handle_key(VK_MEDIA_PLAY_PAUSE_CODE, true, true, true, false, t0),
+            (true, Some(KnobEvent::Key3))
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_MEDIA_PLAY_PAUSE_CODE,
+                true,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(120)
+            ),
+            (true, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_MEDIA_PLAY_PAUSE_CODE,
+                false,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(150)
+            ),
+            (true, None)
+        );
+
+        // Qualquer evento marcado com dwExtraInfo do próprio Enigo (self_injecting=true) passa livre
+        for vk in [
+            VK_VOLUME_UP_CODE,
+            VK_VOLUME_DOWN_CODE,
+            VK_VOLUME_MUTE_CODE,
+            VK_MEDIA_PLAY_PAUSE_CODE,
+            VK_LCONTROL_CODE,
+            VK_F1_CODE,
+            VK_F4_CODE,
+        ] {
+            assert_eq!(
+                hook.handle_key(vk, true, true, true, true, t0),
+                (false, None)
+            );
+            assert_eq!(
+                hook.handle_key(vk, false, true, true, true, t0),
+                (false, None)
+            );
+        }
     }
 }

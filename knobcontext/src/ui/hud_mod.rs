@@ -357,8 +357,9 @@ impl HudController {
                 win.set_has_art(false);
             }
             if just_opened {
-                win.show()
-                    .map_err(|err| KnobError::UiRun(err.to_string()))?;
+                crate::ui::show_popup_without_stealing_focus("KnobContext HUD", || {
+                    win.show().map_err(|err| KnobError::UiRun(err.to_string()))
+                })?;
             }
         }
         Ok(just_opened)

@@ -350,7 +350,7 @@ impl LearnController {
         #[cfg(not(target_os = "windows"))]
         let cleanup_global: Rc<dyn Fn()> = Rc::new(|| {});
 
-        // key-pressed (Slint fallback / Wayland)
+        // key-pressed (Slint fallback / Wayland — ignorado no Windows quando o hook global está ativo)
         {
             let weak = win.as_weak();
             let state_ref = Rc::clone(&state);
@@ -359,7 +359,13 @@ impl LearnController {
             let win_slot_ref = Rc::clone(&win_slot);
             let timer_ref = Rc::clone(&timer);
             let cleanup_ref = Rc::clone(&cleanup_global);
+            #[cfg(target_os = "windows")]
+            let cap_guard = Rc::clone(&cap_slot);
             win.on_key_pressed(move |text, ctrl, alt, shift, meta, repeat| {
+                #[cfg(target_os = "windows")]
+                if cap_guard.borrow().is_some() {
+                    return;
+                }
                 if !repeat {
                     timer_ref.stop();
                 }
@@ -396,7 +402,7 @@ impl LearnController {
             });
         }
 
-        // key-released (Slint fallback / Wayland)
+        // key-released (Slint fallback / Wayland — ignorado no Windows quando o hook global está ativo)
         {
             let weak = win.as_weak();
             let state_ref = Rc::clone(&state);
@@ -404,7 +410,13 @@ impl LearnController {
             let win_slot_ref = Rc::clone(&win_slot);
             let timer_ref = Rc::clone(&timer);
             let cleanup_ref = Rc::clone(&cleanup_global);
+            #[cfg(target_os = "windows")]
+            let cap_guard = Rc::clone(&cap_slot);
             win.on_key_released(move |text, ctrl, alt, shift, meta| {
+                #[cfg(target_os = "windows")]
+                if cap_guard.borrow().is_some() {
+                    return;
+                }
                 let outcome =
                     state_ref
                         .borrow_mut()

@@ -98,6 +98,10 @@ impl ContextState {
         });
 
         if let Some(ref w) = normalized {
+            if is_knobcontext_popup_window(w) {
+                // Mini-HUD e Overlay nunca devem substituir o aplicativo em foco na resolução contextual.
+                return;
+            }
             if !is_knobcontext_window(w) {
                 self.last_non_knob_window = Some(w.clone());
             }
@@ -172,6 +176,11 @@ fn is_knobcontext_window(info: &ActiveWindowInfo) -> bool {
     let class_lower = info.class.to_ascii_lowercase();
     let title_lower = info.title.to_ascii_lowercase();
     class_lower.contains("knobcontext") || title_lower.starts_with("knobcontext")
+}
+
+fn is_knobcontext_popup_window(info: &ActiveWindowInfo) -> bool {
+    let title_lower = info.title.to_ascii_lowercase();
+    title_lower == "knobcontext hud" || title_lower == "knobcontext overlay"
 }
 
 /// Avalia se um perfil casa com a janela ativa, retornando sua pontuação de especificidade.
@@ -708,7 +717,25 @@ mod tests {
         }));
         assert_eq!(ctx.profile_for_window(&cfg), "games_fs");
 
+        // Mini-HUD / Overlay não sobrescrevem o contexto ativo do app focado
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "firefox".to_string(),
+            title: "Mozilla Firefox".to_string(),
+            fullscreen: false,
+        }));
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "knobcontext".to_string(),
+            title: "KnobContext HUD".to_string(),
+            fullscreen: false,
+        }));
+        assert_eq!(ctx.profile_for_window(&cfg), "firefox");
+
         // Última janela não-KnobContext é preservada quando KnobContext Settings abre
+        ctx.set_active_window_info(Some(ActiveWindowInfo {
+            class: "steam_app_1234".to_string(),
+            title: "Game".to_string(),
+            fullscreen: true,
+        }));
         ctx.set_active_window_info(Some(ActiveWindowInfo {
             class: "knobcontext".to_string(),
             title: "KnobContext Settings".to_string(),

@@ -253,8 +253,16 @@ impl EnigoExecutor {
         scroll_step: i32,
         providers: Arc<RwLock<ProviderRegistry>>,
     ) -> Result<Self, KnobError> {
-        let enigo = Enigo::new(&Settings::default())
-            .map_err(|err| KnobError::InputSimulationInit(err.to_string()))?;
+        #[cfg(target_os = "windows")]
+        let settings = Settings {
+            windows_dw_extra_info: Some(crate::input::ENIGO_EXTRA_INFO_MARKER),
+            ..Settings::default()
+        };
+        #[cfg(not(target_os = "windows"))]
+        let settings = Settings::default();
+
+        let enigo =
+            Enigo::new(&settings).map_err(|err| KnobError::InputSimulationInit(err.to_string()))?;
         Ok(Self {
             enigo,
             scroll_step: scroll_step.max(1),
@@ -359,13 +367,6 @@ impl EnigoExecutor {
     }
 
     fn click_key(&mut self, key: Key) -> Result<(), KnobError> {
-        #[cfg(target_os = "windows")]
-        let _guard = matches!(
-            key,
-            Key::VolumeUp | Key::VolumeDown | Key::VolumeMute | Key::MediaPlayPause
-        )
-        .then(crate::input::SelfMediaInjectionGuard::enter);
-
         self.enigo
             .key(key, Direction::Click)
             .map_err(|err| KnobError::InputSimulation(err.to_string()))
