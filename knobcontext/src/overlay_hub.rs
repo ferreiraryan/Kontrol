@@ -5,6 +5,8 @@ use crate::config::{
 };
 use crate::context::ProfileMode;
 use crate::input::KnobEvent;
+use crate::platform::{effective_animations_enabled, prefers_reduced_motion, PlatformKind};
+use crate::providers::smtc::{format_session_subtitle, SmtcHubSnapshot};
 use crate::system::audio::{AudioMixerSnapshot, AudioOutputsSnapshot};
 use crate::system::brightness::BrightnessSnapshot;
 use crate::system::caelestia::{CaelestiaTogglesSnapshot, WallpapersSnapshot};
@@ -238,12 +240,15 @@ pub struct HubCardView {
     pub badge: String,
     pub glyph: String,
     pub image_path: Option<String>,
+    /// Imagem RGBA8 em memória (ex.: capa de álbum SMTC) com prioridade sobre `image_path`.
+    pub inline_rgba: Option<(u32, u32, Vec<u8>)>,
     pub image_is_cover: bool,
     pub value_percent: i32,
     pub max_percent: i32,
     pub is_slider: bool,
     pub is_active: bool,
     pub is_muted: bool,
+    pub is_playing: bool,
 }
 
 impl HubCardView {
@@ -255,12 +260,14 @@ impl HubCardView {
             badge: String::new(),
             glyph: String::new(),
             image_path: None,
+            inline_rgba: None,
             image_is_cover: false,
             value_percent: -1,
             max_percent: 100,
             is_slider: false,
             is_active: false,
             is_muted: false,
+            is_playing: false,
         }
     }
 }
@@ -282,8 +289,10 @@ pub struct HubViewModel {
     pub footer_hint: String,
     /// Deslocamento discreto do último giro de navegação (`+1`, `-1` ou `0`) para o animador.
     pub scroll_delta: i32,
-    /// `true` quando ocorreu transição de tela (Hub ↔ submenu) para animar a troca.
+    /// `true` quando ocorreu transição de tela (Hub ↔ submenu) para animar o fade de 120ms.
     pub screen_changed: bool,
+    /// `true` quando o usuário pressionou o knob para acionar micro-animação tátil (escala 0.98×).
+    pub press_pulse: bool,
     pub animations_enabled: bool,
 }
 
@@ -339,6 +348,7 @@ pub struct HubController {
     brightness: BrightnessSnapshot,
     wallpapers: WallpapersSnapshot,
     caelestia_toggles: CaelestiaTogglesSnapshot,
+    smtc_media: SmtcHubSnapshot,
     custom_slider_values: HashMap<String, i32>,
     desktop_apps: Vec<DesktopApp>,
     icon_path_cache: HashMap<String, Option<String>>,
@@ -369,6 +379,7 @@ impl HubController {
             brightness: BrightnessSnapshot::default(),
             wallpapers: WallpapersSnapshot::default(),
             caelestia_toggles: CaelestiaTogglesSnapshot::default(),
+            smtc_media: SmtcHubSnapshot::default(),
             custom_slider_values: HashMap::new(),
             desktop_apps,
             icon_path_cache: HashMap::new(),
@@ -581,6 +592,23 @@ impl HubController {
                 if matches!(self.screen, HubScreen::CaelestiaToggles) {
                     self.loading = false;
                     self.clamp_sub_cursor(self.caelestia_toggles.items.len());
+                    true
+                } else {
+                    false
+                }
+            }
+            SystemResponse::SmtcMedia(snap) => {
+                self.smtc_media = snap;
+                if matches!(
+                    self.screen,
+                    HubScreen::ContextModule {
+                        kind: ContextModuleKind::MediaControl,
+                        ..
+                    }
+                ) {
+                    self.loading = false;
+                    let count = self.smtc_media_entries().len();
+                    self.clamp_sub_cursor(count);
                     true
                 } else {
                     false
@@ -935,9 +963,151 @@ impl HubController {
                     effects.push(HubEffect::ExecuteAction(act));
                 }
             }
+            HubScreen::ContextModule {
+                kind: ContextModuleKind::MediaControl,
+                ..
+            } if PlatformKind::current().is_windows() && self.smtc_media.session.is_some() => {
+                effects.push(HubEffect::ExecuteAction(ActionConfig::Provider {
+                    provider_id: "smtc".to_string(),
+                    command_id: "play_pause".to_string(),
+                    args: std::collections::BTreeMap::new(),
+                }));
+                effects.push(HubEffect::System(SystemRequest::FetchSmtcMedia));
+            }
             _ => {}
         }
         effects
+    }
+
+    fn smtc_media_entries(&self) -> Vec<(HubCardView, ActionConfig)> {
+        let Some(ref session) = self.smtc_media.session else {
+            return Vec::new();
+        };
+        let title = if session.title.trim().is_empty() {
+            "Play / Pause".to_string()
+        } else {
+            session.title.clone()
+        };
+        let subtitle = format_session_subtitle(session);
+        let inline_rgba = session
+            .thumbnail
+            .as_ref()
+            .map(|t| (t.width, t.height, t.rgba.clone()));
+        let badge = if session.is_playing {
+            "TOCANDO"
+        } else {
+            "PAUSADO"
+        };
+
+        let make_provider =
+            |cmd: &str, args: std::collections::BTreeMap<String, String>| ActionConfig::Provider {
+                provider_id: "smtc".to_string(),
+                command_id: cmd.to_string(),
+                args,
+            };
+
+        let mut seek_fwd = std::collections::BTreeMap::new();
+        seek_fwd.insert("seconds".to_string(), "10".to_string());
+        let mut seek_back = std::collections::BTreeMap::new();
+        seek_back.insert("seconds".to_string(), "-10".to_string());
+
+        vec![
+            (
+                HubCardView {
+                    is_empty_slot: false,
+                    title,
+                    subtitle,
+                    badge: badge.to_string(),
+                    glyph: "♫".to_string(),
+                    image_path: None,
+                    inline_rgba,
+                    image_is_cover: true,
+                    value_percent: -1,
+                    max_percent: 100,
+                    is_slider: false,
+                    is_active: session.is_playing,
+                    is_muted: false,
+                    is_playing: session.is_playing,
+                },
+                make_provider("play_pause", std::collections::BTreeMap::new()),
+            ),
+            (
+                HubCardView {
+                    is_empty_slot: false,
+                    title: "Próxima Faixa".to_string(),
+                    subtitle: session.app_label.clone(),
+                    badge: "▶".to_string(),
+                    glyph: "⏭".to_string(),
+                    image_path: None,
+                    inline_rgba: None,
+                    image_is_cover: false,
+                    value_percent: -1,
+                    max_percent: 100,
+                    is_slider: false,
+                    is_active: false,
+                    is_muted: false,
+                    is_playing: false,
+                },
+                make_provider("next", std::collections::BTreeMap::new()),
+            ),
+            (
+                HubCardView {
+                    is_empty_slot: false,
+                    title: "Faixa Anterior".to_string(),
+                    subtitle: session.app_label.clone(),
+                    badge: "▶".to_string(),
+                    glyph: "⏮".to_string(),
+                    image_path: None,
+                    inline_rgba: None,
+                    image_is_cover: false,
+                    value_percent: -1,
+                    max_percent: 100,
+                    is_slider: false,
+                    is_active: false,
+                    is_muted: false,
+                    is_playing: false,
+                },
+                make_provider("previous", std::collections::BTreeMap::new()),
+            ),
+            (
+                HubCardView {
+                    is_empty_slot: false,
+                    title: "Avançar +10s".to_string(),
+                    subtitle: session.app_label.clone(),
+                    badge: "+10s".to_string(),
+                    glyph: "⏩".to_string(),
+                    image_path: None,
+                    inline_rgba: None,
+                    image_is_cover: false,
+                    value_percent: -1,
+                    max_percent: 100,
+                    is_slider: false,
+                    is_active: false,
+                    is_muted: false,
+                    is_playing: false,
+                },
+                make_provider("seek", seek_fwd),
+            ),
+            (
+                HubCardView {
+                    is_empty_slot: false,
+                    title: "Voltar -10s".to_string(),
+                    subtitle: session.app_label.clone(),
+                    badge: "-10s".to_string(),
+                    glyph: "⏪".to_string(),
+                    image_path: None,
+                    inline_rgba: None,
+                    image_is_cover: false,
+                    value_percent: -1,
+                    max_percent: 100,
+                    is_slider: false,
+                    is_active: false,
+                    is_muted: false,
+                    is_playing: false,
+                },
+                make_provider("seek", seek_back),
+            ),
+        ]
     }
 
     fn handle_confirm(
@@ -1077,18 +1247,31 @@ impl HubController {
                 }
             }
             HubScreen::ContextModule { kind, .. } => {
-                let actions = kind.actions();
-                if let Some(entry) = actions.get(self.sub_cursor) {
-                    vec![
-                        HubEffect::ExecuteAction(entry.action.clone()),
-                        HubEffect::RenderOverlay(self.build_view_model(
-                            config,
-                            mode,
-                            contextual_profile,
-                        )),
-                    ]
+                if kind == ContextModuleKind::MediaControl && PlatformKind::current().is_windows() {
+                    let entries = self.smtc_media_entries();
+                    if let Some((_, action)) = entries.get(self.sub_cursor) {
+                        let mut vm = self.build_view_model(config, mode, contextual_profile);
+                        vm.press_pulse = true;
+                        vec![
+                            HubEffect::ExecuteAction(action.clone()),
+                            HubEffect::System(SystemRequest::FetchSmtcMedia),
+                            HubEffect::RenderOverlay(vm),
+                        ]
+                    } else {
+                        Vec::new()
+                    }
                 } else {
-                    Vec::new()
+                    let actions = kind.actions();
+                    if let Some(entry) = actions.get(self.sub_cursor) {
+                        let mut vm = self.build_view_model(config, mode, contextual_profile);
+                        vm.press_pulse = true;
+                        vec![
+                            HubEffect::ExecuteAction(entry.action.clone()),
+                            HubEffect::RenderOverlay(vm),
+                        ]
+                    } else {
+                        Vec::new()
+                    }
                 }
             }
             HubScreen::CustomGroup { item_id, .. } => {
@@ -1199,7 +1382,12 @@ impl HubController {
                     kind: ContextModuleKind::MediaControl,
                     title: item.title,
                 };
-                self.loading = false;
+                if PlatformKind::current().is_windows() {
+                    self.loading = self.smtc_media.session.is_none();
+                    effects.push(HubEffect::System(SystemRequest::FetchSmtcMedia));
+                } else {
+                    self.loading = false;
+                }
             }
             OverlayItemKind::Zoom => {
                 self.screen = HubScreen::ContextModule {
@@ -1294,7 +1482,14 @@ impl HubController {
             HubScreen::Brightness => self.brightness.monitors.len(),
             HubScreen::CaelestiaWallpapers => self.wallpapers.items.len(),
             HubScreen::CaelestiaToggles => self.caelestia_toggles.items.len(),
-            HubScreen::ContextModule { kind, .. } => kind.actions().len(),
+            HubScreen::ContextModule { kind, .. } => {
+                if *kind == ContextModuleKind::MediaControl && PlatformKind::current().is_windows()
+                {
+                    self.smtc_media_entries().len()
+                } else {
+                    kind.actions().len()
+                }
+            }
             HubScreen::CustomGroup { item_id, .. } => self
                 .active_modules
                 .iter()
@@ -1378,12 +1573,14 @@ impl HubController {
                         badge: String::new(),
                         glyph: glyph.to_string(),
                         image_path,
+                        inline_rgba: None,
                         image_is_cover,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
                         is_active: false,
                         is_muted: false,
+                        is_playing: false,
                     });
                 }
                 (
@@ -1404,12 +1601,14 @@ impl HubController {
                     badge: if is_auto { "ATIVO" } else { "" }.to_string(),
                     glyph: "✦".to_string(),
                     image_path: None,
+                    inline_rgba: None,
                     image_is_cover: false,
                     value_percent: -1,
                     max_percent: 100,
                     is_slider: false,
                     is_active: is_auto,
                     is_muted: false,
+                    is_playing: false,
                 });
                 for profile in &config.profiles {
                     let active = matches!(mode, ProfileMode::Manual(m) if m.eq_ignore_ascii_case(&profile.name));
@@ -1437,12 +1636,14 @@ impl HubController {
                         badge: if active { "ATIVO" } else { "" }.to_string(),
                         glyph: "◈".to_string(),
                         image_path,
+                        inline_rgba: None,
                         image_is_cover: false,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
                         is_active: active,
                         is_muted: false,
+                        is_playing: false,
                     });
                 }
                 (
@@ -1474,12 +1675,14 @@ impl HubController {
                         },
                         glyph: if s.is_master { "♫" } else { "♪" }.to_string(),
                         image_path,
+                        inline_rgba: None,
                         image_is_cover: false,
                         value_percent: s.volume_percent,
                         max_percent: max_vol,
                         is_slider: true,
                         is_active: s.is_master,
                         is_muted: s.muted,
+                        is_playing: false,
                     });
                 }
                 let hint = if self.interaction == InteractionMode::Adjusting {
@@ -1511,12 +1714,14 @@ impl HubController {
                         badge: if o.is_default { "ATIVO" } else { "" }.to_string(),
                         glyph: "◎".to_string(),
                         image_path: None,
+                        inline_rgba: None,
                         image_is_cover: false,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
                         is_active: o.is_default,
                         is_muted: o.muted,
+                        is_playing: false,
                     })
                     .collect();
                 (
@@ -1554,12 +1759,14 @@ impl HubController {
                                 w.name.clone()
                             },
                             image_path: None,
+                            inline_rgba: None,
                             image_is_cover: false,
                             value_percent: -1,
                             max_percent: 100,
                             is_slider: false,
                             is_active: w.is_active,
                             is_muted: false,
+                            is_playing: false,
                         }
                     })
                     .collect();
@@ -1583,12 +1790,14 @@ impl HubController {
                         badge: format!("{}%", m.percent),
                         glyph: "☀".to_string(),
                         image_path: None,
+                        inline_rgba: None,
                         image_is_cover: false,
                         value_percent: m.percent,
                         max_percent: 100,
                         is_slider: true,
                         is_active: m.is_all,
                         is_muted: false,
+                        is_playing: false,
                     })
                     .collect();
                 let hint = if self.interaction == InteractionMode::Adjusting {
@@ -1620,12 +1829,14 @@ impl HubController {
                         },
                         glyph: if w.is_random { "🎲" } else { "▣" }.to_string(),
                         image_path: if show_images { w.path.clone() } else { None },
+                        inline_rgba: None,
                         image_is_cover: true,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
                         is_active: w.is_current,
                         is_muted: false,
+                        is_playing: false,
                     })
                     .collect();
                 (
@@ -1654,12 +1865,14 @@ impl HubController {
                             badge: badge.to_string(),
                             glyph: "⚡".to_string(),
                             image_path: None,
+                            inline_rgba: None,
                             image_is_cover: false,
                             value_percent: -1,
                             max_percent: 100,
                             is_slider: false,
                             is_active: t.enabled == Some(true),
                             is_muted: false,
+                            is_playing: false,
                         }
                     })
                     .collect();
@@ -1672,31 +1885,54 @@ impl HubController {
                 )
             }
             HubScreen::ContextModule { kind, title } => {
-                let cards: Vec<HubCardView> = kind
-                    .actions()
-                    .into_iter()
-                    .map(|act| HubCardView {
-                        is_empty_slot: false,
-                        title: act.title.to_string(),
-                        subtitle: act.subtitle.to_string(),
-                        badge: "▶".to_string(),
-                        glyph: act.glyph.to_string(),
-                        image_path: None,
-                        image_is_cover: false,
-                        value_percent: -1,
-                        max_percent: 100,
-                        is_slider: false,
-                        is_active: false,
-                        is_muted: false,
-                    })
-                    .collect();
-                (
-                    "Hub".to_string(),
-                    title,
-                    cards,
-                    "Nenhuma ação disponível.".to_string(),
-                    "Girar: Escolher • Knob/K3: Executar • K1: Voltar".to_string(),
-                )
+                if kind == ContextModuleKind::MediaControl && PlatformKind::current().is_windows() {
+                    let cards: Vec<HubCardView> = self
+                        .smtc_media_entries()
+                        .into_iter()
+                        .map(|(card, _)| card)
+                        .collect();
+                    let hint = if cards.is_empty() {
+                        "Nenhuma sessão SMTC ativa • K1: Voltar".to_string()
+                    } else {
+                        "Girar: Controles • Knob/K3: Executar • K2: Play/Pause • K1: Voltar"
+                            .to_string()
+                    };
+                    (
+                        "Hub".to_string(),
+                        title,
+                        cards,
+                        "Nenhuma mídia tocando".to_string(),
+                        hint,
+                    )
+                } else {
+                    let cards: Vec<HubCardView> = kind
+                        .actions()
+                        .into_iter()
+                        .map(|act| HubCardView {
+                            is_empty_slot: false,
+                            title: act.title.to_string(),
+                            subtitle: act.subtitle.to_string(),
+                            badge: "▶".to_string(),
+                            glyph: act.glyph.to_string(),
+                            image_path: None,
+                            inline_rgba: None,
+                            image_is_cover: false,
+                            value_percent: -1,
+                            max_percent: 100,
+                            is_slider: false,
+                            is_active: false,
+                            is_muted: false,
+                            is_playing: false,
+                        })
+                        .collect();
+                    (
+                        "Hub".to_string(),
+                        title,
+                        cards,
+                        "Nenhuma ação disponível.".to_string(),
+                        "Girar: Escolher • Knob/K3: Executar • K1: Voltar".to_string(),
+                    )
+                }
             }
             HubScreen::CustomGroup { item_id, title } => {
                 let entries = self
@@ -1743,12 +1979,14 @@ impl HubController {
                                 badge,
                                 glyph: "∞".to_string(),
                                 image_path,
+                                inline_rgba: None,
                                 image_is_cover,
                                 value_percent: -1,
                                 max_percent: 100,
                                 is_slider: false,
                                 is_active: true,
                                 is_muted: false,
+                                is_playing: false,
                             });
                         } else {
                             let val = self.custom_slider_values.get(&key).copied().unwrap_or(50);
@@ -1759,12 +1997,14 @@ impl HubController {
                                 badge: format!("{val}%"),
                                 glyph: "━".to_string(),
                                 image_path,
+                                inline_rgba: None,
                                 image_is_cover,
                                 value_percent: val,
                                 max_percent: 100,
                                 is_slider: true,
                                 is_active: true,
                                 is_muted: false,
+                                is_playing: false,
                             });
                         }
                         continue;
@@ -1776,12 +2016,14 @@ impl HubController {
                         badge: "▶".to_string(),
                         glyph: "▶".to_string(),
                         image_path,
+                        inline_rgba: None,
                         image_is_cover,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
                         is_active: false,
                         is_muted: false,
+                        is_playing: false,
                     });
                 }
                 let hint = if self.interaction == InteractionMode::Adjusting {
@@ -1828,12 +2070,14 @@ impl HubController {
                         badge: format_infinite_badge(steps),
                         glyph: "∞".to_string(),
                         image_path,
+                        inline_rgba: None,
                         image_is_cover,
                         value_percent: -1,
                         max_percent: 100,
                         is_slider: false,
                         is_active: true,
                         is_muted: false,
+                        is_playing: false,
                     }
                 } else {
                     let val = self
@@ -1848,12 +2092,14 @@ impl HubController {
                         badge: format!("{val}%"),
                         glyph: "━".to_string(),
                         image_path,
+                        inline_rgba: None,
                         image_is_cover,
                         value_percent: val,
                         max_percent: 100,
                         is_slider: true,
                         is_active: true,
                         is_muted: false,
+                        is_playing: false,
                     }
                 };
                 let cards = vec![card];
@@ -1870,7 +2116,6 @@ impl HubController {
             HubScreen::Root => self.root_cursor,
             _ => self.sub_cursor,
         };
-        let total = all_cards.len();
         let (cards, prefetch_requests, scroll_indicator) =
             build_centered_carousel(&all_cards, cursor);
 
@@ -1887,7 +2132,7 @@ impl HubController {
             active_pill,
             status_pill,
             adjusting: self.interaction == InteractionMode::Adjusting,
-            loading: self.loading && total == 0,
+            loading: self.loading,
             empty_message,
             cards,
             prefetch_requests,
@@ -1895,7 +2140,11 @@ impl HubController {
             footer_hint,
             scroll_delta: 0,
             screen_changed: false,
-            animations_enabled: config.overlay.animations_enabled,
+            press_pulse: false,
+            animations_enabled: effective_animations_enabled(
+                config.overlay.animations_enabled,
+                prefers_reduced_motion(),
+            ),
         }
     }
 }
@@ -1988,12 +2237,14 @@ mod tests {
             badge: String::new(),
             glyph: String::new(),
             image_path: None,
+            inline_rgba: None,
             image_is_cover: false,
             value_percent: -1,
             max_percent: 100,
             is_slider: false,
             is_active: false,
             is_muted: false,
+            is_playing: false,
         }
     }
 
@@ -2704,5 +2955,112 @@ mod tests {
             panic!("esperava RenderOverlay");
         };
         assert_eq!(vm_last.cards[3].badge, "+151");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn smtc_media_hub_renders_cover_missing_thumb_and_empty_state() {
+        use crate::config::{OverlayItemConfig, OverlayItemKind};
+        use crate::providers::smtc::{SmtcHubSnapshot, SmtcSessionSnapshot, SmtcThumbnail};
+
+        let mut cfg = Config::default();
+        cfg.overlay.items = vec![OverlayItemConfig {
+            id: "media_control".to_string(),
+            title: "Mídia".to_string(),
+            enabled: true,
+            icon: None,
+            kind: OverlayItemKind::MediaControl,
+        }];
+        let mode = ProfileMode::Auto;
+        let mut hub = HubController::with_desktop_apps(Vec::new());
+        let t0 = Instant::now();
+
+        let _ = hub.handle_event(KnobEvent::KnobPress, t0, &cfg, &mode, "global");
+        let fx = hub.handle_event(
+            KnobEvent::KnobPress,
+            t0 + Duration::from_millis(80),
+            &cfg,
+            &mode,
+            "global",
+        );
+        assert!(fx
+            .iter()
+            .any(|f| matches!(f, HubEffect::System(SystemRequest::FetchSmtcMedia))));
+
+        // 1) Sem nenhuma sessão SMTC ativa -> "Nenhuma mídia tocando" e sem cards
+        let eff_empty = hub
+            .apply_system_response(
+                SystemResponse::SmtcMedia(SmtcHubSnapshot::default()),
+                &cfg,
+                &mode,
+                "global",
+            )
+            .expect("deve renderizar estado vazio");
+        let HubEffect::RenderOverlay(vm_empty) = eff_empty else {
+            panic!("esperava RenderOverlay");
+        };
+        assert_eq!(vm_empty.empty_message, "Nenhuma mídia tocando");
+        assert!(vm_empty.cards.is_empty());
+
+        // 2) Sessão Firefox/YouTube sem capa -> ícone genérico (inline_rgba = None) + título
+        let eff_no_thumb = hub
+            .apply_system_response(
+                SystemResponse::SmtcMedia(SmtcHubSnapshot {
+                    session: Some(SmtcSessionSnapshot {
+                        app_id: "308046B0AF4A39CB".to_string(),
+                        app_label: "Firefox".to_string(),
+                        title: "YouTube".to_string(),
+                        artist: String::new(),
+                        album: String::new(),
+                        is_playing: false,
+                        playback_status: "Paused".to_string(),
+                        thumbnail: None,
+                    }),
+                    active_sessions_count: 1,
+                }),
+                &cfg,
+                &mode,
+                "global",
+            )
+            .expect("deve renderizar sem thumbnail");
+        let HubEffect::RenderOverlay(vm_no_thumb) = eff_no_thumb else {
+            panic!("esperava RenderOverlay");
+        };
+        assert_eq!(vm_no_thumb.cards[3].title, "YouTube");
+        assert!(vm_no_thumb.cards[3].inline_rgba.is_none());
+        assert!(!vm_no_thumb.cards[3].is_playing);
+
+        // 3) Sessão Spotify tocando com capa -> inline_rgba preenchido e is_playing = true
+        let eff_spotify = hub
+            .apply_system_response(
+                SystemResponse::SmtcMedia(SmtcHubSnapshot {
+                    session: Some(SmtcSessionSnapshot {
+                        app_id: "Spotify.exe".to_string(),
+                        app_label: "Spotify".to_string(),
+                        title: "Resonance".to_string(),
+                        artist: "HOME".to_string(),
+                        album: "Odyssey".to_string(),
+                        is_playing: true,
+                        playback_status: "Playing".to_string(),
+                        thumbnail: Some(SmtcThumbnail {
+                            width: 2,
+                            height: 2,
+                            rgba: vec![255; 16],
+                        }),
+                    }),
+                    active_sessions_count: 1,
+                }),
+                &cfg,
+                &mode,
+                "global",
+            )
+            .expect("deve renderizar spotify com capa");
+        let HubEffect::RenderOverlay(vm_sp) = eff_spotify else {
+            panic!("esperava RenderOverlay");
+        };
+        assert_eq!(vm_sp.cards[3].title, "Resonance");
+        assert!(vm_sp.cards[3].inline_rgba.is_some());
+        assert!(vm_sp.cards[3].is_playing);
+        assert_eq!(vm_sp.cards[3].badge, "TOCANDO");
     }
 }

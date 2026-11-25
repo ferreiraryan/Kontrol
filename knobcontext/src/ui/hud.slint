@@ -3,8 +3,8 @@ export component MiniHud inherits Window {
     no-frame: true;
     always-on-top: true;
     background: transparent;
-    width: 236px;
-    height: 64px;
+    width: 244px;
+    height: 68px;
 
     in property <string> glyph: "♫";
     in property <string> label: "Volume";
@@ -13,16 +13,36 @@ export component MiniHud inherits Window {
     in property <int> value-percent: 50;
     in property <int> max-percent: 100;
     in property <bool> is-muted: false;
+    in property <bool> has-art: false;
+    in property <image> art-source;
+    in property <bool> use-backdrop-blur: false;
+    in property <bool> animations-enabled: true;
 
     Rectangle {
         width: 100%;
         height: 100%;
-        background: rgba(17, 20, 27, 0.92);
-        border-radius: 10px;
+        border-radius: 12px;
+        clip: true;
+        backdrop-blur: root.use-backdrop-blur ? 14px : 0px;
+        background: root.use-backdrop-blur
+            ? rgba(20, 20, 20, 0.72)
+            : @linear-gradient(180deg, rgba(28, 30, 36, 0.88) 0%, rgba(16, 17, 22, 0.86) 100%);
         border-width: 1px;
         border-color: root.is-muted
             ? rgba(248, 113, 113, 0.55)
-            : rgba(255, 255, 255, 0.12);
+            : rgba(255, 255, 255, 0.08);
+
+        // Sombra interna sutil simulando profundidade glassmorphism no renderer software
+        Rectangle {
+            x: 1px;
+            y: 1px;
+            width: parent.width - 2px;
+            height: parent.height - 2px;
+            border-radius: 11px;
+            background: transparent;
+            border-width: 1px;
+            border-color: rgba(0, 0, 0, 0.40);
+        }
 
         HorizontalLayout {
             padding-left: 12px;
@@ -32,22 +52,32 @@ export component MiniHud inherits Window {
             spacing: 10px;
             alignment: stretch;
 
-            // Badge de ícone compacto à esquerda
+            // Badge de capa SMTC ou ícone compacto à esquerda
             Rectangle {
-                width: 36px;
-                height: 36px;
+                width: 40px;
+                height: 40px;
                 border-radius: 8px;
-                background: root.is-muted
-                    ? rgba(239, 68, 68, 0.18)
-                    : rgba(96, 165, 250, 0.16);
+                clip: true;
+                background: root.has-art
+                    ? rgba(10, 12, 16, 0.9)
+                    : (root.is-muted
+                        ? rgba(239, 68, 68, 0.20)
+                        : rgba(96, 165, 250, 0.18));
                 border-width: 1px;
                 border-color: root.is-muted
-                    ? rgba(248, 113, 113, 0.4)
-                    : rgba(147, 197, 253, 0.3);
+                    ? rgba(248, 113, 113, 0.42)
+                    : rgba(147, 197, 253, 0.28);
 
-                Text {
+                if root.has-art: Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.art-source;
+                    image-fit: cover;
+                }
+
+                if !root.has-art: Text {
                     text: root.glyph;
-                    color: root.is-muted ? #fca5a5 : #bfdbfe;
+                    color: root.is-muted ? #fca5a5 : rgba(240, 240, 240, 0.95);
                     font-size: 16px;
                     font-weight: 700;
                     horizontal-alignment: center;
@@ -55,7 +85,7 @@ export component MiniHud inherits Window {
                 }
             }
 
-            // Conteúdo: título + valor + barra fina opcional
+            // Conteúdo: título + valor + barra fina opcional (contraste WCAG AA)
             VerticalLayout {
                 horizontal-stretch: 1;
                 alignment: center;
@@ -68,7 +98,7 @@ export component MiniHud inherits Window {
                     Text {
                         horizontal-stretch: 1;
                         text: root.label;
-                        color: #f8fafc;
+                        color: rgba(240, 240, 240, 0.95);
                         font-size: 12px;
                         font-weight: 600;
                         vertical-alignment: center;
@@ -77,7 +107,7 @@ export component MiniHud inherits Window {
 
                     if root.value-text != "": Text {
                         text: root.value-text;
-                        color: root.is-muted ? #f87171 : #93c5fd;
+                        color: root.is-muted ? #fca5a5 : rgba(200, 200, 200, 0.88);
                         font-size: 12px;
                         font-weight: 700;
                         vertical-alignment: center;
@@ -87,7 +117,7 @@ export component MiniHud inherits Window {
                 if root.has-progress: Rectangle {
                     height: 5px;
                     border-radius: 3px;
-                    background: rgba(255, 255, 255, 0.12);
+                    background: rgba(255, 255, 255, 0.14);
                     clip: true;
 
                     Rectangle {
@@ -99,7 +129,7 @@ export component MiniHud inherits Window {
                         background: root.is-muted ? #ef4444 : #60a5fa;
 
                         animate width {
-                            duration: 90ms;
+                            duration: root.animations-enabled ? 90ms : 0ms;
                             easing: ease-out;
                         }
                     }

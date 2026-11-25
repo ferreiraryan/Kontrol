@@ -5,6 +5,7 @@ pub mod hyprland;
 pub mod icons;
 pub mod thumbs;
 
+use crate::providers::smtc::{fetch_smtc_hub_snapshot, SmtcHubSnapshot};
 use crate::system::audio::{
     fetch_audio_mixer, fetch_audio_outputs, set_app_volume, set_default_audio_output,
     set_master_volume, toggle_app_mute, toggle_master_mute, AudioMixerSnapshot,
@@ -35,6 +36,7 @@ pub enum SystemRequest {
     FetchBrightness,
     FetchWallpapers,
     FetchCaelestiaToggles,
+    FetchSmtcMedia,
     SetMasterVolume {
         sink_name: String,
         percent: i32,
@@ -96,6 +98,7 @@ pub enum SystemResponse {
     Brightness(BrightnessSnapshot),
     Wallpapers(WallpapersSnapshot),
     CaelestiaToggles(CaelestiaTogglesSnapshot),
+    SmtcMedia(SmtcHubSnapshot),
     CustomSliderValue { item_id: String, percent: i32 },
     ThumbnailReady(DecodedThumbnail),
     Error(String),
@@ -161,6 +164,13 @@ pub fn coalesce_request(queue: &mut VecDeque<SystemRequest>, incoming: SystemReq
             if queue
                 .iter()
                 .any(|r| matches!(r, SystemRequest::FetchCaelestiaToggles)) =>
+        {
+            return;
+        }
+        SystemRequest::FetchSmtcMedia
+            if queue
+                .iter()
+                .any(|r| matches!(r, SystemRequest::FetchSmtcMedia)) =>
         {
             return;
         }
@@ -288,6 +298,7 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
                 Some(SystemResponse::Error(err.to_string()))
             }
         },
+        SystemRequest::FetchSmtcMedia => Some(SystemResponse::SmtcMedia(fetch_smtc_hub_snapshot())),
         SystemRequest::SetMasterVolume {
             sink_name,
             percent,
@@ -381,19 +392,26 @@ fn handle_system_request(req: SystemRequest) -> Option<SystemResponse> {
         SystemRequest::ReadCustomSlider {
             item_id,
             read_command,
-        } => match Command::new("sh").arg("-c").arg(&read_command).output() {
-            Ok(out) if out.status.success() => {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let digits = text.trim().trim_end_matches('%').trim();
-                let percent = digits
-                    .parse::<f32>()
-                    .map(|v| v.round() as i32)
-                    .unwrap_or(0)
-                    .clamp(0, 100);
-                Some(SystemResponse::CustomSliderValue { item_id, percent })
+        } => {
+            #[cfg(target_os = "windows")]
+            let output = Command::new("cmd").args(["/C", &read_command]).output();
+            #[cfg(not(target_os = "windows"))]
+            let output = Command::new("sh").args(["-c", &read_command]).output();
+
+            match output {
+                Ok(out) if out.status.success() => {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let digits = text.trim().trim_end_matches('%').trim();
+                    let percent = digits
+                        .parse::<f32>()
+                        .map(|v| v.round() as i32)
+                        .unwrap_or(0)
+                        .clamp(0, 100);
+                    Some(SystemResponse::CustomSliderValue { item_id, percent })
+                }
+                Ok(_) | Err(_) => None,
             }
-            Ok(_) | Err(_) => None,
-        },
+        }
         SystemRequest::LoadThumbnail(req) => match load_or_generate_thumbnail(&req) {
             Ok(decoded) => Some(SystemResponse::ThumbnailReady(decoded)),
             Err(err) => {

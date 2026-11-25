@@ -1,11 +1,12 @@
 use crate::config::ActionConfig;
 use crate::error::KnobError;
+use crate::providers::smtc::{SmtcHubSnapshot, SmtcThumbnail};
 use crate::ui::MiniHud;
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use std::time::{Duration, Instant};
 
-pub const HUD_WIDTH_PX: i32 = 236;
-pub const HUD_HEIGHT_PX: i32 = 64;
+pub const HUD_WIDTH_PX: i32 = 244;
+pub const HUD_HEIGHT_PX: i32 = 68;
 pub const DEFAULT_HUD_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Conteúdo exibido no Mini-HUD ao girar o knob fora do Hub.
@@ -221,6 +222,9 @@ fn describe_non_continuous_action(action: &ActionConfig) -> (&'static str, Strin
 pub struct HudController {
     window: Option<MiniHud>,
     state: HudStateMachine,
+    cached_smtc_thumb: Option<SmtcThumbnail>,
+    use_backdrop_blur: bool,
+    animations_enabled: bool,
 }
 
 impl HudController {
@@ -228,7 +232,44 @@ impl HudController {
         Self {
             window: None,
             state: HudStateMachine::new(DEFAULT_HUD_TIMEOUT),
+            cached_smtc_thumb: None,
+            use_backdrop_blur: false,
+            animations_enabled: true,
         }
+    }
+
+    pub fn set_render_options(&mut self, use_backdrop_blur: bool, animations_enabled: bool) {
+        self.use_backdrop_blur = use_backdrop_blur;
+        self.animations_enabled = animations_enabled;
+    }
+
+    /// Indica se a ação executada deve exibir capa de álbum SMTC quando disponível.
+    pub fn action_supports_media_art(action: &ActionConfig) -> bool {
+        matches!(
+            action,
+            ActionConfig::VolumeUp
+                | ActionConfig::VolumeDown
+                | ActionConfig::VolumeMute
+                | ActionConfig::MediaPlayPause
+                | ActionConfig::MediaNext
+                | ActionConfig::MediaPrev
+        ) || matches!(
+            action,
+            ActionConfig::Provider { provider_id, .. }
+                if provider_id.eq_ignore_ascii_case("smtc")
+                    || provider_id.eq_ignore_ascii_case("mpris")
+        )
+    }
+
+    /// Atualiza o cache de capa SMTC para o Mini-HUD e repinta caso esteja visível em modo mídia/volume.
+    pub fn update_smtc_media(&mut self, snap: &SmtcHubSnapshot) -> Result<(), KnobError> {
+        self.cached_smtc_thumb = snap.session.as_ref().and_then(|s| s.thumbnail.clone());
+        if let Some(current) = self.state.current.clone() {
+            if self.window.is_some() {
+                let _ = self.render_data(&current)?;
+            }
+        }
+        Ok(())
     }
 
     /// Exibe ou atualiza o Mini-HUD. Retorna `(just_opened, should_query_volume)`.
@@ -241,7 +282,8 @@ impl HudController {
         let (data, should_query_vol) =
             self.state
                 .trigger_action(action, volume_step, max_volume, Instant::now());
-        let just_opened = self.render_data(&data)?;
+        let show_art = Self::action_supports_media_art(action);
+        let just_opened = self.render_data_with_art(&data, show_art)?;
         Ok((just_opened, should_query_vol))
     }
 
@@ -252,7 +294,7 @@ impl HudController {
         max_volume: i32,
     ) -> Result<(), KnobError> {
         if let Some(data) = self.state.apply_master_volume(percent, muted, max_volume) {
-            let _ = self.render_data(&data)?;
+            let _ = self.render_data_with_art(&data, true)?;
         }
         Ok(())
     }
@@ -270,6 +312,20 @@ impl HudController {
     }
 
     fn render_data(&mut self, data: &HudViewData) -> Result<bool, KnobError> {
+        let is_media_or_vol = data.action_key == "volume"
+            || data.action_key.to_ascii_lowercase().contains("media")
+            || data
+                .action_key
+                .to_ascii_lowercase()
+                .starts_with("provider:smtc");
+        self.render_data_with_art(data, is_media_or_vol)
+    }
+
+    fn render_data_with_art(
+        &mut self,
+        data: &HudViewData,
+        allow_art: bool,
+    ) -> Result<bool, KnobError> {
         let just_opened = self.window.is_none();
         if self.window.is_none() {
             let win = MiniHud::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
@@ -283,6 +339,23 @@ impl HudController {
             win.set_value_percent(data.value_percent);
             win.set_max_percent(data.max_percent);
             win.set_is_muted(data.is_muted);
+            win.set_use_backdrop_blur(self.use_backdrop_blur);
+            win.set_animations_enabled(self.animations_enabled);
+            if allow_art {
+                if let Some(ref thumb) = self.cached_smtc_thumb {
+                    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                        &thumb.rgba,
+                        thumb.width,
+                        thumb.height,
+                    );
+                    win.set_art_source(Image::from_rgba8(buffer));
+                    win.set_has_art(true);
+                } else {
+                    win.set_has_art(false);
+                }
+            } else {
+                win.set_has_art(false);
+            }
             if just_opened {
                 win.show()
                     .map_err(|err| KnobError::UiRun(err.to_string()))?;
