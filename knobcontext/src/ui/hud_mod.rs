@@ -225,6 +225,7 @@ pub struct HudController {
     cached_smtc_thumb: Option<SmtcThumbnail>,
     use_backdrop_blur: bool,
     animations_enabled: bool,
+    bottom_margin_px: i32,
 }
 
 impl HudController {
@@ -235,12 +236,17 @@ impl HudController {
             cached_smtc_thumb: None,
             use_backdrop_blur: false,
             animations_enabled: true,
+            bottom_margin_px: 20,
         }
     }
 
     pub fn set_render_options(&mut self, use_backdrop_blur: bool, animations_enabled: bool) {
         self.use_backdrop_blur = use_backdrop_blur;
         self.animations_enabled = animations_enabled;
+    }
+
+    pub fn set_bottom_margin(&mut self, bottom_margin_px: i32) {
+        self.bottom_margin_px = bottom_margin_px.max(0);
     }
 
     /// Indica se a ação executada deve exibir capa de álbum SMTC quando disponível.
@@ -357,9 +363,14 @@ impl HudController {
                 win.set_has_art(false);
             }
             if just_opened {
-                crate::ui::show_popup_without_stealing_focus("KnobContext HUD", || {
-                    win.show().map_err(|err| KnobError::UiRun(err.to_string()))
-                })?;
+                crate::ui::show_centered_bottom_popup(
+                    win,
+                    "KnobContext HUD",
+                    HUD_WIDTH_PX,
+                    HUD_HEIGHT_PX,
+                    self.bottom_margin_px,
+                    || win.show().map_err(|err| KnobError::UiRun(err.to_string())),
+                )?;
             }
         }
         Ok(just_opened)

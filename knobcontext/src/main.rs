@@ -24,9 +24,13 @@ use crate::overlay_hub::{HubController, HubEffect};
 use crate::providers::ProviderRegistry;
 use crate::system::{SystemRequest, SystemResponse, SystemWorker};
 use crate::tray::{TrayCommand, TrayController};
-use crate::ui::hud_mod::{HudController, HUD_HEIGHT_PX, HUD_WIDTH_PX};
+use crate::ui::hud_mod::HudController;
+#[cfg(target_os = "linux")]
+use crate::ui::hud_mod::{HUD_HEIGHT_PX, HUD_WIDTH_PX};
 use crate::ui::settings_mod::SettingsController;
-use crate::ui::{OverlayWindow, OVERLAY_HEIGHT_PX, OVERLAY_WIDTH_PX};
+use crate::ui::OverlayWindow;
+#[cfg(target_os = "linux")]
+use crate::ui::{OVERLAY_HEIGHT_PX, OVERLAY_WIDTH_PX};
 use env_logger::Env;
 use log::{debug, error, info, warn};
 use slint::{Timer, TimerMode};
@@ -127,6 +131,10 @@ impl AppRuntime {
         if let Ok(mut reg) = self.providers.write() {
             *reg = ProviderRegistry::default_registry(&new_config.providers);
         }
+        self.overlay
+            .set_bottom_margin(new_config.overlay.bottom_margin_px);
+        self.hud
+            .set_bottom_margin(new_config.overlay.bottom_margin_px);
         self.config = new_config;
         info!("Configuração salva e aplicada em tempo real.");
     }
@@ -163,6 +171,7 @@ impl AppRuntime {
                                     self.config.overlay.max_volume_percent,
                                 ) {
                                     Ok((just_opened, should_query_vol)) => {
+                                        #[cfg(target_os = "linux")]
                                         if just_opened {
                                             self.system.send(SystemRequest::PositionHud {
                                                 width: HUD_WIDTH_PX,
@@ -170,6 +179,8 @@ impl AppRuntime {
                                                 margin: self.config.overlay.bottom_margin_px,
                                             });
                                         }
+                                        #[cfg(not(target_os = "linux"))]
+                                        let _ = just_opened;
                                         if should_query_vol
                                             && !platform::PlatformKind::current().is_windows()
                                         {
@@ -206,6 +217,7 @@ impl AppRuntime {
                     let _ = self.hud.hide();
                     match self.overlay.render(&vm) {
                         Ok(outcome) => {
+                            #[cfg(target_os = "linux")]
                             if outcome.just_opened {
                                 self.system.send(SystemRequest::PositionOverlay {
                                     width: OVERLAY_WIDTH_PX,
@@ -248,6 +260,7 @@ impl AppRuntime {
     }
 
     fn handle_knob_event(&mut self, event: KnobEvent, settings: &SettingsController) {
+        debug!("Evento do knob recebido: {event:?}");
         if event == KnobEvent::OpenSettings {
             self.open_settings(settings);
             return;
@@ -465,8 +478,10 @@ fn run() -> Result<(), KnobError> {
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
     let mut overlay = OverlayWindow::new();
     overlay.set_use_backdrop_blur(use_backdrop_blur);
+    overlay.set_bottom_margin(config.overlay.bottom_margin_px);
     let mut hud = HudController::new();
     hud.set_render_options(use_backdrop_blur, effective_anims);
+    hud.set_bottom_margin(config.overlay.bottom_margin_px);
     let hub = HubController::new();
     let system = SystemWorker::spawn();
     system::hyprland::register_overlay_window_rule(config.overlay.bottom_margin_px);

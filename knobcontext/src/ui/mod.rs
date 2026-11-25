@@ -21,21 +21,61 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// No Windows, garante que popups (`KnobContext HUD`, `KnobContext Overlay`) exibidos via
-/// Slint/winit não roubem o foco da janela ativa do usuário (aplicando `WS_EX_NOACTIVATE` +
-/// `WS_EX_TOOLWINDOW` e restaurando o `HWND` anterior caso o foco tenha sido deslocado).
+/// No Windows, posiciona popups (`KnobContext HUD`, `KnobContext Overlay`) centralizados
+/// na base do monitor da janela em foco (usando `GetWindowRect` para respeitar DPI real),
+/// impede roubo de foco (`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`) e restaura o `HWND` anterior.
 #[cfg(target_os = "windows")]
-pub fn show_popup_without_stealing_focus<F>(title: &str, show_fn: F) -> Result<(), KnobError>
+pub fn show_centered_bottom_popup<W, F>(
+    window: &W,
+    title: &str,
+    logical_w: i32,
+    logical_h: i32,
+    bottom_margin: i32,
+    show_fn: F,
+) -> Result<(), KnobError>
 where
+    W: ComponentHandle,
     F: FnOnce() -> Result<(), KnobError>,
 {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow,
-        SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        FindWindowW, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, SetForegroundWindow,
+        SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     };
 
-    // SAFETY: chamadas Win32 somente leitura/configuração de estilo de janela própria.
+    // SAFETY: chamadas Win32 somente leitura/configuração de posição e estilo da janela própria.
     let prev_fg = unsafe { GetForegroundWindow() };
+    let work_rect = unsafe {
+        let hmon = if !prev_fg.is_null() {
+            MonitorFromWindow(prev_fg, MONITOR_DEFAULTTONEAREST)
+        } else {
+            MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY)
+        };
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(hmon, &mut mi) != 0 {
+            Some(mi.rcWork)
+        } else {
+            None
+        }
+    };
+
+    let margin = bottom_margin.max(0);
+    if let Some(work) = work_rect {
+        let mon_w = work.right - work.left;
+        let mon_h = work.bottom - work.top;
+        let x0 = work.left + (mon_w - logical_w) / 2;
+        let y0 = work.top + mon_h - logical_h - margin;
+        window
+            .window()
+            .set_position(slint::PhysicalPosition::new(x0, y0));
+    }
+
     show_fn()?;
 
     let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
@@ -47,6 +87,40 @@ where
             if ex != target {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, target);
             }
+
+            if let Some(work) = work_rect {
+                let mon_w = work.right - work.left;
+                let mon_h = work.bottom - work.top;
+                // Executa até 2 passes caso o movimento entre monitores com DPI diferente dispare WM_DPICHANGED.
+                for _ in 0..2 {
+                    let mut rect: RECT = std::mem::zeroed();
+                    let (actual_w, actual_h) = if GetWindowRect(hwnd, &mut rect) != 0 {
+                        (
+                            (rect.right - rect.left).max(1),
+                            (rect.bottom - rect.top).max(1),
+                        )
+                    } else {
+                        (logical_w.max(1), logical_h.max(1))
+                    };
+                    let scale = (actual_w as f32 / logical_w.max(1) as f32).clamp(0.5, 4.0);
+                    let scaled_margin = ((margin as f32) * scale).round() as i32;
+                    let x = work.left + (mon_w - actual_w) / 2;
+                    let y = work.top + mon_h - actual_h - scaled_margin;
+                    SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+                    window
+                        .window()
+                        .set_position(slint::PhysicalPosition::new(x, y));
+
+                    let mut after: RECT = std::mem::zeroed();
+                    if GetWindowRect(hwnd, &mut after) != 0
+                        && (after.right - after.left) == actual_w
+                        && (after.bottom - after.top) == actual_h
+                    {
+                        break;
+                    }
+                }
+            }
+
             if !prev_fg.is_null() && prev_fg != hwnd && GetForegroundWindow() == hwnd {
                 SetForegroundWindow(prev_fg);
             }
@@ -56,8 +130,16 @@ where
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn show_popup_without_stealing_focus<F>(_title: &str, show_fn: F) -> Result<(), KnobError>
+pub fn show_centered_bottom_popup<W, F>(
+    _window: &W,
+    _title: &str,
+    _logical_w: i32,
+    _logical_h: i32,
+    _bottom_margin: i32,
+    show_fn: F,
+) -> Result<(), KnobError>
 where
+    W: ComponentHandle,
     F: FnOnce() -> Result<(), KnobError>,
 {
     show_fn()
@@ -110,6 +192,7 @@ impl ThumbnailCache {
 
 /// Resultado da renderização do overlay informando se acabou de abrir e quais thumbnails faltam.
 pub struct RenderOutcome {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub just_opened: bool,
     pub missing_thumbnails: Vec<ThumbnailRequest>,
 }
@@ -131,6 +214,7 @@ pub struct OverlayWindow {
     anim: Rc<RefCell<AnimRuntime>>,
     anim_timer: Rc<Timer>,
     use_backdrop_blur: bool,
+    bottom_margin_px: i32,
 }
 
 impl OverlayWindow {
@@ -145,11 +229,16 @@ impl OverlayWindow {
             })),
             anim_timer: Rc::new(Timer::default()),
             use_backdrop_blur: false,
+            bottom_margin_px: 20,
         }
     }
 
     pub fn set_use_backdrop_blur(&mut self, enabled: bool) {
         self.use_backdrop_blur = enabled;
+    }
+
+    pub fn set_bottom_margin(&mut self, bottom_margin_px: i32) {
+        self.bottom_margin_px = bottom_margin_px.max(0);
     }
 
     pub fn render(&mut self, vm: &HubViewModel) -> Result<RenderOutcome, KnobError> {
@@ -183,11 +272,18 @@ impl OverlayWindow {
         if let Some(window) = &self.window {
             window.invoke_ensure_focused_visible();
             if just_opened {
-                show_popup_without_stealing_focus("KnobContext Overlay", || {
-                    window
-                        .show()
-                        .map_err(|err| KnobError::UiRun(err.to_string()))
-                })?;
+                show_centered_bottom_popup(
+                    window,
+                    "KnobContext Overlay",
+                    OVERLAY_WIDTH_PX,
+                    OVERLAY_HEIGHT_PX,
+                    self.bottom_margin_px,
+                    || {
+                        window
+                            .show()
+                            .map_err(|err| KnobError::UiRun(err.to_string()))
+                    },
+                )?;
             }
         }
 

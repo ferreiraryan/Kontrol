@@ -87,11 +87,13 @@ pub enum SystemRequest {
         read_command: String,
     },
     LoadThumbnail(ThumbnailRequest),
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     PositionOverlay {
         width: i32,
         height: i32,
         bottom_margin: i32,
     },
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     PositionHud {
         width: i32,
         height: i32,
