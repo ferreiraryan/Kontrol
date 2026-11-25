@@ -13,8 +13,20 @@ pub enum KnobEvent {
 }
 
 /// Janela mínima (ms) para filtrar bounce mecânico ou eco duplicado de teclas discretas
-/// (`Key1`, `Key2`, `Key3`, `KnobPress`, `OpenSettings`). Não se aplica ao giro do knob.
+/// (`Key1`, `Key2`, `Key3`, `KnobPress`, `OpenSettings`). Não se aplica ao giro do knob no Linux.
 const BUTTON_DEBOUNCE_MS: u64 = 60;
+/// Tempo sem repetição de `Ctrl` a partir do qual um `Ctrl DOWN` sem `Ctrl UP` prévio
+/// é considerado um novo pressionamento (recupera automaticamente de `WM_KEYUP` perdido).
+const STALE_CTRL_RECOVERY_MS: u64 = 600;
+/// Janela de debounce no Windows para giros consecutivos na mesma direção (filtra bounce EC11 / eco `hidserv`).
+#[cfg(any(target_os = "windows", test))]
+const WIN_ROTATE_DEBOUNCE_MS: u64 = 45;
+/// Janela de debounce no Windows para cliques discretos (`KnobPress`, `Key1`, `Key2`, `Key3`).
+#[cfg(any(target_os = "windows", test))]
+const WIN_BUTTON_DEBOUNCE_MS: u64 = 140;
+/// Tempo máximo para manter `mute_down` / `play_pause_down` sem `WM_KEYUP` (evita bloqueio permanente se o SO perder o `UP`).
+#[cfg(any(target_os = "windows", test))]
+const WIN_STUCK_DOWN_TIMEOUT_MS: u64 = 350;
 
 /// Teclas físicas normalizadas independentes de plataforma (`evdev` no Linux, `WH_KEYBOARD_LL` no Windows).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +52,7 @@ pub enum RawKey {
 pub struct EventTranslator {
     combo_window: Duration,
     ctrl_pressed_at: Option<Instant>,
+    last_ctrl_down_at: Option<Instant>,
     f1_down: bool,
     f4_down: bool,
     pending_combo: Option<KnobEvent>,
@@ -51,6 +64,7 @@ impl EventTranslator {
         Self {
             combo_window,
             ctrl_pressed_at: None,
+            last_ctrl_down_at: None,
             f1_down: false,
             f4_down: false,
             pending_combo: None,
@@ -75,13 +89,24 @@ impl EventTranslator {
     ) -> Option<KnobEvent> {
         let raw_event = match (key, pressed) {
             (RawKey::Ctrl, true) => {
-                if self.ctrl_pressed_at.is_none() {
+                let stale_ctrl_up = self.last_ctrl_down_at.is_some_and(|prev| {
+                    now.saturating_duration_since(prev)
+                        > Duration::from_millis(STALE_CTRL_RECOVERY_MS)
+                });
+                if self.ctrl_pressed_at.is_none()
+                    || (stale_ctrl_up
+                        && !self.f1_down
+                        && !self.f4_down
+                        && self.pending_combo.is_none())
+                {
                     self.ctrl_pressed_at = Some(now);
                 }
+                self.last_ctrl_down_at = Some(now);
                 None
             }
             (RawKey::Ctrl, false) => {
                 self.ctrl_pressed_at = None;
+                self.last_ctrl_down_at = None;
                 self.f1_down = false;
                 self.f4_down = false;
                 self.pending_combo.take()
@@ -370,8 +395,10 @@ pub(crate) const VK_MEDIA_PLAY_PAUSE_CODE: u32 = 0xB3;
 #[derive(Debug)]
 pub(crate) struct WinHookState {
     translator: EventTranslator,
-    mute_down: bool,
-    play_pause_down: bool,
+    mute_down_at: Option<Instant>,
+    play_pause_down_at: Option<Instant>,
+    last_rotate: Option<(KnobEvent, Instant)>,
+    last_button: Option<(KnobEvent, Instant)>,
     swallowed_f1: bool,
     swallowed_f4: bool,
 }
@@ -381,10 +408,42 @@ impl WinHookState {
     pub(crate) fn new(combo_window: Duration) -> Self {
         Self {
             translator: EventTranslator::new(combo_window),
-            mute_down: false,
-            play_pause_down: false,
+            mute_down_at: None,
+            play_pause_down_at: None,
+            last_rotate: None,
+            last_button: None,
             swallowed_f1: false,
             swallowed_f4: false,
+        }
+    }
+
+    fn filter_win_event(&mut self, event: Option<KnobEvent>, now: Instant) -> Option<KnobEvent> {
+        let ev = event?;
+        match ev {
+            KnobEvent::RotateCw | KnobEvent::RotateCcw => {
+                if let Some((prev, prev_at)) = self.last_rotate {
+                    if prev == ev
+                        && now.saturating_duration_since(prev_at)
+                            < Duration::from_millis(WIN_ROTATE_DEBOUNCE_MS)
+                    {
+                        return None;
+                    }
+                }
+                self.last_rotate = Some((ev, now));
+                Some(ev)
+            }
+            _ => {
+                if let Some((prev, prev_at)) = self.last_button {
+                    if prev == ev
+                        && now.saturating_duration_since(prev_at)
+                            < Duration::from_millis(WIN_BUTTON_DEBOUNCE_MS)
+                    {
+                        return None;
+                    }
+                }
+                self.last_button = Some((ev, now));
+                Some(ev)
+            }
         }
     }
 
@@ -405,15 +464,15 @@ impl WinHookState {
         now: Instant,
     ) -> (bool, Option<KnobEvent>) {
         if !active {
-            self.mute_down = false;
-            self.play_pause_down = false;
+            self.mute_down_at = None;
+            self.play_pause_down_at = None;
             return (false, None);
         }
         if self_injecting {
             return (false, None);
         }
 
-        match vk {
+        let (swallow, raw_ev) = match vk {
             VK_VOLUME_UP_CODE => (
                 true,
                 self.translator
@@ -426,12 +485,16 @@ impl WinHookState {
             ),
             VK_VOLUME_MUTE_CODE => {
                 if pressed {
-                    if self.mute_down {
+                    let still_held = self.mute_down_at.is_some_and(|t| {
+                        now.saturating_duration_since(t)
+                            < Duration::from_millis(WIN_STUCK_DOWN_TIMEOUT_MS)
+                    });
+                    if still_held {
                         return (true, None);
                     }
-                    self.mute_down = true;
+                    self.mute_down_at = Some(now);
                 } else {
-                    self.mute_down = false;
+                    self.mute_down_at = None;
                 }
                 (
                     true,
@@ -440,12 +503,16 @@ impl WinHookState {
             }
             VK_MEDIA_PLAY_PAUSE_CODE => {
                 if pressed {
-                    if self.play_pause_down {
+                    let still_held = self.play_pause_down_at.is_some_and(|t| {
+                        now.saturating_duration_since(t)
+                            < Duration::from_millis(WIN_STUCK_DOWN_TIMEOUT_MS)
+                    });
+                    if still_held {
                         return (true, None);
                     }
-                    self.play_pause_down = true;
+                    self.play_pause_down_at = Some(now);
                 } else {
-                    self.play_pause_down = false;
+                    self.play_pause_down_at = None;
                 }
                 (
                     true,
@@ -500,7 +567,8 @@ impl WinHookState {
                 }
             }
             _ => (false, None),
-        }
+        };
+        (swallow, self.filter_win_event(raw_ev, now))
     }
 }
 
@@ -527,7 +595,8 @@ mod platform {
 
     const KNOB_VID: u16 = 0x1189;
     const KNOB_PID: u16 = 0x8890;
-    const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
+    const RESCAN_CONNECTED_INTERVAL: Duration = Duration::from_secs(5);
+    const RESCAN_DISCONNECTED_INTERVAL: Duration = Duration::from_secs(2);
 
     struct HookShared {
         state: WinHookState,
@@ -570,6 +639,10 @@ mod platform {
                             Instant::now(),
                         );
                         if let Some(ev) = event {
+                            debug!(
+                                "WH_KEYBOARD_LL -> {:?} (vk=0x{:02X} flags=0x{:02X} extra=0x{:X})",
+                                ev, kb.vkCode, kb.flags, kb.dwExtraInfo
+                            );
                             let _ = shared.tx.send(ev);
                         }
                         if swallow {
@@ -691,7 +764,12 @@ mod platform {
         }
 
         fn refresh_presence_if_due(&mut self) {
-            if self.last_scan.elapsed() < RESCAN_INTERVAL {
+            let interval = if self.device_connected.load(Ordering::Relaxed) {
+                RESCAN_CONNECTED_INTERVAL
+            } else {
+                RESCAN_DISCONNECTED_INTERVAL
+            };
+            if self.last_scan.elapsed() < interval {
                 return;
             }
             self.last_scan = Instant::now();
@@ -1074,5 +1152,137 @@ mod tests {
                 (false, None)
             );
         }
+    }
+
+    #[test]
+    fn win_hook_filters_rotation_and_button_bounce_and_recovers_from_lost_keyup() {
+        let mut hook = WinHookState::new(Duration::from_millis(200));
+        let t0 = Instant::now();
+
+        // Giro CW + bounce 20ms depois -> apenas 1 RotateCw; reversão imediata CCW passa
+        assert_eq!(
+            hook.handle_key(VK_VOLUME_UP_CODE, true, true, true, false, t0),
+            (true, Some(KnobEvent::RotateCw))
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_UP_CODE,
+                true,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(20)
+            ),
+            (true, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_DOWN_CODE,
+                true,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(25)
+            ),
+            (true, Some(KnobEvent::RotateCcw))
+        );
+        // Novo giro CW após 50ms do primeiro RotateCw passa normalmente
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_UP_CODE,
+                true,
+                true,
+                true,
+                false,
+                t0 + Duration::from_millis(55)
+            ),
+            (true, Some(KnobEvent::RotateCw))
+        );
+
+        // Bounce em botão (down/up/down em 80ms) é filtrado; novo clique após 400ms mesmo sem UP perdido recupera
+        let t1 = t0 + Duration::from_secs(1);
+        assert_eq!(
+            hook.handle_key(VK_VOLUME_MUTE_CODE, true, true, true, false, t1),
+            (true, Some(KnobEvent::KnobPress))
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_MUTE_CODE,
+                false,
+                true,
+                true,
+                false,
+                t1 + Duration::from_millis(20)
+            ),
+            (true, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_MUTE_CODE,
+                true,
+                true,
+                true,
+                false,
+                t1 + Duration::from_millis(80)
+            ),
+            (true, None)
+        );
+        // Sem enviar WM_KEYUP, após 400ms o estado destrava automaticamente e aceita novo clique
+        assert_eq!(
+            hook.handle_key(
+                VK_VOLUME_MUTE_CODE,
+                true,
+                true,
+                true,
+                false,
+                t1 + Duration::from_millis(450)
+            ),
+            (true, Some(KnobEvent::KnobPress))
+        );
+
+        // Ctrl UP perdido: após >600ms, novo Ctrl+F1 (Key1) recupera automaticamente
+        let t2 = t1 + Duration::from_secs(2);
+        assert_eq!(
+            hook.handle_key(VK_LCONTROL_CODE, true, false, true, false, t2),
+            (false, None)
+        );
+        let t3 = t2 + Duration::from_millis(800);
+        assert_eq!(
+            hook.handle_key(VK_LCONTROL_CODE, true, false, true, false, t3),
+            (false, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_F1_CODE,
+                true,
+                false,
+                true,
+                false,
+                t3 + Duration::from_millis(10)
+            ),
+            (true, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_F1_CODE,
+                false,
+                false,
+                true,
+                false,
+                t3 + Duration::from_millis(15)
+            ),
+            (true, None)
+        );
+        assert_eq!(
+            hook.handle_key(
+                VK_LCONTROL_CODE,
+                false,
+                false,
+                true,
+                false,
+                t3 + Duration::from_millis(20)
+            ),
+            (false, Some(KnobEvent::Key1))
+        );
     }
 }
