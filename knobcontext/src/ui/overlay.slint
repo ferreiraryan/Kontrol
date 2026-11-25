@@ -12,6 +12,7 @@ export struct OverlayCardData {
     is-slider: bool,
     is-active: bool,
     is-muted: bool,
+    is-playing: bool,
 }
 
 component CarouselCard inherits Rectangle {
@@ -19,15 +20,19 @@ component CarouselCard inherits Rectangle {
     /// Distância assinada em slots em relação ao centro (`0.0` = centro, `-1.0` = esquerda, `+1.0` = direita).
     in property <float> slot-pos: 0.0;
     in property <bool> adjusting: false;
+    in property <bool> animations-enabled: true;
+    /// Pulso tátil visual (`0.0..1.0`): aplica escala 0.98× no card focado ao pressionar o knob.
+    in property <float> press-pulse: 0.0;
 
     private property <float> dist: abs(root.slot-pos);
     private property <float> center-weight: max(0.0, 1.0 - root.dist);
     private property <float> outer: max(0.0, min(1.0, root.dist - 1.0));
     private property <float> edge-fade: max(0.0, min(1.0, (2.85 - root.dist) / 0.75));
     private property <bool> is-center-dominant: root.center-weight > 0.55;
+    private property <float> press-scale: 1.0 - 0.02 * root.press-pulse * root.center-weight;
 
-    width: 160px + 64px * root.center-weight - 16px * root.outer;
-    height: 140px + 28px * root.center-weight - 12px * root.outer;
+    width: (160px + 64px * root.center-weight - 16px * root.outer) * root.press-scale;
+    height: (140px + 28px * root.center-weight - 12px * root.outer) * root.press-scale;
     border-radius: 11px + 3px * root.center-weight;
     background: root.card.is-empty
         ? transparent
@@ -47,7 +52,7 @@ component CarouselCard inherits Rectangle {
         spacing: 5px + 2px * root.center-weight;
         alignment: center;
 
-        // Área visual principal do card (16:10 thumbnail, ícone de app ou card limpo)
+        // Área visual principal do card (16:10 thumbnail, capa de álbum, ícone de app ou card limpo)
         Rectangle {
             height: 92px + 22px * root.center-weight - 10px * root.outer;
             border-radius: 10px;
@@ -56,21 +61,45 @@ component CarouselCard inherits Rectangle {
                 ? rgba(10, 12, 16, 0.9 * root.edge-fade)
                 : (root.is-center-dominant && root.adjusting
                     ? rgba(30, 58, 138, 0.58)
-                    : rgba(26 + 8 * root.center-weight, 29 + 9 * root.center-weight, 39 + 11 * root.center-weight, (0.76 + 0.16 * root.center-weight) * root.edge-fade));
+                    : rgba(26 + 8 * root.center-weight, 29 + 9 * root.center-weight, 39 + 11 * root.center-weight, (0.78 + 0.14 * root.center-weight) * root.edge-fade));
             border-width: 1px;
             border-color: root.is-center-dominant && root.adjusting
                 ? rgba(96, 165, 250, 0.85)
                 : (root.card.is-active
-                    ? rgba(147, 197, 253, (0.32 + 0.25 * root.center-weight) * root.edge-fade)
+                    ? rgba(147, 197, 253, (0.34 + 0.25 * root.center-weight) * root.edge-fade)
                     : rgba(255, 255, 255, (0.08 + 0.16 * root.center-weight) * root.edge-fade));
 
-            // 1. Imagem Cover (ex.: Wallpapers ou imagem customizada)
+            // 1. Imagem Cover (ex.: Capa de álbum SMTC, Wallpapers ou imagem customizada)
             if root.card.has-image && root.card.image-is-cover: Image {
                 width: 100%;
                 height: 100%;
                 source: root.card.image-source;
                 image-fit: cover;
-                opacity: (0.64 + 0.36 * root.center-weight - 0.14 * root.outer) * root.edge-fade;
+                opacity: (0.68 + 0.32 * root.center-weight - 0.14 * root.outer) * root.edge-fade;
+            }
+
+            // Sobreposição discreta de subtítulo quando Cover não é slider (ex.: artista SMTC)
+            if root.card.has-image && root.card.image-is-cover && !root.card.is-slider && root.card.subtitle != "": Rectangle {
+                x: 0px;
+                y: parent.height - 22px;
+                width: 100%;
+                height: 22px;
+                background: rgba(10, 12, 18, 0.78 * root.edge-fade);
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    alignment: center;
+                    Text {
+                        text: root.card.subtitle;
+                        color: rgba(240, 240, 240, 0.92 * root.edge-fade);
+                        font-size: 10px;
+                        font-weight: 500;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
             }
 
             // Sobreposição discreta de progresso quando um Slider possui imagem Cover
@@ -79,7 +108,7 @@ component CarouselCard inherits Rectangle {
                 y: parent.height - 26px;
                 width: 100%;
                 height: 26px;
-                background: rgba(10, 12, 18, 0.78 * root.edge-fade);
+                background: rgba(10, 12, 18, 0.80 * root.edge-fade);
 
                 VerticalLayout {
                     padding-left: 8px;
@@ -91,7 +120,7 @@ component CarouselCard inherits Rectangle {
 
                     Text {
                         text: root.card.badge;
-                        color: root.card.is-muted ? #f87171 : #f8fafc;
+                        color: root.card.is-muted ? #fca5a5 : rgba(240, 240, 240, 0.95);
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -114,7 +143,7 @@ component CarouselCard inherits Rectangle {
                                 : (root.is-center-dominant && root.adjusting ? #3b82f6 : #93c5fd);
 
                             animate width {
-                                duration: 110ms;
+                                duration: root.animations-enabled ? 110ms : 0ms;
                                 easing: ease-out;
                             }
                         }
@@ -143,7 +172,7 @@ component CarouselCard inherits Rectangle {
                     spacing: 3px;
                     Text {
                         text: root.card.badge;
-                        color: root.card.is-muted ? #f87171 : #e2e8f0;
+                        color: root.card.is-muted ? #fca5a5 : rgba(240, 240, 240, 0.95);
                         font-size: root.is-center-dominant ? 13px : 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -165,7 +194,7 @@ component CarouselCard inherits Rectangle {
                                 : (root.is-center-dominant && root.adjusting ? #3b82f6 : #93c5fd);
 
                             animate width {
-                                duration: 110ms;
+                                duration: root.animations-enabled ? 110ms : 0ms;
                                 easing: ease-out;
                             }
                         }
@@ -173,7 +202,7 @@ component CarouselCard inherits Rectangle {
                 }
             }
 
-            // 3. Card minimalista SEM imagem (Sliders, Workspaces, Saídas, Brilho, Toggles)
+            // 3. Card minimalista SEM imagem (Sliders, Workspaces, Saídas, Brilho, Mídia sem capa)
             if !root.card.has-image: VerticalLayout {
                 alignment: center;
                 padding-left: 12px;
@@ -185,8 +214,8 @@ component CarouselCard inherits Rectangle {
                 if root.card.is-slider: Text {
                     text: root.card.is-muted ? "MUTE" : (root.card.value-percent + "%");
                     color: root.card.is-muted
-                        ? #f87171
-                        : rgba(248, 250, 252, (0.70 + 0.30 * root.center-weight) * root.edge-fade);
+                        ? #fca5a5
+                        : rgba(240, 240, 240, (0.78 + 0.17 * root.center-weight) * root.edge-fade);
                     font-size: root.is-center-dominant ? 24px : 17px;
                     font-weight: 700;
                     horizontal-alignment: center;
@@ -194,7 +223,7 @@ component CarouselCard inherits Rectangle {
 
                 if !root.card.is-slider: Text {
                     text: root.card.glyph;
-                    color: rgba(224, 231, 255, (0.58 + 0.42 * root.center-weight - 0.16 * root.outer) * root.edge-fade);
+                    color: rgba(240, 240, 240, (0.68 + 0.27 * root.center-weight - 0.12 * root.outer) * root.edge-fade);
                     font-size: root.is-center-dominant ? 30px : 22px;
                     font-weight: 700;
                     horizontal-alignment: center;
@@ -217,7 +246,7 @@ component CarouselCard inherits Rectangle {
                             : (root.is-center-dominant && root.adjusting ? #3b82f6 : #93c5fd);
 
                         animate width {
-                            duration: 110ms;
+                            duration: root.animations-enabled ? 110ms : 0ms;
                             easing: ease-out;
                         }
                     }
@@ -225,41 +254,76 @@ component CarouselCard inherits Rectangle {
 
                 if !root.card.is-slider && root.card.subtitle != "": Text {
                     text: root.card.subtitle;
-                    color: rgba(226, 232, 240, (0.54 + 0.20 * root.center-weight) * root.edge-fade);
+                    color: rgba(200, 200, 200, (0.76 + 0.09 * root.center-weight) * root.edge-fade);
                     font-size: 10px;
                     horizontal-alignment: center;
                     overflow: elide;
                 }
             }
 
-            // Badge discreto no canto superior direito (ATUAL / ATIVO / ON / OFF)
-            if root.card.badge != "" && !root.card.is-slider: Rectangle {
-                x: parent.width - self.width - 6px;
+            // Indicador animado de "tocando" (GIF equalizer nativo Slint 1.19 + fallback estático em Reduced Motion)
+            if root.card.is-playing: Rectangle {
+                x: 6px;
                 y: 6px;
-                width: 48px;
-                height: 18px;
-                border-radius: 9px;
-                background: root.card.is-active
-                    ? rgba(59, 130, 246, 0.85 * root.edge-fade)
-                    : rgba(15, 23, 42, 0.78 * root.edge-fade);
+                width: 24px;
+                height: 20px;
+                border-radius: 6px;
+                background: rgba(15, 23, 42, 0.84 * root.edge-fade);
                 border-width: 1px;
-                border-color: rgba(255, 255, 255, 0.18 * root.edge-fade);
+                border-color: rgba(96, 165, 250, 0.55 * root.edge-fade);
 
-                Text {
-                    text: root.card.badge;
-                    color: rgba(248, 250, 252, root.edge-fade);
-                    font-size: 9px;
+                if root.animations-enabled: Image {
+                    width: 15px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../../assets/playing-eq.gif");
+                    image-fit: contain;
+                }
+
+                if !root.animations-enabled: Text {
+                    text: "♪";
+                    color: #93c5fd;
+                    font-size: 11px;
                     font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
             }
+
+            // Badge discreto no canto superior direito (ATUAL / ATIVO / TOCANDO / ON / OFF)
+            if root.card.badge != "" && !root.card.is-slider: Rectangle {
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                min-width: 48px;
+                height: 18px;
+                border-radius: 9px;
+                background: root.card.is-active
+                    ? rgba(37, 99, 235, 0.88 * root.edge-fade)
+                    : rgba(15, 23, 42, 0.82 * root.edge-fade);
+                border-width: 1px;
+                border-color: rgba(255, 255, 255, 0.18 * root.edge-fade);
+
+                HorizontalLayout {
+                    padding-left: 7px;
+                    padding-right: 7px;
+                    alignment: center;
+                    Text {
+                        text: root.card.badge;
+                        color: rgba(240, 240, 240, 0.95 * root.edge-fade);
+                        font-size: 9px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
         }
 
-        // Título centralizado abaixo do card (idêntico ao estilo do Caelestia)
+        // Título centralizado abaixo do card (contraste WCAG AA)
         Text {
             text: root.card.title;
-            color: rgba(248, 250, 252, (0.64 + 0.36 * root.center-weight - 0.16 * root.outer) * root.edge-fade);
+            color: rgba(240, 240, 240, (0.76 + 0.19 * root.center-weight - 0.10 * root.outer) * root.edge-fade);
             font-size: root.is-center-dominant ? 12px : 11px;
             font-weight: root.is-center-dominant ? 700 : 500;
             horizontal-alignment: center;
@@ -285,26 +349,56 @@ export component Overlay inherits Window {
     in property <[OverlayCardData]> cards: [];
     in property <string> footer-hint: "Girar: Navegar • Knob/K3: Abrir • K1: Fechar";
 
+    // Configurações de renderização e acessibilidade
+    in property <bool> use-backdrop-blur: false;
+    in property <bool> animations-enabled: true;
+
     // Propriedades animadas a 60fps pelo CarouselAnimator (0% CPU em repouso)
     in property <float> scroll-phase: 0.0;
     in property <float> open-progress: 1.0;
     in property <float> screen-progress: 1.0;
+    in property <float> press-pulse: 0.0;
+    in property <float> spinner-phase: 0.0;
+
+    /// Garante que o foco central do carrossel esteja visível com scroll suave (ou instantâneo em Reduced Motion).
+    public function ensure-focused-visible() {
+        focused-anchor.ensure-visible(
+            root.animations-enabled ? ScrollBehavior.smooth : ScrollBehavior.instant
+        );
+    }
 
     Rectangle {
         x: 0px;
         y: (1.0 - root.open-progress) * 12px;
         width: 100%;
         height: 100%;
-        background: rgba(17, 20, 27, 0.90 * root.open-progress);
         border-radius: 20px;
+        clip: true;
+        // FemtoVG usa `backdrop-blur` real; Software simula glassmorphism com gradiente + transparência + sombra interna.
+        backdrop-blur: root.use-backdrop-blur ? 14px : 0px;
+        background: root.use-backdrop-blur
+            ? rgba(20, 20, 20, 0.72 * root.open-progress)
+            : @linear-gradient(180deg, rgba(28, 30, 36, 0.86 * root.open-progress) 0%, rgba(16, 17, 22, 0.84 * root.open-progress) 100%);
         border-width: 1.5px;
         border-color: root.adjusting
-            ? rgba(96, 165, 250, 0.82 * root.open-progress)
-            : rgba(255, 255, 255, 0.11 * root.open-progress);
+            ? rgba(96, 165, 250, 0.85 * root.open-progress)
+            : rgba(255, 255, 255, 0.08 * root.open-progress);
 
         animate border-color {
-            duration: 140ms;
+            duration: root.animations-enabled ? 140ms : 0ms;
             easing: ease-out;
+        }
+
+        // Sombra interna sutil (rgba(0, 0, 0, 0.4)) para profundidade glassmorphism
+        Rectangle {
+            x: 1.5px;
+            y: 1.5px;
+            width: parent.width - 3px;
+            height: parent.height - 3px;
+            border-radius: 18.5px;
+            background: transparent;
+            border-width: 1px;
+            border-color: rgba(0, 0, 0, 0.40 * root.open-progress);
         }
 
         VerticalLayout {
@@ -323,7 +417,7 @@ export component Overlay inherits Window {
                 Rectangle {
                     height: 26px;
                     border-radius: 13px;
-                    background: rgba(255, 255, 255, 0.05);
+                    background: rgba(255, 255, 255, 0.06);
 
                     HorizontalLayout {
                         padding-left: 12px;
@@ -331,7 +425,7 @@ export component Overlay inherits Window {
                         alignment: center;
                         Text {
                             text: root.parent-pill;
-                            color: rgba(203, 213, 225, 0.78);
+                            color: rgba(200, 200, 200, 0.85);
                             font-size: 11px;
                             font-weight: 500;
                             vertical-alignment: center;
@@ -339,14 +433,14 @@ export component Overlay inherits Window {
                     }
                 }
 
-                // Pílula central clara em destaque (como "Animated" no print)
+                // Pílula central em destaque
                 Rectangle {
                     height: 28px;
                     border-radius: 14px;
                     background: root.adjusting ? #3b82f6 : #c7d2fe;
 
                     animate background {
-                        duration: 140ms;
+                        duration: root.animations-enabled ? 140ms : 0ms;
                         easing: ease-out;
                     }
 
@@ -369,17 +463,28 @@ export component Overlay inherits Window {
                     border-radius: 13px;
                     background: root.adjusting
                         ? rgba(59, 130, 246, 0.25)
-                        : rgba(255, 255, 255, 0.05);
+                        : rgba(255, 255, 255, 0.06);
                     border-width: root.adjusting ? 1px : 0px;
                     border-color: rgba(96, 165, 250, 0.65);
 
                     HorizontalLayout {
                         padding-left: 12px;
                         padding-right: 12px;
+                        spacing: 6px;
                         alignment: center;
+
+                        // Indicador sutil de carregamento na barra quando o SystemWorker está buscando dados
+                        if root.loading: Rectangle {
+                            width: 7px;
+                            height: 7px;
+                            y: 9px;
+                            border-radius: 3.5px;
+                            background: rgba(96, 165, 250, 0.45 + 0.55 * abs(sin(root.spinner-phase * 360deg)));
+                        }
+
                         Text {
                             text: root.status-pill;
-                            color: root.adjusting ? #93c5fd : rgba(203, 213, 225, 0.78);
+                            color: root.adjusting ? #bfdbfe : rgba(200, 200, 200, 0.85);
                             font-size: 11px;
                             font-weight: root.adjusting ? 700 : 500;
                             vertical-alignment: center;
@@ -388,38 +493,80 @@ export component Overlay inherits Window {
                 }
             }
 
-            // Carrossel contínuo de 7 slots com clip suave nas bordas e espaçamento constante de 12px
-            carousel-stage := Rectangle {
+            // Carrossel contínuo de 7 slots com clip suave, fade de 120ms entre telas e ensure-visible()
+            carousel-stage := Flickable {
                 vertical-stretch: 1;
-                background: transparent;
-                clip: true;
+                content-width: self.width;
+                content-height: self.height;
+                interactive: false;
 
-                if root.loading: VerticalLayout {
+                focused-anchor := Rectangle {
+                    x: parent.width / 2 - 1px;
+                    y: parent.height / 2 - 1px;
+                    width: 2px;
+                    height: 2px;
+                    background: transparent;
+                }
+
+                if root.loading && root.cards.length == 0: VerticalLayout {
+                    width: parent.width;
+                    height: parent.height;
                     alignment: center;
+                    spacing: 10px;
+
+                    // Spinner sutil de 3 pontos pulsantes
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: rgba(96, 165, 250, 0.35 + 0.65 * abs(sin(root.spinner-phase * 360deg)));
+                        }
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: rgba(96, 165, 250, 0.35 + 0.65 * abs(sin((root.spinner-phase + 0.33) * 360deg)));
+                        }
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: rgba(96, 165, 250, 0.35 + 0.65 * abs(sin((root.spinner-phase + 0.66) * 360deg)));
+                        }
+                    }
+
                     Text {
                         text: "Carregando...";
-                        color: #94a3b8;
+                        color: rgba(200, 200, 200, 0.85);
                         font-size: 13px;
                         horizontal-alignment: center;
                     }
                 }
 
                 if !root.loading && root.cards.length == 0: VerticalLayout {
+                    width: parent.width;
+                    height: parent.height;
                     alignment: center;
+                    opacity: root.screen-progress;
                     Text {
                         text: root.empty-message;
-                        color: #94a3b8;
+                        color: rgba(200, 200, 200, 0.85);
                         font-size: 13px;
                         horizontal-alignment: center;
                     }
                 }
 
-                if !root.loading && root.cards.length > 0: Rectangle {
+                if root.cards.length > 0: Rectangle {
                     x: 0px;
-                    y: (1.0 - root.screen-progress) * 10px;
-                    width: 100%;
-                    height: 100%;
+                    y: (1.0 - root.screen-progress) * 8px;
+                    width: parent.width;
+                    height: parent.height;
                     background: transparent;
+                    opacity: root.screen-progress;
 
                     for card[idx] in root.cards: CarouselCard {
                         property <float> pos: (idx - 3) + root.scroll-phase;
@@ -427,16 +574,18 @@ export component Overlay inherits Window {
                         card: card;
                         slot-pos: pos;
                         adjusting: root.adjusting;
+                        animations-enabled: root.animations-enabled;
+                        press-pulse: root.press-pulse;
                         x: parent.width / 2 + dx - self.width / 2;
                         y: (parent.height - self.height) / 2;
                     }
                 }
             }
 
-            // Rodapé discreto centralizado
+            // Rodapé discreto centralizado (contraste WCAG AA)
             Text {
                 text: root.footer-hint;
-                color: rgba(203, 213, 225, 0.50);
+                color: rgba(200, 200, 200, 0.85);
                 font-size: 11px;
                 horizontal-alignment: center;
             }

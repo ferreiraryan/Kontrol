@@ -88,6 +88,7 @@ pub struct OverlayWindow {
     thumb_cache: ThumbnailCache,
     anim: Rc<RefCell<AnimRuntime>>,
     anim_timer: Rc<Timer>,
+    use_backdrop_blur: bool,
 }
 
 impl OverlayWindow {
@@ -101,7 +102,12 @@ impl OverlayWindow {
                 last_tick: Instant::now(),
             })),
             anim_timer: Rc::new(Timer::default()),
+            use_backdrop_blur: false,
         }
+    }
+
+    pub fn set_use_backdrop_blur(&mut self, enabled: bool) {
+        self.use_backdrop_blur = enabled;
     }
 
     pub fn render(&mut self, vm: &HubViewModel) -> Result<RenderOutcome, KnobError> {
@@ -113,6 +119,7 @@ impl OverlayWindow {
 
         {
             let mut rt = self.anim.borrow_mut();
+            rt.animator.set_loading(vm.loading, vm.animations_enabled);
             if just_opened {
                 rt.animator.trigger_open(vm.animations_enabled);
             } else if vm.screen_changed {
@@ -121,6 +128,9 @@ impl OverlayWindow {
                 rt.animator
                     .trigger_scroll(vm.scroll_delta, vm.animations_enabled);
             }
+            if vm.press_pulse {
+                rt.animator.trigger_press_pulse(vm.animations_enabled);
+            }
             rt.last_tick = Instant::now();
         }
 
@@ -128,8 +138,9 @@ impl OverlayWindow {
         let missing_thumbnails = self.apply_current_vm()?;
         self.sync_anim_properties();
 
-        if just_opened {
-            if let Some(window) = &self.window {
+        if let Some(window) = &self.window {
+            window.invoke_ensure_focused_visible();
+            if just_opened {
                 window
                     .show()
                     .map_err(|err| KnobError::UiRun(err.to_string()))?;
@@ -181,6 +192,8 @@ impl OverlayWindow {
             window.set_scroll_phase(rt.animator.scroll_phase);
             window.set_open_progress(rt.animator.open_progress);
             window.set_screen_progress(rt.animator.screen_progress);
+            window.set_press_pulse(rt.animator.press_pulse);
+            window.set_spinner_phase(rt.animator.spinner_phase);
         }
     }
 
@@ -203,7 +216,14 @@ impl OverlayWindow {
                     timer_ref.stop();
                     return;
                 };
-                let (still_active, scroll_phase, open_progress, screen_progress) = {
+                let (
+                    still_active,
+                    scroll_phase,
+                    open_progress,
+                    screen_progress,
+                    press_pulse,
+                    spinner_phase,
+                ) = {
                     let mut rt = anim_ref.borrow_mut();
                     let now = Instant::now();
                     let dt = now.saturating_duration_since(rt.last_tick).as_secs_f32();
@@ -214,11 +234,15 @@ impl OverlayWindow {
                         rt.animator.scroll_phase,
                         rt.animator.open_progress,
                         rt.animator.screen_progress,
+                        rt.animator.press_pulse,
+                        rt.animator.spinner_phase,
                     )
                 };
                 win.set_scroll_phase(scroll_phase);
                 win.set_open_progress(open_progress);
                 win.set_screen_progress(screen_progress);
+                win.set_press_pulse(press_pulse);
+                win.set_spinner_phase(spinner_phase);
                 if !still_active {
                     timer_ref.stop();
                 }
@@ -231,6 +255,12 @@ impl OverlayWindow {
         card: &HubCardView,
         missing: &mut Vec<ThumbnailRequest>,
     ) -> (bool, Image) {
+        if let Some((w, h, ref rgba)) = card.inline_rgba {
+            if w > 0 && h > 0 && rgba.len() == (w as usize) * (h as usize) * 4 {
+                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(rgba, w, h);
+                return (true, Image::from_rgba8(buffer));
+            }
+        }
         let Some(ref path) = card.image_path else {
             return (false, Image::default());
         };
@@ -293,6 +323,7 @@ impl OverlayWindow {
                 is_slider: c.is_slider,
                 is_active: c.is_active,
                 is_muted: c.is_muted,
+                is_playing: c.is_playing,
             });
         }
 
@@ -314,6 +345,8 @@ impl OverlayWindow {
             window.set_empty_message(SharedString::from(vm.empty_message.as_str()));
             window.set_cards(ModelRc::from(Rc::new(VecModel::from(cards))));
             window.set_footer_hint(SharedString::from(vm.footer_hint.as_str()));
+            window.set_use_backdrop_blur(self.use_backdrop_blur);
+            window.set_animations_enabled(vm.animations_enabled);
         }
 
         Ok(missing)

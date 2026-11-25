@@ -70,11 +70,11 @@ export global Theme {
     out property <color> danger-border: rgba(248, 113, 113, 0.42);
     out property <color> danger-text: #fca5a5;
 
-    // Tipografia
-    out property <color> text-primary: #f8fafc;
-    out property <color> text-secondary: #cbd5e1;
-    out property <color> text-muted: #94a3b8;
-    out property <color> text-dim: #64748b;
+    // Tipografia (contraste WCAG AA >= 4.5:1 sobre superfícies escuras)
+    out property <color> text-primary: rgba(240, 240, 240, 0.95);
+    out property <color> text-secondary: rgba(200, 200, 200, 0.85);
+    out property <color> text-muted: #a8b3c4;
+    out property <color> text-dim: #8b98ab;
 }
 
 export component AppButton inherits Rectangle {
