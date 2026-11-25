@@ -270,6 +270,10 @@ fn format_modifiers_preview(ctrl: bool, alt: bool, shift: bool, meta: bool) -> S
 pub struct LearnController {
     window: Rc<RefCell<Option<LearnWindow>>>,
     confirm_timer: Rc<Timer>,
+    #[cfg(target_os = "windows")]
+    global_capture: Rc<RefCell<Option<Box<dyn crate::platform::KeyCapture>>>>,
+    #[cfg(target_os = "windows")]
+    poll_timer: Rc<Timer>,
 }
 
 impl Default for LearnController {
@@ -283,11 +287,22 @@ impl LearnController {
         Self {
             window: Rc::new(RefCell::new(None)),
             confirm_timer: Rc::new(Timer::default()),
+            #[cfg(target_os = "windows")]
+            global_capture: Rc::new(RefCell::new(None)),
+            #[cfg(target_os = "windows")]
+            poll_timer: Rc::new(Timer::default()),
         }
     }
 
     pub fn close(&self) {
         self.confirm_timer.stop();
+        #[cfg(target_os = "windows")]
+        {
+            self.poll_timer.stop();
+            if let Some(mut cap) = self.global_capture.borrow_mut().take() {
+                cap.stop();
+            }
+        }
         if let Some(win) = self.window.borrow_mut().take() {
             let _ = win.hide();
         }
@@ -304,17 +319,38 @@ impl LearnController {
         let win = LearnWindow::new().map_err(|err| KnobError::UiInit(err.to_string()))?;
         win.set_target_label(SharedString::from(target_label));
         win.set_combo_preview(SharedString::from(""));
-        win.set_status_hint(SharedString::from(
-            "Pressione a combinação (Solte ou Enter para confirmar • Esc cancela)",
-        ));
+        #[cfg(target_os = "windows")]
+        let status_hint =
+            "Captura global ativa — pressione qualquer tecla (incl. Win+E, Alt+Tab) • Esc cancela";
+        #[cfg(not(target_os = "windows"))]
+        let status_hint = "Pressione a combinação (Solte ou Enter para confirmar • Esc cancela)";
+        win.set_status_hint(SharedString::from(status_hint));
 
         let state = Rc::new(RefCell::new(LearnState::new()));
         let on_confirm = Rc::new(on_confirm);
         let on_cancel = Rc::new(on_cancel);
         let win_slot = Rc::clone(&self.window);
         let timer = Rc::clone(&self.confirm_timer);
+        #[cfg(target_os = "windows")]
+        let cap_slot = Rc::clone(&self.global_capture);
+        #[cfg(target_os = "windows")]
+        let poll_timer = Rc::clone(&self.poll_timer);
 
-        // key-pressed
+        #[cfg(target_os = "windows")]
+        let cleanup_global: Rc<dyn Fn()> = {
+            let cap_ref = Rc::clone(&cap_slot);
+            let poll_ref = Rc::clone(&poll_timer);
+            Rc::new(move || {
+                poll_ref.stop();
+                if let Some(mut cap) = cap_ref.borrow_mut().take() {
+                    cap.stop();
+                }
+            })
+        };
+        #[cfg(not(target_os = "windows"))]
+        let cleanup_global: Rc<dyn Fn()> = Rc::new(|| {});
+
+        // key-pressed (Slint fallback / Wayland)
         {
             let weak = win.as_weak();
             let state_ref = Rc::clone(&state);
@@ -322,6 +358,7 @@ impl LearnController {
             let cancel_cb = Rc::clone(&on_cancel);
             let win_slot_ref = Rc::clone(&win_slot);
             let timer_ref = Rc::clone(&timer);
+            let cleanup_ref = Rc::clone(&cleanup_global);
             win.on_key_pressed(move |text, ctrl, alt, shift, meta, repeat| {
                 if !repeat {
                     timer_ref.stop();
@@ -341,12 +378,14 @@ impl LearnController {
                         }
                     }
                     LearnOutcome::Confirmed(combo) => {
+                        cleanup_ref();
                         if let Some(w) = win_slot_ref.borrow_mut().take() {
                             let _ = w.hide();
                         }
                         confirm_cb(combo);
                     }
                     LearnOutcome::Cancelled => {
+                        cleanup_ref();
                         if let Some(w) = win_slot_ref.borrow_mut().take() {
                             let _ = w.hide();
                         }
@@ -357,13 +396,14 @@ impl LearnController {
             });
         }
 
-        // key-released
+        // key-released (Slint fallback / Wayland)
         {
             let weak = win.as_weak();
             let state_ref = Rc::clone(&state);
             let confirm_cb = Rc::clone(&on_confirm);
             let win_slot_ref = Rc::clone(&win_slot);
             let timer_ref = Rc::clone(&timer);
+            let cleanup_ref = Rc::clone(&cleanup_global);
             win.on_key_released(move |text, ctrl, alt, shift, meta| {
                 let outcome =
                     state_ref
@@ -381,11 +421,13 @@ impl LearnController {
                         let st = Rc::clone(&state_ref);
                         let cb = Rc::clone(&confirm_cb);
                         let ws = Rc::clone(&win_slot_ref);
+                        let cl = Rc::clone(&cleanup_ref);
                         timer_ref.start(
                             TimerMode::SingleShot,
                             Duration::from_millis(ms),
                             move || {
                                 if let Some(combo) = st.borrow_mut().on_confirm_timeout() {
+                                    cl();
                                     if let Some(w) = ws.borrow_mut().take() {
                                         let _ = w.hide();
                                     }
@@ -404,8 +446,10 @@ impl LearnController {
             let cancel_cb = Rc::clone(&on_cancel);
             let win_slot_ref = Rc::clone(&win_slot);
             let timer_ref = Rc::clone(&timer);
+            let cleanup_ref = Rc::clone(&cleanup_global);
             win.on_cancel_requested(move || {
                 timer_ref.stop();
+                cleanup_ref();
                 state_ref.borrow_mut().cancel();
                 if let Some(w) = win_slot_ref.borrow_mut().take() {
                     let _ = w.hide();
@@ -420,13 +464,115 @@ impl LearnController {
             let cancel_cb = Rc::clone(&on_cancel);
             let win_slot_ref = Rc::clone(&win_slot);
             let timer_ref = Rc::clone(&timer);
+            let cleanup_ref = Rc::clone(&cleanup_global);
             win.window().on_close_requested(move || {
                 timer_ref.stop();
+                cleanup_ref();
                 state_ref.borrow_mut().cancel();
                 let _ = win_slot_ref.borrow_mut().take();
                 cancel_cb();
                 CloseRequestResponse::HideWindow
             });
+        }
+
+        // No Windows, ativa captura global temporária (`WH_KEYBOARD_LL`) exclusivamente enquanto a janela estiver aberta
+        #[cfg(target_os = "windows")]
+        {
+            match crate::platform::windows::input_capture::WinGlobalKeyCapture::start() {
+                Ok(cap) => {
+                    *cap_slot.borrow_mut() = Some(Box::new(cap));
+                    let weak = win.as_weak();
+                    let state_ref = Rc::clone(&state);
+                    let confirm_cb = Rc::clone(&on_confirm);
+                    let cancel_cb = Rc::clone(&on_cancel);
+                    let win_slot_ref = Rc::clone(&win_slot);
+                    let confirm_timer_ref = Rc::clone(&timer);
+                    let cap_poll_ref = Rc::clone(&cap_slot);
+                    let cleanup_ref = Rc::clone(&cleanup_global);
+                    poll_timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
+                        let events = cap_poll_ref
+                            .borrow()
+                            .as_ref()
+                            .map(|c| c.poll_events())
+                            .unwrap_or_default();
+                        for ev in events {
+                            if ev.pressed {
+                                if !ev.repeat {
+                                    confirm_timer_ref.stop();
+                                }
+                                let outcome = state_ref.borrow_mut().on_key_pressed(
+                                    &ev.text, ev.ctrl, ev.alt, ev.shift, ev.meta, ev.repeat,
+                                );
+                                match outcome {
+                                    LearnOutcome::Updated { preview, .. } => {
+                                        if let Some(w) = weak.upgrade() {
+                                            w.set_combo_preview(SharedString::from(preview));
+                                        }
+                                    }
+                                    LearnOutcome::Confirmed(combo) => {
+                                        confirm_timer_ref.stop();
+                                        cleanup_ref();
+                                        if let Some(w) = win_slot_ref.borrow_mut().take() {
+                                            let _ = w.hide();
+                                        }
+                                        confirm_cb(combo);
+                                        return;
+                                    }
+                                    LearnOutcome::Cancelled => {
+                                        confirm_timer_ref.stop();
+                                        cleanup_ref();
+                                        if let Some(w) = win_slot_ref.borrow_mut().take() {
+                                            let _ = w.hide();
+                                        }
+                                        cancel_cb();
+                                        return;
+                                    }
+                                    LearnOutcome::Ignored => {}
+                                }
+                            } else {
+                                let outcome = state_ref
+                                    .borrow_mut()
+                                    .on_key_released(&ev.text, ev.ctrl, ev.alt, ev.shift, ev.meta);
+                                if let LearnOutcome::Updated {
+                                    preview,
+                                    schedule_confirm_ms,
+                                } = outcome
+                                {
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_combo_preview(SharedString::from(preview));
+                                    }
+                                    if let Some(ms) = schedule_confirm_ms {
+                                        let st = Rc::clone(&state_ref);
+                                        let cb = Rc::clone(&confirm_cb);
+                                        let ws = Rc::clone(&win_slot_ref);
+                                        let cl = Rc::clone(&cleanup_ref);
+                                        confirm_timer_ref.start(
+                                            TimerMode::SingleShot,
+                                            Duration::from_millis(ms),
+                                            move || {
+                                                if let Some(combo) =
+                                                    st.borrow_mut().on_confirm_timeout()
+                                                {
+                                                    cl();
+                                                    if let Some(w) = ws.borrow_mut().take() {
+                                                        let _ = w.hide();
+                                                    }
+                                                    cb(combo);
+                                                }
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Captura global Win32 indisponível ({err}); usando fallback por foco Slint."
+                    );
+                }
+            }
         }
 
         win.show()
