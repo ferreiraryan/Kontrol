@@ -6,7 +6,11 @@ mod context;
 mod error;
 mod input;
 mod overlay_hub;
+mod platform;
+mod presets_linux;
+mod presets_windows;
 mod providers;
+mod scan;
 mod system;
 mod tray;
 mod ui;
@@ -169,6 +173,11 @@ impl AppRuntime {
                                         if should_query_vol {
                                             self.system.send(SystemRequest::FetchAudioMixer);
                                         }
+                                        if platform::PlatformKind::current().is_windows()
+                                            && HudController::action_supports_media_art(&action)
+                                        {
+                                            self.system.send(SystemRequest::FetchSmtcMedia);
+                                        }
                                     }
                                     Err(err) => {
                                         warn!("Falha ao exibir Mini-HUD: {err}");
@@ -266,6 +275,11 @@ impl AppRuntime {
                     );
                 }
             }
+            if let SystemResponse::SmtcMedia(ref snap) = resp {
+                if let Err(err) = self.hud.update_smtc_media(snap) {
+                    warn!("Falha ao atualizar capa SMTC no Mini-HUD: {err}");
+                }
+            }
             let (mode, contextual) = self.current_mode_and_contextual();
             if let Some(effect) =
                 self.hub
@@ -299,6 +313,7 @@ impl AppRuntime {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn check_udev_rule_installed() {
     let rules_path = std::path::Path::new("/etc/udev/rules.d/99-knobcontext.rules");
     if !rules_path.exists() {
@@ -309,7 +324,55 @@ fn check_udev_rule_installed() {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn check_udev_rule_installed() {}
+
+#[cfg(target_os = "windows")]
+fn select_slint_renderer(renderer: crate::config::UiRendererKind) -> bool {
+    match renderer {
+        crate::config::UiRendererKind::Femtovg => {
+            match slint::BackendSelector::new()
+                .backend_name("winit".into())
+                .renderer_name("femtovg".into())
+                .select()
+            {
+                Ok(()) => {
+                    info!("Slint renderer selecionado: femtovg (backdrop-blur nativo ativado).");
+                    true
+                }
+                Err(err) => {
+                    warn!(
+                        "Renderer `femtovg` indisponível ({err}); aplicando fallback automático para `software`."
+                    );
+                    let _ = slint::BackendSelector::new()
+                        .backend_name("winit".into())
+                        .renderer_name("software".into())
+                        .select();
+                    false
+                }
+            }
+        }
+        crate::config::UiRendererKind::Software => {
+            let _ = slint::BackendSelector::new()
+                .backend_name("winit".into())
+                .renderer_name("software".into())
+                .select();
+            info!("Slint renderer selecionado: software (glassmorphism simulado).");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn select_slint_renderer(_renderer: crate::config::UiRendererKind) -> bool {
+    false
+}
+
 fn run() -> Result<(), KnobError> {
+    if env::args().skip(1).any(|arg| arg == "--scan") {
+        scan::run_scan_command().map_err(KnobError::InputSimulation)?;
+        return Ok(());
+    }
     check_udev_rule_installed();
     let open_settings_on_start = env::args().skip(1).any(|arg| arg == "--settings");
 
@@ -321,6 +384,11 @@ fn run() -> Result<(), KnobError> {
         }
     }
 
+    let use_backdrop_blur = select_slint_renderer(config.ui.renderer);
+    let reduced_motion = platform::prefers_reduced_motion();
+    let effective_anims =
+        platform::effective_animations_enabled(config.overlay.animations_enabled, reduced_motion);
+
     let active_idx = config.active_profile_index();
     let initial_mode = config.resolve_profile_mode();
     let providers = Arc::new(RwLock::new(ProviderRegistry::default_registry(
@@ -329,8 +397,10 @@ fn run() -> Result<(), KnobError> {
 
     let executor = EnigoExecutor::new(config.device.scroll_step, Arc::clone(&providers))?;
     let dispatcher = ActionDispatcher::new(config.profiles.clone(), active_idx, executor);
-    let overlay = OverlayWindow::new();
-    let hud = HudController::new();
+    let mut overlay = OverlayWindow::new();
+    overlay.set_use_backdrop_blur(use_backdrop_blur);
+    let mut hud = HudController::new();
+    hud.set_render_options(use_backdrop_blur, effective_anims);
     let hub = HubController::new();
     let system = SystemWorker::spawn();
     system::hyprland::register_overlay_window_rule(config.overlay.bottom_margin_px);

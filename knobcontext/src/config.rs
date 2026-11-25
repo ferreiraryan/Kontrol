@@ -457,10 +457,41 @@ impl Default for ObsProviderConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SmtcProviderConfig {
+    pub enabled: bool,
+}
+
+impl Default for SmtcProviderConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProvidersConfig {
     pub obs: ObsProviderConfig,
+    pub smtc: SmtcProviderConfig,
+}
+
+/// Backend de renderização Slint configurável em `[ui]` no `config.toml`.
+///
+/// Padrão: `software` (menor consumo de RAM, glassmorphism simulado).
+/// `femtovg` tenta usar renderização GPU (com fallback automático para `software` se falhar).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiRendererKind {
+    #[default]
+    Software,
+    Femtovg,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    pub renderer: UiRendererKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,6 +502,8 @@ pub struct Config {
     /// Modo de perfil persistido: `"auto"` ou `"manual:<nome_do_perfil>"`.
     pub mode: String,
     pub overlay: OverlayConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
     #[serde(default)]
     pub providers: ProvidersConfig,
     pub profiles: Vec<ProfileConfig>,
@@ -1136,6 +1169,7 @@ impl Default for Config {
             active_profile: GLOBAL_PROFILE_NAME.to_string(),
             mode: DEFAULT_MODE.to_string(),
             overlay: OverlayConfig::default(),
+            ui: UiConfig::default(),
             providers: ProvidersConfig::default(),
             profiles: vec![
                 ProfileConfig {
@@ -1209,8 +1243,61 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Retorna o caminho padrão `~/.config/knobcontext/config.toml` (respeitando `XDG_CONFIG_HOME`).
+    /// Constrói a configuração inicial otimizada para a plataforma informada
+    /// (`presets_windows.rs` no Windows, `presets_linux.rs` no Linux).
+    pub fn default_for_platform(platform: crate::platform::PlatformKind) -> Self {
+        match platform {
+            crate::platform::PlatformKind::Windows => {
+                let overlay = OverlayConfig {
+                    items: crate::presets_windows::default_windows_hub_items(),
+                    ..OverlayConfig::default()
+                };
+                Self {
+                    device: DeviceConfig::default(),
+                    active_profile: GLOBAL_PROFILE_NAME.to_string(),
+                    mode: DEFAULT_MODE.to_string(),
+                    overlay,
+                    ui: UiConfig::default(),
+                    providers: ProvidersConfig::default(),
+                    profiles: crate::presets_windows::default_windows_profiles(),
+                }
+            }
+            crate::platform::PlatformKind::Linux | crate::platform::PlatformKind::Other => Self {
+                device: DeviceConfig::default(),
+                active_profile: GLOBAL_PROFILE_NAME.to_string(),
+                mode: DEFAULT_MODE.to_string(),
+                overlay: OverlayConfig::default(),
+                ui: UiConfig::default(),
+                providers: ProvidersConfig::default(),
+                profiles: crate::presets_linux::default_linux_profiles(),
+            },
+        }
+    }
+
+    /// Retorna o caminho padrão do `config.toml` (Linux: `$XDG_CONFIG_HOME` / `~/.config`; Windows: `%APPDATA%` / `%USERPROFILE%\.config`).
     pub fn default_path() -> Option<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(appdata) = env::var("APPDATA") {
+                if !appdata.trim().is_empty() {
+                    return Some(
+                        PathBuf::from(appdata)
+                            .join("knobcontext")
+                            .join("config.toml"),
+                    );
+                }
+            }
+            if let Ok(profile) = env::var("USERPROFILE") {
+                if !profile.trim().is_empty() {
+                    return Some(
+                        PathBuf::from(profile)
+                            .join(".config")
+                            .join("knobcontext")
+                            .join("config.toml"),
+                    );
+                }
+            }
+        }
         if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
             if !xdg.trim().is_empty() {
                 return Some(PathBuf::from(xdg).join("knobcontext").join("config.toml"));
@@ -1227,15 +1314,37 @@ impl Config {
             })
     }
 
-    /// Carrega a configuração do caminho padrão; se ausente, retorna `Config::default()`.
+    /// Carrega a configuração do caminho padrão; se ausente no primeiro startup, cria o arquivo
+    /// com os perfis padrão da plataforma atual (`presets_windows.rs` / `presets_linux.rs`).
     pub fn load_default_location() -> Result<(Self, Option<PathBuf>), KnobError> {
+        let platform = crate::platform::PlatformKind::current();
         match Self::default_path() {
             Some(path) => {
-                let exists = path.exists();
-                let cfg = Self::load_from_path(&path)?;
-                Ok((cfg, if exists { Some(path) } else { None }))
+                if path.exists() {
+                    let cfg = Self::load_from_path(&path)?;
+                    Ok((cfg, Some(path)))
+                } else {
+                    let cfg = Self::default_for_platform(platform);
+                    match cfg.save_to_path(&path) {
+                        Ok(()) => {
+                            log::info!(
+                                "Configuração inicial ({}) criada em {}",
+                                platform.display_name(),
+                                path.display()
+                            );
+                            Ok((cfg, Some(path)))
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "Não foi possível gravar config inicial em {}: {err}. Usando padrão em memória.",
+                                path.display()
+                            );
+                            Ok((cfg, None))
+                        }
+                    }
+                }
             }
-            None => Ok((Self::default(), None)),
+            None => Ok((Self::default_for_platform(platform), None)),
         }
     }
 
@@ -1988,5 +2097,39 @@ label = "Desfazer"
         assert_eq!(mods.len(), 2);
         assert_eq!(mods[0].title, "Abas");
         assert_eq!(mods[1].title, "Desfazer");
+    }
+
+    #[test]
+    fn loads_dual_boot_config_with_smtc_mpris_and_ui_renderer_without_error() {
+        let toml_text = r#"
+active_profile = "global"
+
+[ui]
+renderer = "femtovg"
+
+[providers.smtc]
+enabled = true
+
+[providers.mpris]
+enabled = true
+
+[providers.obs]
+enabled = false
+port = 4455
+
+[[profiles]]
+name = "global"
+knob_cw = "VolumeUp"
+knob_ccw = "VolumeDown"
+key1 = "Provider:smtc:play_pause"
+key2 = "Provider:mpris:play_pause"
+"#;
+        let path = unique_temp_path("dual_boot_config");
+        fs::write(&path, toml_text).expect("gravar toml");
+        let cfg = Config::load_from_path(&path).expect("config dual-boot deve carregar sem erro");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(cfg.ui.renderer, crate::config::UiRendererKind::Femtovg);
+        assert!(cfg.providers.smtc.enabled);
     }
 }
