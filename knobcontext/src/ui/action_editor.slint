@@ -105,6 +105,7 @@ component MediaTile inherits Rectangle {
 }
 
 export component ActionEditorPopover inherits Rectangle {
+    in property <bool> is-windows: false;
     in property <string> control-title: "Key1";
     in property <string> profile-context-label: "";
     in property <string> inherited-hint: "";
@@ -619,7 +620,7 @@ export component ActionEditorPopover inherits Rectangle {
                                 }
                                 AppButton {
                                     height: 26px;
-                                    text: "+ Super";
+                                    text: root.is-windows ? "+ Win" : "+ Super";
                                     clicked => { root.toggle-shortcut-modifier("Super"); }
                                 }
                             }
@@ -667,7 +668,7 @@ export component ActionEditorPopover inherits Rectangle {
                                 AppButton {
                                     height: 25px;
                                     font-size: 11px;
-                                    text: "Super+E";
+                                    text: root.is-windows ? "Win+E" : "Super+E";
                                     clicked => { root.apply-shortcut-preset("Super+E"); }
                                 }
                             }
@@ -678,13 +679,17 @@ export component ActionEditorPopover inherits Rectangle {
                             spacing: 5px;
 
                             Text {
-                                text: "Edição manual (fallback para atalhos interceptados pelo Hyprland):";
+                                text: root.is-windows
+                                    ? "Edição manual:"
+                                    : "Edição manual (fallback para atalhos interceptados pelo Hyprland):";
                                 color: Theme.text-muted;
                                 font-size: 11px;
                             }
 
                             AppInput {
-                                placeholder: "ex: Ctrl+Shift+T, Super+E, Alt+F4";
+                                placeholder: root.is-windows
+                                    ? "ex: Ctrl+Shift+T, Win+E, Alt+F4"
+                                    : "ex: Ctrl+Shift+T, Super+E, Alt+F4";
                                 text <=> root.shortcut-text;
                                 edited(v) => { root.shortcut-text-edited(v); }
                             }
@@ -770,7 +775,7 @@ export component ActionEditorPopover inherits Rectangle {
                         Rectangle { vertical-stretch: 1; }
                     }
 
-                    // 2: Abrir aplicativo (.desktop com busca e contagem)
+                    // 2: Abrir aplicativo (Windows: Menu Iniciar .lnk | Linux: .desktop)
                     if root.selected-type-index == 2: VerticalLayout {
                         padding: 16px;
                         spacing: 10px;
@@ -780,7 +785,7 @@ export component ActionEditorPopover inherits Rectangle {
                             alignment: space-between;
 
                             Text {
-                                text: "Abrir aplicativo (.desktop)";
+                                text: root.is-windows ? "Abrir aplicativo" : "Abrir aplicativo (.desktop)";
                                 color: Theme.text-primary;
                                 font-size: 14px;
                                 font-weight: 700;
@@ -796,7 +801,9 @@ export component ActionEditorPopover inherits Rectangle {
                         }
 
                         AppInput {
-                            placeholder: "Filtrar por nome ou .desktop (ex: Firefox, GIMP, Spotify)...";
+                            placeholder: root.is-windows
+                                ? "Filtrar por nome (ex: Firefox, VSCode, Spotify)..."
+                                : "Filtrar por nome ou .desktop (ex: Firefox, GIMP, Spotify)...";
                             text <=> root.app-search;
                             edited(q) => { root.app-search-changed(q); }
                         }
@@ -898,7 +905,9 @@ export component ActionEditorPopover inherits Rectangle {
                         }
 
                         Text {
-                            text: "Deve começar com http:// ou https://. Aberto via xdg-open.";
+                            text: root.is-windows
+                                ? "Deve começar com http:// ou https://. Aberto no navegador padrão do Windows."
+                                : "Deve começar com http:// ou https://. Aberto via xdg-open.";
                             color: Theme.text-muted;
                             font-size: 11px;
                             wrap: word-wrap;
@@ -924,7 +933,9 @@ export component ActionEditorPopover inherits Rectangle {
 
                             AppInput {
                                 horizontal-stretch: 1;
-                                placeholder: "file:///caminho/do/arquivo";
+                                placeholder: root.is-windows
+                                    ? "file:///C:/caminho/do/arquivo"
+                                    : "file:///caminho/do/arquivo";
                                 text <=> root.file-text;
                             }
 
@@ -937,7 +948,9 @@ export component ActionEditorPopover inherits Rectangle {
                         }
 
                         Text {
-                            text: "Aceita caminhos locais ou URIs file:// (diálogo nativo XDG Portal).";
+                            text: root.is-windows
+                                ? "Aceita caminhos locais ou URIs file:// (seletor nativo do Windows)."
+                                : "Aceita caminhos locais ou URIs file:// (diálogo nativo XDG Portal).";
                             color: Theme.text-muted;
                             font-size: 11px;
                             wrap: word-wrap;
@@ -959,7 +972,9 @@ export component ActionEditorPopover inherits Rectangle {
                         }
 
                         AppInput {
-                            placeholder: "ex: playerctl play-pause";
+                            placeholder: root.is-windows
+                                ? "ex: notepad.exe"
+                                : "ex: playerctl play-pause";
                             text <=> root.exec-text;
                         }
 
@@ -972,7 +987,9 @@ export component ActionEditorPopover inherits Rectangle {
                             HorizontalLayout {
                                 padding: 10px;
                                 Text {
-                                    text: "Executado em segundo plano via `sh -c` (suporta pipes e redirecionamentos). Use apenas comandos confiáveis.";
+                                    text: root.is-windows
+                                        ? "Executado em segundo plano via `cmd /C` sem abrir console. Use apenas comandos confiáveis."
+                                        : "Executado em segundo plano via `sh -c` (suporta pipes e redirecionamentos). Use apenas comandos confiáveis.";
                                     color: #fde68a;
                                     font-size: 11px;
                                     wrap: word-wrap;

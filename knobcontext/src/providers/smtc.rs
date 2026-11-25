@@ -204,8 +204,7 @@ impl Provider for SmtcProvider {
         if !self.config.enabled {
             return false;
         }
-        let snap = fetch_smtc_hub_snapshot();
-        snap.session.is_some()
+        has_active_smtc_session()
     }
 
     fn commands(&self) -> Vec<ProviderCommand> {
@@ -284,6 +283,18 @@ impl Provider for SmtcProvider {
                 "nenhuma sessão de mídia SMTC ativa no momento".to_string(),
             )),
         }
+    }
+}
+
+/// Verificação leve (sem leitura/decodificação de thumbnail PNG) se há ao menos uma sessão SMTC ativa.
+pub fn has_active_smtc_session() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        winrt_impl::has_active_session()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
     }
 }
 
@@ -420,6 +431,16 @@ mod winrt_impl {
             }
         }
         Ok(out)
+    }
+
+    pub(super) fn has_active_session() -> bool {
+        std::thread::spawn(|| {
+            list_raw_sessions()
+                .map(|sessions| !sessions.is_empty())
+                .unwrap_or(false)
+        })
+        .join()
+        .unwrap_or(false)
     }
 
     pub(super) fn fetch_hub_snapshot() -> SmtcHubSnapshot {

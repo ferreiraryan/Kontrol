@@ -352,6 +352,7 @@ export component SettingsWindow inherits Window {
     in property <bool> hub-key3-is-confirm: true;
     in property <bool> hub-show-images: true;
     in property <bool> hub-animations-enabled: true;
+    in property <bool> ui-renderer-is-femtovg: false;
     in property <string> hub-item-icon-label: "Automático / nenhuma";
 
     // --- Aba 2: Integrações (Providers) ---
@@ -468,6 +469,7 @@ export component SettingsWindow inherits Window {
     callback hub-toggle-key3-behavior();
     callback hub-toggle-show-images();
     callback hub-toggle-animations();
+    callback ui-set-renderer-femtovg(bool);
     callback hub-pick-item-icon();
     callback hub-clear-item-icon();
 
@@ -893,8 +895,12 @@ export component SettingsWindow inherits Window {
 
                                         AppField {
                                             horizontal-stretch: 1;
-                                            label: "Classe da janela (WINDOWCLASS, use | para várias)";
-                                            placeholder: "ex: firefox|zen|chromium";
+                                            label: root.is-windows
+                                                ? "Processo da janela (nome do .exe sem extensão, use |)"
+                                                : "Classe da janela (WINDOWCLASS, use | para várias)";
+                                            placeholder: root.is-windows
+                                                ? "ex: firefox|chrome|code"
+                                                : "ex: firefox|zen|chromium";
                                             value <=> root.field-window-class;
                                         }
 
@@ -999,7 +1005,7 @@ export component SettingsWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 Text {
-                                    text: "● Clique no knob abre o Hub Interativo";
+                                    text: "● Clique no knob abre o Hub Interativo (pausado com Configurações abertas)";
                                     color: Theme.text-muted;
                                     font-size: 10px;
                                     vertical-alignment: center;
@@ -1383,7 +1389,7 @@ export component SettingsWindow inherits Window {
                             AppField {
                                 horizontal-stretch: 1;
                                 label: "Título do item (" + root.hub-item-kind-label + ")";
-                                placeholder: "ex: Sons & Apps";
+                                placeholder: root.is-windows ? "ex: Mídia" : "ex: Sons & Apps";
                                 value <=> root.hub-item-title;
                             }
 
@@ -1788,7 +1794,7 @@ export component SettingsWindow inherits Window {
                             }
                         }
 
-                        HorizontalLayout {
+                        if !root.is-windows: HorizontalLayout {
                             spacing: 10px;
                             VerticalLayout {
                                 horizontal-stretch: 1;
@@ -1804,7 +1810,7 @@ export component SettingsWindow inherits Window {
                             }
                         }
 
-                        HorizontalLayout {
+                        if !root.is-windows: HorizontalLayout {
                             spacing: 10px;
                             VerticalLayout {
                                 horizontal-stretch: 1;
@@ -1889,13 +1895,33 @@ export component SettingsWindow inherits Window {
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 spacing: 2px;
-                                Text { text: "Miniaturas e ícones de apps"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
-                                Text { text: "Exibe thumbnails de wallpapers e ícones .desktop no carrossel"; color: Theme.text-dim; font-size: 11px; wrap: word-wrap; }
+                                Text { text: root.is-windows ? "Capas e imagens" : "Miniaturas e ícones de apps"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                                Text {
+                                    text: root.is-windows
+                                        ? "Exibe capas de álbum (SMTC) e imagens customizadas no carrossel"
+                                        : "Exibe thumbnails de wallpapers e ícones .desktop no carrossel";
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
                             }
                             ToggleSwitch {
                                 y: 8px;
                                 checked: root.hub-show-images;
                                 toggled => { root.hub-toggle-show-images(); }
+                            }
+                        }
+
+                        if root.is-windows: VerticalLayout {
+                            spacing: 8px;
+                            Text { text: "Renderer da interface ([ui] renderer)"; color: Theme.text-primary; font-size: 13px; font-weight: 600; }
+                            Text { text: "Software consome menos RAM (padrão). FemtoVG ativa blur GPU (exige reiniciar; fallback automático)."; color: Theme.text-dim; font-size: 11px; wrap: word-wrap; }
+
+                            SegmentedTwo {
+                                first-label: "Software (padrão)";
+                                second-label: "FemtoVG (blur GPU)";
+                                selected-index: root.ui-renderer-is-femtovg ? 1 : 0;
+                                selected(i) => { root.ui-set-renderer-femtovg(i == 1); }
                             }
                         }
 
@@ -2458,6 +2484,7 @@ export component SettingsWindow inherits Window {
     if root.editor-open: ActionEditorPopover {
         width: 100%;
         height: 100%;
+        is-windows: root.is-windows;
         control-title: root.editor-control-title;
         profile-context-label: root.editor-profile-context-label;
         inherited-hint: root.editor-inherited-hint;

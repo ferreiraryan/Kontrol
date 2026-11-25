@@ -7,6 +7,7 @@ use crate::ui::{
     SettingsWindow,
 };
 use slint::{ModelRc, SharedString, VecModel};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Identifica se o `text` enviado pelo Slint corresponde a uma tecla modificadora pura
@@ -106,11 +107,14 @@ fn map_slint_key_text(text: &str, ctrl_held: bool) -> Option<(String, bool)> {
 }
 
 /// Sincroniza todo o estado do `ActionEditorState` para as propriedades do popover na `SettingsWindow`.
+///
+/// Usa `provider_availability` em cache para evitar chamadas bloqueantes (TCP/WinRT) a cada tecla digitada.
 pub fn sync_editor_to_ui(
     win: &SettingsWindow,
     editor: &ActionEditorState,
     apps: &[DesktopApp],
     providers: &ProviderRegistry,
+    provider_availability: &HashMap<String, bool>,
 ) {
     win.set_editor_open(editor.is_open);
     if let Some(ref title) = editor.custom_title {
@@ -204,14 +208,14 @@ pub fn sync_editor_to_ui(
     win.set_editor_macro_key_text(SharedString::from(editor.macro_key_input.as_str()));
     win.set_editor_macro_wait_text(SharedString::from(editor.macro_wait_ms_input.as_str()));
 
-    // Integração direta (Providers)
+    // Integração direta (Providers) — lê disponibilidade em cache sem travar a digitação
     let prov_list = providers.providers();
     let prov_options: Vec<ProviderOptionItem> = prov_list
         .iter()
         .map(|p| ProviderOptionItem {
             id: SharedString::from(p.id()),
             name: SharedString::from(p.name()),
-            available: p.is_available(),
+            available: provider_availability.get(p.id()).copied().unwrap_or(false),
         })
         .collect();
     let selected_prov_idx = prov_list
@@ -258,10 +262,22 @@ pub fn sync_editor_to_ui(
     win.set_editor_preview_text(SharedString::from(editor.live_preview_summary(apps)));
 }
 
-/// Abre o diálogo nativo de seleção de arquivo (Wayland via XDG Portal usando `rfd`).
+/// Abre o diálogo nativo de seleção de arquivo (Windows nativo / Wayland via XDG Portal usando `rfd`).
 pub fn pick_file_uri() -> Option<String> {
     let path = rfd::FileDialog::new().pick_file()?;
-    Some(format!("file://{}", path.display()))
+    #[cfg(target_os = "windows")]
+    {
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        if normalized.starts_with('/') {
+            Some(format!("file://{normalized}"))
+        } else {
+            Some(format!("file:///{normalized}"))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Some(format!("file://{}", path.display()))
+    }
 }
 
 #[cfg(test)]
