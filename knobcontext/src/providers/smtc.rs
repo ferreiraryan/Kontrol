@@ -330,18 +330,36 @@ mod winrt_impl {
         SmtcHubSnapshot, SmtcSessionSnapshot, SmtcThumbnail, SMTC_THUMBNAIL_SIZE,
     };
     use crate::providers::ProviderError;
+    use std::sync::mpsc;
+    use std::time::Duration;
     use windows::Media::Control::{
         GlobalSystemMediaTransportControlsSession as SmtcSession,
         GlobalSystemMediaTransportControlsSessionManager as SmtcManager,
         GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
     };
     use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
-    fn ensure_com() {
-        // SAFETY: inicializa COM em modo STA (`COINIT_APARTMENTTHREADED`), compatível com
-        // `OleInitialize` usado pelo `winit`/`rfd` na thread principal (evita `RPC_E_CHANGED_MODE`).
-        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    const SMTC_OP_TIMEOUT: Duration = Duration::from_millis(1500);
+
+    fn ensure_mta() {
+        // SAFETY: esta função roda exclusivamente em threads worker isoladas (nunca na thread
+        // principal de UI/`winit`). WinRT `IAsyncOperation::join()` requer MTA (`COINIT_MULTITHREADED`);
+        // usar STA sem loop de mensagens causaria deadlock infinito no `.join()`.
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    }
+
+    fn run_with_timeout<T: Send + 'static>(
+        timeout: Duration,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            ensure_mta();
+            let result = f();
+            let _ = tx.send(result);
+        });
+        rx.recv_timeout(timeout).ok()
     }
 
     fn read_thumbnail(thumb_ref: &IRandomAccessStreamReference) -> Option<SmtcThumbnail> {
@@ -416,7 +434,7 @@ mod winrt_impl {
     }
 
     fn list_raw_sessions() -> Result<Vec<SmtcSession>, ProviderError> {
-        ensure_com();
+        ensure_mta();
         let manager = SmtcManager::RequestAsync()
             .and_then(|op| op.join())
             .map_err(|err| ProviderError::Unavailable("smtc".to_string(), err.to_string()))?;
@@ -434,20 +452,17 @@ mod winrt_impl {
     }
 
     pub(super) fn has_active_session() -> bool {
-        std::thread::spawn(|| {
+        run_with_timeout(SMTC_OP_TIMEOUT, || {
             list_raw_sessions()
                 .map(|sessions| !sessions.is_empty())
                 .unwrap_or(false)
         })
-        .join()
         .unwrap_or(false)
     }
 
     pub(super) fn fetch_hub_snapshot() -> SmtcHubSnapshot {
-        // Executa WinRT SMTC em thread isolada para nunca alterar o apartment COM (STA) da thread de UI (`winit`).
-        std::thread::spawn(fetch_hub_snapshot_on_current_thread)
-            .join()
-            .unwrap_or_default()
+        // Executa WinRT SMTC em thread worker MTA isolada com timeout (evita conflito STA com `winit` e travamentos).
+        run_with_timeout(SMTC_OP_TIMEOUT, fetch_hub_snapshot_on_current_thread).unwrap_or_default()
     }
 
     fn fetch_hub_snapshot_on_current_thread() -> SmtcHubSnapshot {
@@ -471,14 +486,15 @@ mod winrt_impl {
     }
 
     pub(super) fn execute_command(cmd: SmtcCommand) -> Result<(), ProviderError> {
-        std::thread::spawn(move || execute_command_on_current_thread(cmd))
-            .join()
-            .unwrap_or_else(|_| {
-                Err(ProviderError::Unavailable(
-                    "smtc".to_string(),
-                    "thread SMTC encerrada inesperadamente".to_string(),
-                ))
-            })
+        run_with_timeout(SMTC_OP_TIMEOUT, move || {
+            execute_command_on_current_thread(cmd)
+        })
+        .unwrap_or_else(|| {
+            Err(ProviderError::Unavailable(
+                "smtc".to_string(),
+                "timeout ao comunicar com sessão SMTC".to_string(),
+            ))
+        })
     }
 
     fn execute_command_on_current_thread(cmd: SmtcCommand) -> Result<(), ProviderError> {
